@@ -379,6 +379,71 @@ def test_openapi_health_security_matches_route_policy() -> None:
     )
 
 
+def test_required_worker_capabilities_are_bounded_without_silent_truncation(
+    tmp_path: Path,
+) -> None:
+    lifecycle = Lifecycle()
+    lifecycle.mark_running()
+    runtime = SimpleNamespace(
+        cfg=SimpleNamespace(
+            database=SimpleNamespace(enabled=False),
+            jobs=SimpleNamespace(enabled=False, required=False),
+            api=SimpleNamespace(auth=SimpleNamespace(mode=SimpleNamespace(value="static"))),
+            ipaws=SimpleNamespace(enabled=False),
+            ern=SimpleNamespace(enabled=False),
+        ),
+        database=None,
+        telnet=SimpleNamespace(ping=lambda **_kwargs: True),
+        tts=SimpleNamespace(availability=lambda: (True, "tts_available")),
+        health_state=SimpleNamespace(source_snapshot=lambda _source: None),
+        lifecycle=lifecycle,
+        _seg_store=SimpleNamespace(
+            health_snapshot=lambda: {
+                "count": 1,
+                "ready_count": 1,
+                "stale_count": 0,
+                "placeholder_count": 0,
+                "oldest_age_seconds": 0,
+            }
+        ),
+        _paths=lambda: (tmp_path,),
+    )
+    capability_registry = SimpleNamespace(
+        health=lambda _now: SimpleNamespace(
+            active_assignments=0,
+            connected_workers=0,
+            effective_capacity=0,
+            outstanding_probes=0,
+            qualified_workers=0,
+            stale_capabilities=0,
+            unknown_workers=0,
+        ),
+        snapshots=lambda _now: (),
+    )
+    required = tuple(f"capability.test.{index:02d}" for index in range(17))
+    service = build_runtime_health_service(
+        runtime,
+        command_store=CommandStore(),
+        auth_service=None,
+        capability_registry=capability_registry,
+        required_capabilities=required,
+    )
+
+    report = asyncio.run(service.collect())
+    workers = next(component for component in report.components if component.name == "workers")
+
+    assert workers.state is ComponentState.UNAVAILABLE
+    assert workers.details["missing_required"] == 17
+    with pytest.raises(ValueError, match="required worker capabilities exceed supported maximum"):
+        build_runtime_health_service(
+            runtime,
+            command_store=CommandStore(),
+            auth_service=None,
+            capability_registry=capability_registry,
+            required_capabilities=tuple(f"capability.test.{index:02d}" for index in range(65)),
+        )
+
+
 def test_runtime_report_is_truthful_bounded_and_secret_free(
     tmp_path: Path,
 ) -> None:

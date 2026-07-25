@@ -73,9 +73,11 @@ consumer port and invokes no handler.
 
 P1-09 adds a narrow qualified-assignment input. Its ephemeral capability
 service first evaluates and reserves a worker snapshot, then asks this
-repository to acquire only the selected job ID. The repository still rechecks
-static capability names and all durable eligibility predicates atomically.
-The reservation is never persisted here and cannot create a job or lease.
+repository to acquire only the selected job ID. `candidate_job_ids=None` means
+no additional ID restriction, while an explicitly empty candidate collection
+means no job is eligible. The repository still rechecks static capability names
+and all durable eligibility predicates atomically. The reservation is never
+persisted here and cannot create a job or lease.
 
 Each assignment has an opaque lease ID, a distinct attempt ID, positive
 monotonic attempt number, bounded owner, assignment acknowledgment deadline,

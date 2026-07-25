@@ -35,6 +35,7 @@ _DEGRADED_STATES = {
 }
 _MAX_COMPONENTS = 24
 _MAX_DETAIL_ITEMS = 8
+_MAX_REQUIRED_CAPABILITIES = 64
 _MAX_AGE_SECONDS = 31_536_000
 
 
@@ -480,7 +481,9 @@ def build_runtime_health_service(
             )
         )
 
-    required_capability_names = tuple(sorted(set(required_capabilities)))[:16]
+    required_capability_names = tuple(sorted(set(required_capabilities)))
+    if len(required_capability_names) > _MAX_REQUIRED_CAPABILITIES:
+        raise ValueError("required worker capabilities exceed supported maximum")
 
     async def workers_probe() -> HealthComponent:
         if capability_registry is None:

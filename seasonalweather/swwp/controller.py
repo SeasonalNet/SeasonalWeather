@@ -294,7 +294,7 @@ class ControllerSession(SessionMachine):
             max_message_bytes=self.limits.max_message_bytes,
             max_active_assignments=registration.requested_slots,
             effective_capabilities=(
-                tuple(record.name for record in capability_snapshot.records if record.implemented)
+                capability_snapshot.schedulable_capabilities
                 if capability_snapshot is not None
                 else self.authorized_capabilities
             ),

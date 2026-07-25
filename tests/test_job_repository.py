@@ -196,6 +196,30 @@ def test_scheduler_leases_once_orders_work_and_fences_stale_updates(
     assert running.status is JobStatus.RUNNING
 
 
+def test_explicit_empty_candidate_filter_leases_nothing(tmp_path: Path) -> None:
+    clock, lifecycle, repository, service = _runtime(tmp_path)
+    admitted = _admit_tts(service)
+    scheduler = _scheduler(repository, lifecycle, clock)
+
+    assert (
+        scheduler.assign(
+            owner="worker_test_0001",
+            capabilities={"tts.synthesis.v1"},
+            candidate_job_ids=(),
+        )
+        is None
+    )
+    assert repository.get(admitted.job.job_id).status is JobStatus.PENDING
+
+    assignment = scheduler.assign(
+        owner="worker_test_0001",
+        capabilities={"tts.synthesis.v1"},
+        candidate_job_ids=None,
+    )
+    assert assignment is not None
+    assert assignment.job.job_id == admitted.job.job_id
+
+
 def test_concurrent_scheduler_connections_cannot_double_lease(tmp_path: Path) -> None:
     clock, lifecycle, repository, service = _runtime(tmp_path)
     _admit_tts(service)

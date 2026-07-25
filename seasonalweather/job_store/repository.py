@@ -231,7 +231,7 @@ class JobRepository:
         queue_values = {item.value for item in queues or QueueClass}
         executor_values = {item.value for item in executors or ExecutorClass}
         available = frozenset(capabilities)
-        candidates = frozenset(candidate_job_ids or ())
+        candidates = None if candidate_job_ids is None else frozenset(candidate_job_ids)
         now_iso = _iso(now)
         with self.database.transaction() as conn:
             rows = conn.execute(
@@ -1241,7 +1241,7 @@ class JobRepository:
         queue_values: set[str],
         executor_values: set[str],
         available: frozenset[str],
-        candidate_job_ids: frozenset[str],
+        candidate_job_ids: frozenset[str] | None,
     ) -> sqlite3.Row | None:
         return next(
             (
@@ -1249,7 +1249,7 @@ class JobRepository:
                 for row in rows
                 if row["queue"] in queue_values
                 and row["executor"] in executor_values
-                and (not candidate_job_ids or row["job_id"] in candidate_job_ids)
+                and (candidate_job_ids is None or row["job_id"] in candidate_job_ids)
                 and self._capabilities_satisfied(row, available)
             ),
             None,

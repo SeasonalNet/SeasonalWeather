@@ -21,6 +21,7 @@ from seasonalweather.swwp.controller import ControllerSession
 from seasonalweather.swwp.messages import (
     CapabilityOperationalState,
     Register,
+    Registered,
     VersionSupport,
 )
 from seasonalweather.swwp.worker import WorkerSession
@@ -116,6 +117,63 @@ def simulated_runtime():
     peers.start()
     peers.pump()
     return clock, registry, service, peers
+
+
+def test_registered_effective_capabilities_are_currently_schedulable_only() -> None:
+    clock = SimulatedClock(NOW)
+    registry = CapabilityRegistry(
+        allowed_capabilities=declared_capability_names(),
+        maximum_validity_seconds=60,
+    )
+    service = CapabilitySchedulerService(
+        registry,
+        UnusedDurableAdapter(),  # type: ignore[arg-type]
+        clock=clock,
+        id_factory=DeterministicIds(),
+    )
+    initial = registration(clock).model_copy(
+        update={
+            "capability_manifest": wire_manifest(
+                (
+                    wire_record(
+                        "tts.synthesis.v1",
+                        now=clock(),
+                        state=CapabilityOperationalState.UNAVAILABLE,
+                        accepting=False,
+                        total=1,
+                        available=0,
+                        parameters={"format": "wav"},
+                    ),
+                    wire_record(
+                        "cycle.regenerate.v1",
+                        now=clock(),
+                        total=1,
+                        available=1,
+                    ),
+                )
+            )
+        }
+    )
+    worker = WorkerSession(
+        registration=initial,
+        id_factory=DeterministicIds(),
+        clock=clock,
+    )
+    controller = ControllerSession(
+        controller_epoch=1,
+        offered_subprotocols=("seasonalweather.worker.v1",),
+        policy=policy(),
+        durable=service,
+        capabilities=service,
+        id_factory=DeterministicIds(),
+        clock=clock,
+    )
+
+    responses = controller.receive(worker.connect())
+
+    assert isinstance(responses[0].payload, Registered)
+    assert responses[0].payload.authorized_capabilities == ("tts.synthesis.v1",)
+    assert responses[0].payload.effective_capabilities == ()
 
 
 def test_simulation_updates_duplicates_gap_probe_stale_and_reconnect() -> None:

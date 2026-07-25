@@ -116,9 +116,12 @@ capability allowlists. Raw credentials never enter a message or policy result.
 
 The controller requires the principal worker ID to match registration. Accepted
 queues, job types, and capabilities are deterministic intersections of the
-request and static authorization. Remote sessions can never gain the `control`
-queue, controller executor, or `control.*` job authority through advertising.
-A rejected registration allocates no session ID.
+request and static authorization. The `registered.effective_capabilities` field
+contains only capabilities that are currently trusted, compatible, accepting
+new work, and have positive effective capacity; it is not an echo of implemented
+or authorized names. Remote sessions can never gain the `control` queue,
+controller executor, or `control.*` job authority through advertising. A
+rejected registration allocates no session ID.
 
 TLS, HTTP middleware, API-token reuse, file loading, and a worker credential
 database are intentionally absent.

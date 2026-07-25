@@ -170,9 +170,11 @@ or session IDs, epochs, digests, parameter values, voices, paths, payloads, or
 dependency details.
 
 `/healthz` remains minimal and probe-free. `/readyz` gates on worker
-capabilities only when the composition explicitly declares them required. No
-simulated workers is not labeled a production outage when none are required.
-Health collection does not reserve, expire, or probe.
+capabilities only when the composition explicitly declares them required. The
+composition accepts at most 64 distinct required capability names and rejects a
+larger set instead of silently truncating readiness evaluation. No simulated
+workers is not labeled a production outage when none are required. Health
+collection does not reserve, expire, or probe.
 
 Drain immediately makes a worker unschedulable and clears pending
 reservations. Existing durable leases remain under P1-07 reconciliation

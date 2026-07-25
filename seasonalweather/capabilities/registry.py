@@ -65,6 +65,14 @@ class WorkerCapabilitySnapshot:
     outstanding_probes: int
     last_requalification_reason: str | None
 
+    @property
+    def schedulable_capabilities(self) -> tuple[str, ...]:
+        """Return the current effective capability names safe for new work."""
+
+        if not self.connected or not self.trusted or self.probe_required:
+            return ()
+        return tuple(sorted(name for name, available in self.effective_capacity.items() if available > 0))
+
     def qualification_view(self) -> WorkerQualificationView:
         return WorkerQualificationView(
             worker_id=self.worker_id,
