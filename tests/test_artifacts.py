@@ -448,6 +448,15 @@ def test_content_addressing_deduplicates_rejects_corruption_and_cleans_bounded(
     assert service.pending_count() == 2
 
 
+def test_missing_pending_directory_is_an_empty_bounded_state(tmp_path: Path) -> None:
+    service = StagingService(tmp_path / "staging", tmp_path / "blobs", maximum_bytes=1024)
+    identity = ContentIdentity("sha256:" + hashlib.sha256(b"missing").hexdigest(), 7)
+
+    assert service.pending_count() == 0
+    assert service.cleanup_pending() == 0
+    assert service.recover_claim(identity) is None
+
+
 def test_promotion_confines_targets_rejects_links_and_serializes(tmp_path: Path) -> None:
     blob = tmp_path / "blob"
     blob.write_bytes(b"new")

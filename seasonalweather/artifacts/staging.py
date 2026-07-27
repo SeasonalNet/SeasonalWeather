@@ -191,22 +191,23 @@ class StagingService:
         if maximum_files < 1:
             return 0
         try:
-            entries = self.pending_root.iterdir()
+            entries = os.scandir(self.pending_root)
         except FileNotFoundError:
             return 0
         removed = 0
-        for entry in entries:
-            if removed >= maximum_files:
-                break
-            if not entry.name.startswith((".claim-", ".source-")):
-                continue
-            try:
-                metadata = entry.stat(follow_symlinks=False)
-                if stat.S_ISREG(metadata.st_mode):
-                    entry.unlink()
-                    removed += 1
-            except FileNotFoundError:
-                continue
+        with entries:
+            for raw_entry in entries:
+                if removed >= maximum_files:
+                    break
+                if not raw_entry.name.startswith((".claim-", ".source-")):
+                    continue
+                try:
+                    metadata = raw_entry.stat(follow_symlinks=False)
+                    if stat.S_ISREG(metadata.st_mode):
+                        os.unlink(raw_entry.path)
+                        removed += 1
+                except FileNotFoundError:
+                    continue
         if removed:
             self._fsync_directory(self.pending_root)
         return removed
@@ -214,40 +215,43 @@ class StagingService:
     def pending_count(self, *, limit: int = 257) -> int:
         """Return a bounded pending-file count suitable for health reporting."""
         try:
-            entries = self.pending_root.iterdir()
+            entries = os.scandir(self.pending_root)
         except FileNotFoundError:
             return 0
         count = 0
-        for entry in entries:
-            if entry.name.startswith((".claim-", ".source-")):
-                count += 1
-                if count >= limit:
-                    break
+        with entries:
+            for entry in entries:
+                if entry.name.startswith((".claim-", ".source-")):
+                    count += 1
+                    if count >= limit:
+                        break
         return count
 
     def recover_claim(self, identity: ContentIdentity, *, maximum_files: int = 256) -> ClaimedArtifact | None:
         """Find a bounded service-owned pending copy by recomputed identity."""
         try:
-            entries = self.pending_root.iterdir()
+            entries = os.scandir(self.pending_root)
         except FileNotFoundError:
             return None
         inspected = 0
-        for entry in entries:
-            if inspected >= maximum_files:
-                break
-            if not entry.name.startswith(".claim-"):
-                continue
-            inspected += 1
-            try:
-                metadata = entry.stat(follow_symlinks=False)
-                if (
-                    stat.S_ISREG(metadata.st_mode)
-                    and metadata.st_nlink == 1
-                    and hash_file(entry, maximum_bytes=self.maximum_bytes) == identity
-                ):
-                    return ClaimedArtifact(entry, identity)
-            except (FileNotFoundError, ValueError):
-                continue
+        with entries:
+            for raw_entry in entries:
+                if inspected >= maximum_files:
+                    break
+                if not raw_entry.name.startswith(".claim-"):
+                    continue
+                inspected += 1
+                entry = self.pending_root / raw_entry.name
+                try:
+                    metadata = raw_entry.stat(follow_symlinks=False)
+                    if (
+                        stat.S_ISREG(metadata.st_mode)
+                        and metadata.st_nlink == 1
+                        and hash_file(entry, maximum_bytes=self.maximum_bytes) == identity
+                    ):
+                        return ClaimedArtifact(entry, identity)
+                except (FileNotFoundError, ValueError):
+                    continue
         return None
 
     def _safe_file_identity(self, path: Path) -> tuple[int, int, int, int]:
