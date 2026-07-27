@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: (
@@ -132,6 +132,28 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
             FOREIGN KEY (job_id) REFERENCES jobs(job_id) ON DELETE RESTRICT
         )
         """,
+    ),
+    2: (
+        """
+        CREATE TABLE artifact_publication_receipts (
+            job_id TEXT NOT NULL,
+            attempt_id TEXT NOT NULL,
+            artifact_digest TEXT NOT NULL,
+            artifact_size_bytes INTEGER NOT NULL,
+            artifact_class TEXT NOT NULL,
+            target_key TEXT NOT NULL,
+            prior_digest TEXT,
+            result_hash TEXT,
+            disposition TEXT NOT NULL,
+            prepared_at TEXT,
+            promoted_at TEXT,
+            committed_at TEXT,
+            metadata_json TEXT NOT NULL,
+            PRIMARY KEY(job_id, attempt_id),
+            FOREIGN KEY(job_id) REFERENCES jobs(job_id) ON DELETE RESTRICT
+        )
+        """,
+        "CREATE INDEX artifact_publication_receipts_state ON artifact_publication_receipts(disposition, committed_at)",
     ),
 }
 

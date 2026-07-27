@@ -206,8 +206,18 @@ closed. The simulated worker retains completion metadata until it sees
 
 `job_failed` maps to the P1-06 attempt outcome and failure category with a
 bounded safe error code/summary. Raw exceptions and tracebacks are forbidden.
-P1-08 performs no artifact validation, promotion, Liquidsoap mutation, or
-broadcast publication.
+
+P1-08 delegates artifact-producing results to the P1-10 controller artifact
+coordinator. That boundary validates the strict artifact result, fences it
+against the durable assignment and injected current authority, promotes only
+controller-claimed bytes, and invokes the P1-07 result commit afterward.
+Consequently `result_committed` follows both durable artifact acceptance and
+the matching durable P1-07 result receipt. Identical lost-ack replay returns
+that receipt; conflicting replay fails closed. Artifact bytes never enter
+SWWP JSON.
+
+SWWP itself performs no filesystem validation, promotion, Liquidsoap mutation,
+or broadcast publication.
 
 ## Cancellation and drain
 

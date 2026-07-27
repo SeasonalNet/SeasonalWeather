@@ -2,6 +2,7 @@ from .command_sync import CommandJobCoordinator
 from .core import JobDatabase
 from .models import (
     AdmissionDisposition,
+    ArtifactPublicationReceipt,
     DurableAdmission,
     JobAssignment,
     JobStoreConflictError,
@@ -17,6 +18,7 @@ from .service import DurableJobService
 
 __all__ = [
     "AdmissionDisposition",
+    "ArtifactPublicationReceipt",
     "CommandJobCoordinator",
     "DurableAdmission",
     "DurableJobService",

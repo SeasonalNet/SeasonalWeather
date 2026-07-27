@@ -24,6 +24,7 @@ from seasonalweather.jobs.contracts import JobStatus
 from seasonalweather.jobs.policies import ExecutorClass, JobType, QueueClass
 from seasonalweather.lifecycle import Lifecycle
 from seasonalweather.swwp.adapter import JobStoreSwwpAdapter
+from seasonalweather.swwp.messages import JobResult
 from tests.support.swwp_simulation import DeterministicIds
 
 NOW = dt.datetime(2026, 7, 24, 12, tzinfo=dt.UTC)
@@ -224,3 +225,31 @@ def test_deterministic_worker_order_prefers_capacity_then_identity(
         "worker_00000001",
     ]
     assert registry.snapshot("worker_00000002", NOW).effective_capacity["tts.synthesis.v1"] == 2
+
+
+def test_durable_result_releases_active_capacity_exactly_once(tmp_path: Path) -> None:
+    _, _, jobs, registry, service, _ = runtime(tmp_path)
+    admit_tts(jobs, "forecast_0004")
+    assignment = service.acquire(
+        owner="worker_00000001",
+        queues=(QueueClass.ROUTINE,),
+        executors=(ExecutorClass.ROUTINE_WORKER,),
+        capabilities=(),
+    )
+    assert assignment is not None
+    service.acknowledge(assignment.lease)
+    result = JobResult(
+        lease=assignment.lease,
+        result_schema_version=1,
+        result={
+            "artifact_ref": "artifact_forecast_0004",
+            "content_identity": "content_forecast_0004",
+            "duration_seconds": 1.0,
+        },
+        completion_id="completion_forecast_0004",
+    )
+    first = service.result(result)
+    assert registry.snapshot("worker_00000001", NOW).active_assignments == 0
+    second = service.result(result)
+    assert second.result_hash == first.result_hash
+    assert registry.snapshot("worker_00000001", NOW).active_assignments == 0

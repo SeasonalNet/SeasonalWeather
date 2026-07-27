@@ -105,8 +105,16 @@ Successful results are validated against the registered result schema and
 byte bound, hashed, and committed in the same transaction as the terminal job
 transition and attempt outcome. An identical committed result can be replayed
 idempotently; a different or stale result is rejected. This receipt proves
-only durable job result commitment. It does not prove artifact publication,
-Liquidsoap mutation, controller finalization, or command completion.
+durable job result commitment. For artifact-producing P1-10 results, the same
+repository also owns a versioned metadata-only publication journal keyed by
+job and attempt. Prepared intent precedes active publication; promoted records
+capture prior-active identity; committed records are permitted only when the
+matching `job_result_commits` hash already exists. Every authoritative field
+and legal transition is conflict checked. Artifact bytes remain on the
+controller filesystem and never enter SQLite. Non-artifact results retain the
+existing behavior. The result receipt alone does not prove unrelated legacy
+artifact publication, Liquidsoap mutation, controller finalization, or command
+completion.
 
 ## Restart and command consistency
 

@@ -304,6 +304,34 @@ def scan(root: Path, config: dict[str, Any], exceptions: list[dict[str, Any]] | 
                         )
                     )
 
+        if _under(relative, config.get("artifact_roots", [])):
+            for imported, line in imports:
+                if _matches_prefix(imported, config.get("artifact_forbidden_imports", [])):
+                    findings.append(
+                        Finding(relative, line, "SWARCH015", f"artifact package imports runtime authority {imported}")
+                    )
+                if not _under(relative, config.get("artifact_service_roots", [])) and _matches_prefix(
+                    imported, config.get("artifact_non_service_forbidden_imports", [])
+                ):
+                    findings.append(
+                        Finding(relative, line, "SWARCH016", f"artifact primitive imports service authority {imported}")
+                    )
+
+        if relative.startswith("seasonalweather/") and not _under(
+            relative,
+            config.get("artifact_authority_allowed_roots", []),
+        ):
+            for imported, line in imports:
+                if _matches_prefix(imported, config.get("artifact_authority_imports", [])):
+                    findings.append(
+                        Finding(
+                            relative,
+                            line,
+                            "SWARCH017",
+                            f"runtime module imports artifact publication authority {imported}",
+                        )
+                    )
+
         if _under(relative, config["script_roots"]):
             for imported, line in imports:
                 if _matches_prefix(imported, config["script_forbidden_imports"]):

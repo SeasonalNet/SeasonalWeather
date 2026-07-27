@@ -104,9 +104,10 @@ def test_fresh_and_repeat_initialization_enforces_separate_wal_database(
     assert path.is_file()
     assert database.settings() == {
         "initialized": True,
-        "schema_version": 1,
-        "expected_schema_version": 1,
+        "schema_version": 2,
+        "expected_schema_version": 2,
         "journal_mode": "wal",
+        "synchronous": 2,
         "foreign_keys": True,
         "busy_timeout_ms": 1234,
     }
@@ -576,3 +577,31 @@ def test_command_aggregation_repairs_cross_database_crash_window(
     )
     assert asyncio.run(CommandJobCoordinator(repository, reopened_store).repair()) == 0
     assert asyncio.run(reopened_store.get(command.command_id)).status.value == "failed"
+
+
+def test_artifact_publication_receipt_is_metadata_only_and_idempotent(tmp_path: Path) -> None:
+    clock, _, repository, service = _runtime(tmp_path)
+    admitted = _admit_tts(service)
+    receipt = repository.record_artifact_receipt(
+        job_id=admitted.job.job_id,
+        attempt_id="attempt_00000001",
+        artifact_digest="sha256:" + "a" * 64,
+        artifact_size_bytes=12,
+        artifact_class="blob",
+        target_key="current.bin",
+        disposition="rejected",
+        metadata={"schema_version": 1},
+        committed_at=None,
+    )
+    replay = repository.record_artifact_receipt(
+        job_id=admitted.job.job_id,
+        attempt_id="attempt_00000001",
+        artifact_digest="sha256:" + "a" * 64,
+        artifact_size_bytes=12,
+        artifact_class="blob",
+        target_key="current.bin",
+        disposition="rejected",
+        metadata={"schema_version": 1},
+        committed_at=None,
+    )
+    assert replay == receipt

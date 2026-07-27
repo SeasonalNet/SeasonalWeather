@@ -46,6 +46,23 @@ class ResultCommitReceipt:
 
 
 @dataclass(frozen=True)
+class ArtifactPublicationReceipt:
+    job_id: str
+    attempt_id: str
+    artifact_digest: str
+    artifact_size_bytes: int
+    artifact_class: str
+    target_key: str
+    prior_digest: str | None
+    result_hash: str | None
+    disposition: str
+    metadata: dict[str, str | int | float | bool | None]
+    prepared_at: dt.datetime | None
+    promoted_at: dt.datetime | None
+    committed_at: dt.datetime | None
+
+
+@dataclass(frozen=True)
 class ReconciliationSummary:
     inspected: int = 0
     expired_deadlines: int = 0

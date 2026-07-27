@@ -30,6 +30,7 @@ from ..jobs.registry import policy_for
 from .core import JobDatabase
 from .models import (
     AdmissionDisposition,
+    ArtifactPublicationReceipt,
     DurableAdmission,
     JobAssignment,
     JobStoreConflictError,
@@ -1435,6 +1436,239 @@ class JobRepository:
             code="completed",
             result_ref=result_ref,
             metadata=dict(list(sorted(metadata.items()))[:16]),
+        )
+
+    def record_artifact_receipt(
+        self,
+        *,
+        job_id: str,
+        attempt_id: str,
+        artifact_digest: str,
+        artifact_size_bytes: int,
+        artifact_class: str,
+        target_key: str,
+        disposition: str,
+        metadata: dict[str, str | int | float | bool | None],
+        committed_at: dt.datetime | None,
+        prepared_at: dt.datetime | None = None,
+        promoted_at: dt.datetime | None = None,
+        prior_digest: str | None = None,
+        result_hash: str | None = None,
+    ) -> ArtifactPublicationReceipt:
+        self._validate_artifact_receipt_values(
+            artifact_digest, artifact_size_bytes, artifact_class, target_key, disposition
+        )
+        metadata_json, _ = _json_bytes(metadata, limit=2048, name="artifact receipt metadata")
+        with self.database.transaction() as conn:
+            job_row = conn.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+            if job_row is None:
+                raise KeyError(job_id)
+            self._validate_artifact_job_state(
+                conn,
+                job_row,
+                job_id=job_id,
+                attempt_id=attempt_id,
+                lease_id=metadata.get("lease_id"),
+                disposition=disposition,
+                result_hash=result_hash,
+            )
+            existing = conn.execute(
+                "SELECT * FROM artifact_publication_receipts WHERE job_id = ? AND attempt_id = ?",
+                (job_id, attempt_id),
+            ).fetchone()
+            if existing is not None:
+                return self._update_artifact_receipt(
+                    conn,
+                    existing,
+                    job_id=job_id,
+                    attempt_id=attempt_id,
+                    artifact_digest=artifact_digest,
+                    artifact_size_bytes=artifact_size_bytes,
+                    artifact_class=artifact_class,
+                    target_key=target_key,
+                    disposition=disposition,
+                    metadata_json=metadata_json,
+                    prepared_at=prepared_at,
+                    promoted_at=promoted_at,
+                    committed_at=committed_at,
+                    prior_digest=prior_digest,
+                    result_hash=result_hash,
+                )
+            conn.execute(
+                """
+                INSERT INTO artifact_publication_receipts (
+                    job_id, attempt_id, artifact_digest, artifact_size_bytes,
+                    artifact_class, target_key, prior_digest, result_hash, disposition, prepared_at,
+                    promoted_at, committed_at, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    job_id,
+                    attempt_id,
+                    artifact_digest,
+                    artifact_size_bytes,
+                    artifact_class,
+                    target_key,
+                    prior_digest,
+                    result_hash,
+                    disposition,
+                    _iso(prepared_at) if prepared_at else None,
+                    _iso(promoted_at) if promoted_at else None,
+                    _iso(committed_at) if committed_at else None,
+                    metadata_json,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM artifact_publication_receipts WHERE job_id = ? AND attempt_id = ?",
+                (job_id, attempt_id),
+            ).fetchone()
+        return self._artifact_receipt(row)
+
+    @staticmethod
+    def _validate_artifact_receipt_values(
+        artifact_digest: str,
+        artifact_size_bytes: int,
+        artifact_class: str,
+        target_key: str,
+        disposition: str,
+    ) -> None:
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", artifact_digest) or not 0 < artifact_size_bytes <= 1_073_741_824:
+            raise JobStoreValidationError("artifact receipt identity is invalid")
+        if any(not _KEY_RE.fullmatch(value) for value in (artifact_class, target_key, disposition)):
+            raise JobStoreValidationError("artifact receipt vocabulary is invalid")
+
+    @staticmethod
+    def _validate_artifact_job_state(
+        conn: sqlite3.Connection,
+        job_row: sqlite3.Row,
+        *,
+        job_id: str,
+        attempt_id: str,
+        lease_id: Any,
+        disposition: str,
+        result_hash: str | None,
+    ) -> None:
+        if disposition == "prepared" and (job_row["attempt_id"] != attempt_id or job_row["lease_id"] != lease_id):
+            raise StaleJobMutationError("artifact preparation requires the current durable lease and attempt")
+        if disposition != "committed":
+            return
+        committed = conn.execute("SELECT result_hash FROM job_result_commits WHERE job_id = ?", (job_id,)).fetchone()
+        if committed is None or committed["result_hash"] != result_hash:
+            raise JobStoreConflictError("artifact commitment must follow the P1-07 result commit")
+
+    def _update_artifact_receipt(
+        self,
+        conn: sqlite3.Connection,
+        existing: sqlite3.Row,
+        **values: Any,
+    ) -> ArtifactPublicationReceipt:
+        authoritative = (
+            existing["artifact_digest"],
+            int(existing["artifact_size_bytes"]),
+            existing["artifact_class"],
+            existing["target_key"],
+            existing["metadata_json"],
+        )
+        supplied = (
+            values["artifact_digest"],
+            values["artifact_size_bytes"],
+            values["artifact_class"],
+            values["target_key"],
+            values["metadata_json"],
+        )
+        if authoritative != supplied:
+            raise JobStoreConflictError("artifact receipt conflicts with prior result")
+        if existing["prior_digest"] is not None and existing["prior_digest"] != values["prior_digest"]:
+            raise JobStoreConflictError("artifact prior identity conflicts with durable receipt")
+        if existing["result_hash"] is not None and existing["result_hash"] != values["result_hash"]:
+            raise JobStoreConflictError("artifact result hash conflicts with durable receipt")
+        allowed = {
+            "prepared": {"prepared", "promoted", "committed", "reconciliation_required", "superseded", "rejected"},
+            "promoted": {"promoted", "committed", "reconciliation_required"},
+            "committed": {"committed"},
+            "reconciliation_required": {"reconciliation_required", "promoted", "committed"},
+            "rejected": {"rejected"},
+            "superseded": {"superseded"},
+        }
+        if values["disposition"] not in allowed.get(str(existing["disposition"]), set()):
+            raise JobStoreConflictError("artifact receipt state cannot regress")
+        conn.execute(
+            """
+            UPDATE artifact_publication_receipts
+               SET disposition = ?,
+                   prepared_at = COALESCE(prepared_at, ?),
+                   promoted_at = COALESCE(promoted_at, ?),
+                   committed_at = COALESCE(committed_at, ?),
+                   prior_digest = COALESCE(prior_digest, ?),
+                   result_hash = COALESCE(result_hash, ?)
+             WHERE job_id = ? AND attempt_id = ?
+            """,
+            (
+                values["disposition"],
+                _iso(values["prepared_at"]) if values["prepared_at"] else None,
+                _iso(values["promoted_at"]) if values["promoted_at"] else None,
+                _iso(values["committed_at"]) if values["committed_at"] else None,
+                values["prior_digest"],
+                values["result_hash"],
+                values["job_id"],
+                values["attempt_id"],
+            ),
+        )
+        updated = conn.execute(
+            "SELECT * FROM artifact_publication_receipts WHERE job_id = ? AND attempt_id = ?",
+            (values["job_id"], values["attempt_id"]),
+        ).fetchone()
+        return self._artifact_receipt(updated)
+
+    @staticmethod
+    def _artifact_receipt(row: sqlite3.Row) -> ArtifactPublicationReceipt:
+        return ArtifactPublicationReceipt(
+            job_id=str(row["job_id"]),
+            attempt_id=str(row["attempt_id"]),
+            artifact_digest=str(row["artifact_digest"]),
+            artifact_size_bytes=int(row["artifact_size_bytes"]),
+            artifact_class=str(row["artifact_class"]),
+            target_key=str(row["target_key"]),
+            prior_digest=str(row["prior_digest"]) if row["prior_digest"] else None,
+            result_hash=str(row["result_hash"]) if row["result_hash"] else None,
+            disposition=str(row["disposition"]),
+            metadata=json.loads(row["metadata_json"]),
+            prepared_at=_time(row["prepared_at"]),
+            promoted_at=_time(row["promoted_at"]),
+            committed_at=_time(row["committed_at"]),
+        )
+
+    def artifact_receipt(self, job_id: str, attempt_id: str) -> ArtifactPublicationReceipt | None:
+        with self.database.connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM artifact_publication_receipts WHERE job_id = ? AND attempt_id = ?",
+                (job_id, attempt_id),
+            ).fetchone()
+        return self._artifact_receipt(row) if row is not None else None
+
+    def pending_artifact_receipts(self, *, limit: int = 256) -> tuple[ArtifactPublicationReceipt, ...]:
+        with self.database.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM artifact_publication_receipts
+                 WHERE disposition IN ('prepared', 'promoted', 'reconciliation_required')
+                 ORDER BY job_id, attempt_id LIMIT ?
+                """,
+                (max(1, min(limit, 256)),),
+            ).fetchall()
+        return tuple(self._artifact_receipt(row) for row in rows)
+
+    def result_commit_receipt(self, job_id: str) -> ResultCommitReceipt | None:
+        with self.database.connection() as conn:
+            row = conn.execute("SELECT * FROM job_result_commits WHERE job_id = ?", (job_id,)).fetchone()
+        if row is None:
+            return None
+        return ResultCommitReceipt(
+            job_id=str(row["job_id"]),
+            attempt=int(row["attempt"]),
+            result_hash=str(row["result_hash"]),
+            committed_at=_required_time(row["committed_at"]),
+            idempotent_replay=True,
         )
 
     @staticmethod

@@ -1,0 +1,1 @@
+from seasonalweather.artifacts.promotion import PromotionService

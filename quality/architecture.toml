@@ -10,6 +10,10 @@ worker_only_imports = [
 
 controller_authority_imports = [
   "seasonalweather.alerts",
+  "seasonalweather.artifacts.integration",
+  "seasonalweather.artifacts.promotion",
+  "seasonalweather.artifacts.service",
+  "seasonalweather.artifacts.staging",
   "seasonalweather.broadcast",
   "seasonalweather.config",
   "seasonalweather.database",
@@ -80,8 +84,44 @@ capability_non_adapter_forbidden_imports = [
   "seasonalweather.swwp",
 ]
 
+artifact_roots = ["seasonalweather/artifacts"]
+artifact_service_roots = [
+  "seasonalweather/artifacts/service.py",
+  "seasonalweather/artifacts/integration.py",
+]
+artifact_forbidden_imports = [
+  "fastapi",
+  "starlette",
+  "uvicorn",
+  "seasonalweather.api",
+  "seasonalweather.broadcast",
+  "seasonalweather.control",
+  "seasonalweather.liquidsoap_telnet",
+  "seasonalweather.nwws",
+  "seasonalweather.tts",
+  "seasonalweather.worker",
+  "seasonalweather.workers",
+  "sqlite3",
+]
+artifact_non_service_forbidden_imports = [
+  "seasonalweather.job_store",
+  "seasonalweather.swwp",
+  "seasonalweather.capabilities",
+]
+artifact_authority_imports = [
+  "seasonalweather.artifacts.integration",
+  "seasonalweather.artifacts.promotion",
+  "seasonalweather.artifacts.service",
+  "seasonalweather.artifacts.staging",
+]
+artifact_authority_allowed_roots = ["seasonalweather/artifacts"]
+
 api_roots = ["seasonalweather/api"]
 api_forbidden_imports = [
+  "seasonalweather.artifacts.integration",
+  "seasonalweather.artifacts.promotion",
+  "seasonalweather.artifacts.service",
+  "seasonalweather.artifacts.staging",
   "seasonalweather.database",
   "seasonalweather.liquidsoap_telnet",
   "seasonalweather.tts",

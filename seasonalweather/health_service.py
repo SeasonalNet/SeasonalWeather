@@ -262,6 +262,8 @@ def build_runtime_health_service(
     auth_service: Any,
     job_service: Any = None,
     capability_registry: Any = None,
+    artifact_service: Any = None,
+    artifacts_required: bool = False,
     required_capabilities: Iterable[str] = (),
     timeout_seconds: float = 1.0,
 ) -> HealthService:
@@ -269,6 +271,49 @@ def build_runtime_health_service(
 
     cfg = runtime.cfg
     probes: list[ComponentProbe] = []
+
+    async def artifact_probe() -> HealthComponent:
+        if artifact_service is None:
+            return _component("artifacts", ComponentState.NOT_APPLICABLE, False, "not_configured")
+        snapshot = artifact_service.health_snapshot()
+        pending = int(snapshot.get("pending_reconciliation", 0))
+        temporary = int(snapshot.get("temporary_backlog", 0))
+        storage_available = bool(snapshot.get("storage_available", 0))
+        required_missing = int(snapshot.get("required_active_missing", 0))
+        closed = snapshot.get("state") == "closed"
+        unavailable = closed or not storage_available or required_missing > 0
+        state = (
+            ComponentState.UNAVAILABLE
+            if unavailable
+            else ComponentState.DEGRADED
+            if pending
+            else ComponentState.HEALTHY
+        )
+        reason = (
+            "service_closed"
+            if closed
+            else "storage_unavailable"
+            if not storage_available
+            else "required_active_missing"
+            if required_missing
+            else "reconciliation_pending"
+            if pending
+            else "artifacts_ready"
+        )
+        return _component(
+            "artifacts",
+            state,
+            artifacts_required,
+            reason,
+            details={
+                "pending_reconciliation": pending,
+                "temporary_backlog": temporary,
+                "required_active_missing": required_missing,
+                "last_reason": str(snapshot.get("last_reason", "none")),
+            },
+        )
+
+    probes.append(ComponentProbe("artifacts", artifacts_required, artifact_probe))
 
     async def database_probe() -> HealthComponent:
         database = getattr(runtime, "database", None)

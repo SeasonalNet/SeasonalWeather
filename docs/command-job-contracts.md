@@ -176,7 +176,10 @@ layer:
   contracts or add a live connection;
 - P1-09 supplies simulated dynamic worker capability, health, capacity, epoch,
   qualification, and reservation behavior without a live worker;
-- P1-10: artifact staging, validation, promotion, and stale-result acceptance.
+- P1-10 supplies controller-owned artifact staging, strict result fencing,
+  immutable blob insertion, atomic target promotion, and durable result
+  ordering for the declared artifact-producing contracts. Existing broadcast
+  writers are not yet migrated.
 
 No embedded executor is a production fallback. The P1-07 scheduler returns
 typed assignments but adds no executor or worker runtime.

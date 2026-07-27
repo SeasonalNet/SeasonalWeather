@@ -192,4 +192,9 @@ Deferred work includes live WSS transport, worker processes and handlers,
 real dependency checks, production worker health servers, capability
 persistence, and container operation. Artifact staging, media validation,
 hash/identity/generation fences, promotion, result acceptance, Liquidsoap, and
-publication remain P1-10 or later.
+publication use the P1-10 controller artifact boundary when integrated.
+Capability qualification and capacity accounting do not make a result
+authoritative: the artifact coordinator must validate, promote, and durably
+commit through P1-07 first. P1-09 then releases active capacity exactly once.
+Production worker handlers and broader broadcast-path migration remain later
+work.

@@ -14,6 +14,7 @@ def test_invalid_architecture_fixture_proves_rules_fail_closed():
 
     assert {finding.rule for finding in findings} >= {
         "SWARCH001",
+        "SWARCH002",
         "SWARCH003",
         "SWARCH006",
         "SWARCH009",
@@ -22,6 +23,9 @@ def test_invalid_architecture_fixture_proves_rules_fail_closed():
         "SWARCH012",
         "SWARCH013",
         "SWARCH014",
+        "SWARCH015",
+        "SWARCH016",
+        "SWARCH017",
     }
     assert any("filesystem mutation" in finding.message for finding in findings)
 
@@ -54,3 +58,23 @@ def test_control_and_api_have_no_capability_scheduler_authority():
         assert "CapabilitySchedulerService" not in source
         assert "QualificationReason" not in source
         assert "reserve(" not in source
+
+
+def test_control_and_api_have_no_artifact_publication_authority():
+    control = (ROOT / "seasonalweather/control.py").read_text(encoding="utf-8")
+    api = "\n".join(path.read_text(encoding="utf-8") for path in (ROOT / "seasonalweather/api").glob("*.py"))
+
+    for source in (control, api):
+        assert "seasonalweather.artifacts" not in source
+        assert "ArtifactService(" not in source
+        assert "PromotionService(" not in source
+
+
+def test_worker_boundary_declares_artifact_promotion_as_controller_authority():
+    authorities = set(CONFIG["controller_authority_imports"])
+    assert {
+        "seasonalweather.artifacts.integration",
+        "seasonalweather.artifacts.promotion",
+        "seasonalweather.artifacts.service",
+        "seasonalweather.artifacts.staging",
+    } <= authorities

@@ -31,6 +31,7 @@ class JobDatabase:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms}")
+        conn.execute("PRAGMA synchronous = FULL")
         mode = str(conn.execute("PRAGMA journal_mode = WAL").fetchone()[0]).lower()
         if mode != "wal":
             conn.close()
@@ -83,6 +84,7 @@ class JobDatabase:
                 "schema_version": schema,
                 "expected_schema_version": SCHEMA_VERSION,
                 "journal_mode": str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower(),
+                "synchronous": int(conn.execute("PRAGMA synchronous").fetchone()[0]),
                 "foreign_keys": bool(conn.execute("PRAGMA foreign_keys").fetchone()[0]),
                 "busy_timeout_ms": int(conn.execute("PRAGMA busy_timeout").fetchone()[0]),
             }

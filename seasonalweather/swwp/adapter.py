@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -50,12 +51,24 @@ class DurableSwwpPort(Protocol):
     def reject_unacknowledged(self, lease: LeaseRef) -> JobRecord: ...
 
 
+class ArtifactResultPort(Protocol):
+    def supports(self, job_type: JobType) -> bool: ...
+
+    def accept(
+        self,
+        assignment: JobAssignment,
+        message: JobResult,
+        commit: Callable[[dict[str, object]], ResultCommitReceipt],
+    ) -> ResultCommitReceipt: ...
+
+
 @dataclass
 class JobStoreSwwpAdapter:
     """The only SWWP owner allowed to import the concrete P1-07 boundary."""
 
     scheduler: JobScheduler
     repository: JobRepository
+    artifact_results: ArtifactResultPort | None = None
 
     def __post_init__(self) -> None:
         self._assignments: dict[tuple[str, str, str, int], JobAssignment] = {}
@@ -156,10 +169,23 @@ class JobStoreSwwpAdapter:
         assignment = self._assignment(result.lease)
         if result.result_schema_version != assignment.job.result_schema_version:
             raise ValueError("result schema version differs from durable assignment")
+        if self.artifact_results is not None and self.artifact_results.supports(assignment.job.job_type):
+            return self.artifact_results.accept(
+                assignment,
+                result,
+                lambda payload: self._commit_success(assignment, payload),
+            )
+        return self._commit_success(assignment, result.result)
+
+    def _commit_success(
+        self,
+        assignment: JobAssignment,
+        payload: dict[str, object],
+    ) -> ResultCommitReceipt:
         receipt = self.scheduler.outcome(
             assignment,
             outcome=AttemptOutcome.SUCCEEDED,
-            result_payload=result.result,
+            result_payload=payload,
         )
         if not isinstance(receipt, ResultCommitReceipt):
             raise RuntimeError("successful result did not produce durable commit receipt")
