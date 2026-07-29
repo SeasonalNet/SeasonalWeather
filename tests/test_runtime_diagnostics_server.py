@@ -207,6 +207,42 @@ def _install_server_seams(
     return selected, database
 
 
+def test_default_executor_shutdown_supports_python_311_and_newer_signatures() -> None:
+    legacy_calls: list[bool] = []
+    modern_timeouts: list[float | None] = []
+
+    class LegacyLoop:
+        async def shutdown_default_executor(self) -> None:
+            legacy_calls.append(True)
+
+    class ModernLoop:
+        async def shutdown_default_executor(self, timeout: float | None = None) -> None:
+            modern_timeouts.append(timeout)
+
+    class HangingLegacyLoop:
+        async def shutdown_default_executor(self) -> None:
+            await asyncio.Future()
+
+    async def scenario() -> None:
+        await api_server._shutdown_default_executor(
+            LegacyLoop(),
+            timeout_seconds=0.25,
+        )
+        await api_server._shutdown_default_executor(
+            ModernLoop(),
+            timeout_seconds=0.25,
+        )
+        with pytest.raises(TimeoutError):
+            await api_server._shutdown_default_executor(
+                HangingLegacyLoop(),
+                timeout_seconds=0.01,
+            )
+
+    asyncio.run(scenario())
+    assert legacy_calls == [True]
+    assert modern_timeouts == [0.25]
+
+
 @pytest.mark.filterwarnings("ignore:The executor did not finishing joining its threads")
 def test_run_api_server_impl_wires_marker_optional_failure_and_pruning(
     tmp_path: Path,

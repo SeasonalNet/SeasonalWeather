@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import inspect
 import logging
 import signal
 import uuid
@@ -670,11 +671,30 @@ async def _close_resources(
             failures.append(("sqlite_checkpoint_failed", exc))
     try:
         loop: Any = asyncio.get_running_loop()
-        await loop.shutdown_default_executor(timeout=tts_timeout_seconds)
+        await _shutdown_default_executor(
+            loop,
+            timeout_seconds=tts_timeout_seconds,
+        )
     except Exception as exc:
         log.warning("controller_resource_close_failed resource=executor")
         failures.append(("executor_shutdown_failed", exc))
     return tuple(failures)
+
+
+async def _shutdown_default_executor(
+    loop: Any,
+    *,
+    timeout_seconds: float,
+) -> None:
+    shutdown = loop.shutdown_default_executor
+    try:
+        supports_timeout = "timeout" in inspect.signature(shutdown).parameters
+    except (TypeError, ValueError):
+        supports_timeout = False
+    if supports_timeout:
+        await shutdown(timeout=timeout_seconds)
+        return
+    await asyncio.wait_for(shutdown(), timeout=timeout_seconds)
 
 
 def main(argv: list[str] | None = None) -> int:
