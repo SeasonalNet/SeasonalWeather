@@ -33,7 +33,7 @@ def _render_issue(
     registry: dict[str, SourceDocument],
     limits: CompilerLimits,
 ) -> str:
-    lines = [f"{issue.severity}[{issue.rule_id}]: {issue.message}"]
+    lines = [f"{issue.severity}[{issue.code}]: {issue.message}"]
     if issue.path is not None:
         lines.append(f"  path: {issue.path.to_human()}")
     if issue.primary is not None:
@@ -59,6 +59,13 @@ def _render_issue(
         lines.append(f"  = note: {note}")
     if issue.help:
         lines.append(f"  = help: {issue.help}")
+    lines.extend(
+        (
+            "",
+            "For more information, run:",
+            f"  seasonalweather diagnostics explain {issue.code}",
+        )
+    )
     return "\n".join(lines)
 
 

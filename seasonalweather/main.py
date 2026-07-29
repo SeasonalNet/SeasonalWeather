@@ -888,6 +888,10 @@ def main(argv: list[str] | None = None) -> int:
         from .cli.config import main as config_main
 
         return config_main(effective_argv[1:])
+    if effective_argv and effective_argv[0] == "diagnostics":
+        from .diagnostics.cli import main as diagnostics_main
+
+        return diagnostics_main(effective_argv[1:])
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="/etc/seasonalweather/config.yaml")
     args = ap.parse_args(effective_argv)

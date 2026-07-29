@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -185,6 +186,15 @@ def scan(root: Path, config: dict[str, Any], exceptions: list[dict[str, Any]] | 
             for imported, line in imports:
                 if _matches_prefix(imported, config["api_forbidden_imports"]):
                     findings.append(Finding(relative, line, "SWARCH003", f"API imports mutation authority {imported}"))
+                if _matches_prefix(imported, config.get("api_diagnostics_forbidden_imports", [])):
+                    findings.append(
+                        Finding(
+                            relative,
+                            line,
+                            "SWARCH023",
+                            f"API imports diagnostic catalog file authority {imported}",
+                        )
+                    )
             for node in ast.walk(tree):
                 if isinstance(node, ast.Call):
                     mutation = _filesystem_mutation(node, path_variables)
@@ -229,6 +239,45 @@ def scan(root: Path, config: dict[str, Any], exceptions: list[dict[str, Any]] | 
                             line,
                             "SWARCH018",
                             f"configuration compiler imports runtime authority {imported}",
+                        )
+                    )
+
+        if _under(relative, config.get("diagnostics_roots", [])):
+            for imported, line in imports:
+                if _matches_prefix(imported, config.get("diagnostics_forbidden_imports", [])):
+                    findings.append(
+                        Finding(
+                            relative,
+                            line,
+                            "SWARCH020",
+                            f"diagnostic catalog imports runtime authority {imported}",
+                        )
+                    )
+            if relative not in config.get("diagnostics_file_authorities", []) and relative != config.get(
+                "diagnostics_resource_loader"
+            ):
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Call):
+                        mutation = _filesystem_mutation(node, path_variables)
+                        if mutation:
+                            findings.append(
+                                Finding(
+                                    relative,
+                                    node.lineno,
+                                    "SWARCH024",
+                                    f"diagnostic catalog has mutable file path via {mutation}",
+                                )
+                            )
+
+        if relative.startswith("seasonalweather/") and relative != config.get("diagnostics_resource_loader"):
+            for imported, line in imports:
+                if _matches_prefix(imported, ("importlib.resources",)):
+                    findings.append(
+                        Finding(
+                            relative,
+                            line,
+                            "SWARCH022",
+                            f"package-resource catalog loading bypasses owned loader via {imported}",
                         )
                     )
 
@@ -397,6 +446,45 @@ def scan(root: Path, config: dict[str, Any], exceptions: list[dict[str, Any]] | 
                     findings.append(
                         Finding(relative, node.lineno, "SWARCH007", f"compatibility default references {term!r}")
                     )
+            if (
+                relative.startswith("seasonalweather/")
+                and relative not in config.get("diagnostic_code_authorities", [])
+                and re.fullmatch(r"SW[A-Z]+[0-9]{4}", node.value)
+            ):
+                findings.append(
+                    Finding(
+                        relative,
+                        node.lineno,
+                        "SWARCH021",
+                        "permanent diagnostic code literal is outside the reviewed binding authority",
+                    )
+                )
+            if (
+                relative.startswith("seasonalweather/")
+                and relative
+                not in {
+                    config.get("diagnostics_resource_loader"),
+                    *config.get("diagnostics_file_authorities", []),
+                }
+                and node.value in {"catalog.json", "source.json", "catalog/catalog.json"}
+            ):
+                findings.append(
+                    Finding(
+                        relative,
+                        node.lineno,
+                        "SWARCH022",
+                        "diagnostic catalog file access bypasses its owned loader/compiler",
+                    )
+                )
+            if relative.startswith("seasonalweather/") and "/var/lib" in lowered and "diagnostic" in lowered:
+                findings.append(
+                    Finding(
+                        relative,
+                        node.lineno,
+                        "SWARCH024",
+                        "canonical diagnostic catalog cannot use mutable /var/lib authority",
+                    )
+                )
 
     for script_root in config["script_roots"]:
         directory = root / script_root

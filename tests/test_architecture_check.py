@@ -28,6 +28,11 @@ def test_invalid_architecture_fixture_proves_rules_fail_closed():
         "SWARCH017",
         "SWARCH018",
         "SWARCH019",
+        "SWARCH020",
+        "SWARCH021",
+        "SWARCH022",
+        "SWARCH023",
+        "SWARCH024",
     }
     assert any("filesystem mutation" in finding.message for finding in findings)
 
@@ -90,3 +95,14 @@ def test_configuration_parser_and_schema_authority_stays_out_of_control_and_api(
         assert "yaml.safe_load" not in source
         assert "validate_schema(" not in source
         assert "parse_document(" not in source
+
+
+def test_control_and_api_have_no_diagnostic_catalog_file_authority():
+    control = (ROOT / "seasonalweather/control.py").read_text(encoding="utf-8")
+    api = "\n".join(path.read_text(encoding="utf-8") for path in (ROOT / "seasonalweather/api").glob("*.py"))
+
+    for source in (control, api):
+        assert "catalog.json" not in source
+        assert "diagnostics.loader" not in source
+        assert "importlib.resources" not in source
+        assert "/v1/diagnostics" not in source

@@ -59,6 +59,9 @@ make dead-code-check
 make security-check
 make complexity-check
 make image-boundaries-check
+make diagnostics-check
+make diagnostics-build
+make diagnostics-export
 make quality
 make test
 ```
@@ -146,6 +149,12 @@ silent defaults.
 The checker does not impose a file-length limit or require speculative worker
 packages. Cohesion, authority, dependency direction, lifecycle, and failure
 domain are the controlling concerns.
+
+Permanent operator diagnostic codes are manually allocated only through
+`seasonalweather/diagnostics/catalog/source.json` and the reviewed binding
+table. Every active code requires a curated explanation. Run
+`diagnostics-check` after catalog edits; do not load canonical catalog content
+from mutable runtime paths.
 
 ## Image-boundary activation
 

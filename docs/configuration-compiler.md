@@ -23,9 +23,9 @@ The compiler does not decide cross-field semantics, capability or release
 compatibility, environmental readiness, deprecations, reload disposition,
 configuration generations, or rollback. Existing startup checks for those
 concerns remain after compilation. P1-14 owns their eventual classification;
-P1-15 owns transactional reload. P1-12 will bind supported conditions to stable
-diagnostic catalog codes. P1-11 `rule_id` values are deliberately
-non-contractual and are not diagnostic codes.
+P1-15 owns transactional reload. P1-12 binds every supported parse/schema
+condition to a stable diagnostic catalog code. Retained `rule_id` values are
+deliberately non-contractual implementation identifiers.
 
 ## Source and YAML rules
 
@@ -165,15 +165,16 @@ contain secret values, hashes, prefixes, suffixes, or environment values.
 
 ## Issues and reports
 
-P1-11 issues contain a bounded `rule_id`, `parse` or `schema` phase, error
-severity, blocking state, value-free message, optional canonical path, primary
+Compiler issues contain a stable `SWCFG` code, a bounded non-contractual
+`rule_id`, `parse` or `schema` phase, error severity, blocking state,
+value-free message, optional canonical path, primary
 location, ordered related locations, notes, help, safe origin metadata, and a
 redaction marker. Parser and validator exception text is not part of the
 contract. Unexpected implementation failures retain native exceptions and
 tracebacks rather than becoming false configuration issues.
 
 Issue ordering is deterministic by phase, source, position, path, rule, and
-stable message tie-breaker. Compiler report version 1 includes:
+stable message tie-breaker. Compiler report version 2 includes:
 
 - aggregate parse/schema validity;
 - explicit and resolved configuration-schema versions;
@@ -181,10 +182,16 @@ stable message tie-breaker. Compiler report version 1 includes:
 - structural issues and locations;
 - safe origin counts;
 - whether redaction occurred.
+- diagnostic catalog and diagnostic-schema versions.
 
 It contains no timestamp, UUID, process ID, source text, effective
 configuration, environment value, or ANSI control sequence. Identical input
 and environment presence produce byte-identical compact JSON.
+
+Human errors render `error[SWCFG....]` and a deterministic
+`seasonalweather diagnostics explain CODE` footer. See
+[`diagnostic-catalog.md`](diagnostic-catalog.md) for the complete mapping,
+versioning, and authoring rules.
 
 ## Offline lint CLI
 

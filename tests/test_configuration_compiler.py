@@ -126,6 +126,7 @@ def test_six_obsolete_live_paths_are_rejected_and_were_runtime_noops() -> None:
         "/rebroadcast",
         "/live_time",
     }
+    assert {issue.code for issue in compiled.report.issues if issue.rule_id == "schema.unknown_field"} == {"SWCFG1020"}
     repeated = compile_source(_source(stale_text), environ={})
     assert unknown_paths == tuple(
         issue.path.to_pointer()
@@ -424,7 +425,7 @@ def test_startup_has_no_permissive_duplicate_fallback(
 
     with pytest.raises(ConfigurationCompileError) as exc_info:
         load_config(str(candidate))
-    assert "yaml.duplicate_key" in str(exc_info.value)
+    assert "error[SWCFG1012]" in str(exc_info.value)
 
 
 def test_valid_startup_keeps_runtime_dataclass_contract(

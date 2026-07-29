@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
+from seasonalweather.diagnostics.bindings import code_for_rule
+
 from .origins import ValueOrigin
 from .paths import ConfigPath
 from .source import RelatedLocation, SourceLocation
@@ -30,6 +32,10 @@ class CompileIssue:
     severity: str = "error"
     blocking: bool = True
 
+    @property
+    def code(self) -> str:
+        return code_for_rule(self.rule_id)
+
     def sort_key(self) -> tuple[object, ...]:
         position = self.primary.span.start if self.primary else None
         return (
@@ -44,6 +50,7 @@ class CompileIssue:
 
     def to_dict(self) -> dict[str, object]:
         result: dict[str, object] = {
+            "code": self.code,
             "rule_id": self.rule_id,
             "phase": self.phase.value,
             "severity": self.severity,

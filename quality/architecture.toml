@@ -204,3 +204,41 @@ configuration_forbidden_imports = [
   "seasonalweather.workers",
 ]
 configuration_yaml_parser = "seasonalweather/configuration/yaml_parser.py"
+
+diagnostics_roots = ["seasonalweather/diagnostics"]
+diagnostics_forbidden_imports = [
+  "fastapi",
+  "starlette",
+  "uvicorn",
+  "sqlite3",
+  "yaml",
+  "seasonalweather.alerts",
+  "seasonalweather.api",
+  "seasonalweather.artifacts",
+  "seasonalweather.broadcast",
+  "seasonalweather.capabilities",
+  "seasonalweather.config",
+  "seasonalweather.configuration",
+  "seasonalweather.control",
+  "seasonalweather.database",
+  "seasonalweather.job_store",
+  "seasonalweather.liquidsoap_telnet",
+  "seasonalweather.nwws",
+  "seasonalweather.swwp",
+  "seasonalweather.tts",
+  "seasonalweather.worker",
+  "seasonalweather.workers",
+]
+diagnostics_resource_loader = "seasonalweather/diagnostics/loader.py"
+diagnostics_file_authorities = [
+  "seasonalweather/diagnostics/compiler.py",
+  "seasonalweather/diagnostics/exporter.py",
+]
+diagnostic_code_authorities = [
+  "seasonalweather/diagnostics/bindings.py",
+]
+api_diagnostics_forbidden_imports = [
+  "seasonalweather.diagnostics.compiler",
+  "seasonalweather.diagnostics.exporter",
+  "seasonalweather.diagnostics.loader",
+]

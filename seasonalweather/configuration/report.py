@@ -5,10 +5,15 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
+from seasonalweather.diagnostics.models import (
+    DIAGNOSTIC_CATALOG_VERSION,
+    DIAGNOSTIC_SCHEMA_VERSION,
+)
+
 from .issues import CompileIssue
 from .origins import OriginKind, ValueOrigin
 
-COMPILER_REPORT_VERSION = 1
+COMPILER_REPORT_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -41,6 +46,8 @@ class CompileReport:
         counts = {kind.value: sum(1 for origin in self.origins if origin.kind is kind) for kind in OriginKind}
         return {
             "compiler_report_version": COMPILER_REPORT_VERSION,
+            "diagnostic_schema_version": DIAGNOSTIC_SCHEMA_VERSION,
+            "diagnostic_catalog_version": DIAGNOSTIC_CATALOG_VERSION,
             "valid": self.valid,
             "parse_valid": self.parse_valid,
             "schema_valid": self.schema_valid,

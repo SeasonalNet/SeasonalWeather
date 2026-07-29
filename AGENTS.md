@@ -106,6 +106,24 @@ Before considering a change complete, verify:
 - Image boundaries are currently declared not applicable. The first packet
   that adds image definitions must replace that declaration with content rules.
 
+## Diagnostic catalog governance
+
+- The typed namespace registry distinguishes active namespaces from reserved
+  `SWCACHE` and `SWREDIS`; reserved namespaces cannot receive codes.
+- Codes use universal `0xxx` through `9xxx` condition bands. Every `x000`
+  boundary and every catalog-v1 `9xxx` value is unassignable.
+- Allocate opaque ordinals manually and monotonically through
+  `seasonalweather/diagnostics/catalog/source.json`; never add permanent codes
+  ad hoc in runtime, configuration, API, or test implementation.
+- Published code meanings are immutable and never reused. Retire codes as
+  permanent tombstones with version, reason, and replacement metadata.
+- Every active code requires one curated, sanitized Markdown explanation.
+- Catalog compilation must remain deterministic. Run `make diagnostics-check`,
+  `make diagnostics-build`, and the applicable diagnostics tests.
+- Runtime authority is the immutable compiled package resource. Do not place
+  canonical catalog content under `/var/lib`, and do not treat an `/usr/share`
+  export as runtime authority.
+
 ## Avoid
 - hardcoding deployment-only paths into repo code unless already established by project convention
 - changing unrelated alert semantics while fixing UI or logging presentation

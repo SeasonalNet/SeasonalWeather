@@ -2,7 +2,10 @@ PYTHON ?= python3
 
 .PHONY: format-check lint typecheck architecture-check dependency-check
 .PHONY: dead-code-check security-check complexity-check image-boundaries-check
-.PHONY: exceptions-check quality test
+.PHONY: exceptions-check diagnostics-check diagnostics-build diagnostics-export
+.PHONY: quality test
+
+DIAGNOSTICS_EXPORT_DIR ?= build/diagnostics
 
 format-check:
 	$(PYTHON) -m tools.quality.run_check format
@@ -35,7 +38,16 @@ image-boundaries-check:
 exceptions-check:
 	$(PYTHON) -m tools.quality.validate_governance
 
-quality: exceptions-check format-check lint typecheck architecture-check dependency-check dead-code-check security-check complexity-check image-boundaries-check
+diagnostics-check:
+	$(PYTHON) -m seasonalweather.diagnostics.compiler check
+
+diagnostics-build:
+	$(PYTHON) -m seasonalweather.diagnostics.compiler build
+
+diagnostics-export:
+	$(PYTHON) -m seasonalweather diagnostics export --output $(DIAGNOSTICS_EXPORT_DIR)
+
+quality: exceptions-check diagnostics-check format-check lint typecheck architecture-check dependency-check dead-code-check security-check complexity-check image-boundaries-check
 
 test:
 	$(PYTHON) -m pytest

@@ -88,6 +88,11 @@ Freeze products are supported natively. `FZ.W` maps to SAME `FZW` (**Freeze Warn
   simulated peers and documented in
   [`docs/worker-capabilities.md`](docs/worker-capabilities.md). They do not add
   a live worker or execution path.
+- The versioned read-only diagnostic namespace registry, stable configuration
+  codes, curated explanations, deterministic catalog build/export, and
+  `seasonalweather diagnostics list|explain` commands are documented in
+  [`docs/diagnostic-catalog.md`](docs/diagnostic-catalog.md). The catalog is
+  packaged software content, not mutable runtime occurrence state.
 - Public handled-alerts feed API (`/v1/handled-alerts`) for external UI consumption, backed by SQLite.
   Persisted station-feed rows remain authoritative across restarts; startup does not synthesize degraded public records from AlertTracker state.
 

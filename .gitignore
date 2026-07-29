@@ -3,6 +3,9 @@
 # ======
 __pycache__/
 *.bak*
+build/
+dist/
+*.egg-info/
 *.pyc
 # ==================================== 
 # local dependency artifacts / backups

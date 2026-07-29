@@ -23,7 +23,8 @@ def test_config_lint_invalid_human_mode(tmp_path: Path, capsys) -> None:
     assert main(["lint", "--config", str(candidate)]) == 1
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert "yaml.syntax" in captured.err
+    assert "error[SWCFG1003]" in captured.err
+    assert "diagnostics explain SWCFG1003" in captured.err
 
 
 def test_config_lint_json_is_one_clean_document(capsys) -> None:
