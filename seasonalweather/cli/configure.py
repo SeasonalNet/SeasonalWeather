@@ -140,20 +140,30 @@ def _safe_int(value: str, default: int) -> int:
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
-    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    from seasonalweather.configuration.source import SourceDocument
+    from seasonalweather.configuration.yaml_parser import parse_document
+
+    source = SourceDocument.read(path)
+    parsed = parse_document(source)
+    if parsed.parsed is None:
+        rule_ids = ", ".join(issue.rule_id for issue in parsed.issues)
+        raise RuntimeError(f"configuration YAML could not be parsed: {rule_ids}")
+    return dict(parsed.parsed.value)
 
 
 def validate_candidate(path: Path) -> None:
     # load_config() requires secrets from the environment. Provide safe validation
     # placeholders when the operator has not filled seasonalweather.env yet.
-    os.environ.setdefault("ICECAST_SOURCE_PASSWORD", "validation-source")
-    if not os.environ.get("SEASONAL_API_TOKEN") and not os.environ.get(
+    environment = dict(os.environ)
+    environment.setdefault("ICECAST_SOURCE_PASSWORD", "validation-source")
+    if not environment.get("SEASONAL_API_TOKEN") and not environment.get(
         "SEASONAL_API_TOKENS_JSON"
     ):
-        os.environ["SEASONAL_API_TOKEN"] = os.urandom(24).hex()
+        environment["SEASONAL_API_TOKEN"] = os.urandom(24).hex()
     try:
-        from seasonalweather.config import load_config
-        load_config(str(path))
+        from seasonalweather.configuration.loader import load_runtime_config
+
+        load_runtime_config(str(path), environ=environment)
     except Exception as exc:
         raise RuntimeError(f"generated config did not load cleanly: {exc}") from exc
 

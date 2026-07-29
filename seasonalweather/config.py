@@ -19,17 +19,15 @@ Everything else lives in config.yaml.
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import yaml
-
 from .auth.policy import KNOWN_API_SCOPES as _KNOWN_API_SCOPES
 from .auth.policy import SCOPE_RE as _AUTH_SCOPE_RE
 from .broadcast.tests import normalize_postpone_policy
+from .configuration.environment import EnvironmentValues
 from .lifecycle import LifecycleTimeouts
 from .alerts.focus import (
     AlertFocusPolicy,
@@ -42,37 +40,8 @@ from .alerts.focus import (
 
 
 # ---------------------------------------------------------------------------
-# Helpers — only used here for the surviving env-sourced secrets
+# Helpers
 # ---------------------------------------------------------------------------
-
-def _env(key: str, default: str | None = None) -> str | None:
-    v = os.environ.get(key)
-    return v if v not in (None, "") else default
-
-
-def _env_required(key: str) -> str:
-    v = os.environ.get(key, "").strip()
-    if not v:
-        raise RuntimeError(
-            f"Required environment variable {key!r} is not set. "
-            "Check /etc/seasonalweather/seasonalweather.env."
-        )
-    return v
-
-
-def _env_int(key: str, default: int) -> int:
-    v = os.environ.get(key, "").strip()
-    if not v:
-        return default
-    try:
-        return int(v)
-    except ValueError:
-        return default
-
-
-def _env_str(key: str, default: str) -> str:
-    v = os.environ.get(key, "").strip()
-    return v if v else default
 
 
 def _nwws_credentials_are_default(jid: str, password: str) -> bool:
@@ -1212,7 +1181,10 @@ def _load_exchange_auth_config(auth_block: dict[str, Any] | None) -> ExchangeAut
     return exchange
 
 
-def _load_api_auth_config(api_raw: Any) -> ApiAuthConfig:
+def _load_api_auth_config(
+    api_raw: Any,
+    environment: EnvironmentValues,
+) -> ApiAuthConfig:
     if not isinstance(api_raw, dict):
         raise _auth_error(
             "invalid_type",
@@ -1241,8 +1213,8 @@ def _load_api_auth_config(api_raw: Any) -> ApiAuthConfig:
             details={"legacy_fields": sorted(legacy_fields)},
         )
 
-    single_token = os.environ.get("SEASONAL_API_TOKEN", "")
-    tokens_json = os.environ.get("SEASONAL_API_TOKENS_JSON", "")
+    single_token = environment.raw_optional("SEASONAL_API_TOKEN")
+    tokens_json = environment.raw_optional("SEASONAL_API_TOKENS_JSON")
 
     if auth_block is not None:
         if "mode" not in auth_block:
@@ -1286,10 +1258,21 @@ def _load_api_auth_config(api_raw: Any) -> ApiAuthConfig:
 
 
 def load_config(path: str) -> AppConfig:
-    raw: Dict[str, Any] = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    """Compile and load one configuration through the authoritative loader."""
+    from .configuration.loader import load_runtime_config
 
-    nwws_jid = _env_str("NWWS_JID", "")
-    nwws_password = _env_str("NWWS_PASSWORD", "")
+    return load_runtime_config(path)
+
+
+def _build_app_config(
+    raw: Dict[str, Any],
+    *,
+    environment: EnvironmentValues,
+) -> AppConfig:
+    """Compatibility projection from one validated value tree to AppConfig."""
+
+    nwws_jid = environment.optional("NWWS_JID")
+    nwws_password = environment.optional("NWWS_PASSWORD")
     nwws_credentials_defaulted = _nwws_credentials_are_default(nwws_jid, nwws_password)
 
     # ------------------------------------------------------------------
@@ -1923,7 +1906,7 @@ def load_config(path: str) -> AppConfig:
     # ------------------------------------------------------------------
     api_raw = raw.get("api", {})
     api = ApiConfig(
-        auth=_load_api_auth_config(api_raw),
+        auth=_load_api_auth_config(api_raw, environment),
         allow_remote=bool(api_raw.get("allow_remote", False)),
         audio_max_bytes=int(api_raw.get("audio_max_bytes", 20971520)),
         audio_max_seconds=int(api_raw.get("audio_max_seconds", 180)),
@@ -2057,13 +2040,15 @@ def load_config(path: str) -> AppConfig:
     secrets = SecretsConfig(
         nwws_jid=nwws_jid,
         nwws_password=nwws_password,
-        icecast_source_password=_env_required("ICECAST_SOURCE_PASSWORD"),
-        icecast_admin_password=_env_str("ICECAST_ADMIN_PASSWORD", ""),
-        icecast_relay_password=_env_str("ICECAST_RELAY_PASSWORD", ""),
-        api_token=os.environ.get("SEASONAL_API_TOKEN", ""),
-        api_tokens_json=os.environ.get("SEASONAL_API_TOKENS_JSON", ""),
-        liquidsoap_host=_env_str("LIQUIDSOAP_TELNET_HOST", "127.0.0.1"),
-        liquidsoap_port=_env_int("LIQUIDSOAP_TELNET_PORT", 1234),
+        icecast_source_password=environment.required("ICECAST_SOURCE_PASSWORD"),
+        icecast_admin_password=environment.optional("ICECAST_ADMIN_PASSWORD"),
+        icecast_relay_password=environment.optional("ICECAST_RELAY_PASSWORD"),
+        api_token=environment.raw_optional("SEASONAL_API_TOKEN"),
+        api_tokens_json=environment.raw_optional("SEASONAL_API_TOKENS_JSON"),
+        liquidsoap_host=environment.optional(
+            "LIQUIDSOAP_TELNET_HOST", "127.0.0.1"
+        ),
+        liquidsoap_port=environment.integer("LIQUIDSOAP_TELNET_PORT", 1234),
     )
 
 
@@ -2102,10 +2087,10 @@ def load_config(path: str) -> AppConfig:
         api_enabled=bool(_get(_ld, "api_enabled", default=True)),
         errors_enabled=bool(_get(_ld, "errors_enabled", default=True)),
         # URLs come exclusively from env; not from config.yaml (no auth on webhooks)
-        alerts_url=_env_str("SEASONAL_DISCORD_ALERTS_WEBHOOK", ""),
-        ops_url=_env_str("SEASONAL_DISCORD_OPS_WEBHOOK", ""),
-        api_url=_env_str("SEASONAL_DISCORD_API_WEBHOOK", ""),
-        errors_url=_env_str("SEASONAL_DISCORD_ERRORS_WEBHOOK", ""),
+        alerts_url=environment.optional("SEASONAL_DISCORD_ALERTS_WEBHOOK"),
+        ops_url=environment.optional("SEASONAL_DISCORD_OPS_WEBHOOK"),
+        api_url=environment.optional("SEASONAL_DISCORD_API_WEBHOOK"),
+        errors_url=environment.optional("SEASONAL_DISCORD_ERRORS_WEBHOOK"),
         rate_limit_per_minute=int(_get(_ld, "rate_limit_per_minute", default=20)),
         post_tests=bool(_get(_ld, "post_tests", default=True)),
         post_voice_only=bool(_get(_ld, "post_voice_only", default=True)),

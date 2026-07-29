@@ -884,6 +884,10 @@ def main(argv: list[str] | None = None) -> int:
         from .cli.auth import main as auth_main
 
         return auth_main(effective_argv[1:])
+    if effective_argv and effective_argv[0] == "config":
+        from .cli.config import main as config_main
+
+        return config_main(effective_argv[1:])
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="/etc/seasonalweather/config.yaml")
     args = ap.parse_args(effective_argv)

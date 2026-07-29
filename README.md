@@ -136,6 +136,13 @@ SeasonalWeather uses a **two-file configuration split**:
 
 This is the single source of truth for all runtime behaviour. The file is well-commented and self-documenting. Top-level sections:
 
+The repository example declares `config_schema: 1`. Configuration is parsed
+with duplicate-key detection and strict structural types before startup.
+Legacy files without the field resolve explicitly to schema 1. Use
+`seasonalweather config lint --config PATH` for offline parse/schema validation;
+see [`docs/configuration-compiler.md`](docs/configuration-compiler.md) for YAML
+rules, source locations, provenance, redaction, reports, and stage boundaries.
+
 | Section | What it controls |
 |---|---|
 | `station` | Name, service area description, timezone, disclaimer |

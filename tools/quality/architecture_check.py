@@ -214,6 +214,46 @@ def scan(root: Path, config: dict[str, Any], exceptions: list[dict[str, Any]] | 
                         )
                     )
 
+        if _under(relative, config.get("configuration_core_roots", [])) and not _under(
+            relative,
+            config.get("configuration_adapter_roots", []),
+        ):
+            for imported, line in imports:
+                if _matches_prefix(
+                    imported,
+                    config.get("configuration_forbidden_imports", []),
+                ):
+                    findings.append(
+                        Finding(
+                            relative,
+                            line,
+                            "SWARCH018",
+                            f"configuration compiler imports runtime authority {imported}",
+                        )
+                    )
+
+        if relative.startswith("seasonalweather/") and relative != config.get("configuration_yaml_parser"):
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                call = _qualified_call(node)
+                if call in {
+                    "yaml.load",
+                    "yaml.safe_load",
+                    "yaml.full_load",
+                    "yaml.load_all",
+                    "yaml.safe_load_all",
+                    "yaml.full_load_all",
+                }:
+                    findings.append(
+                        Finding(
+                            relative,
+                            node.lineno,
+                            "SWARCH019",
+                            f"configuration YAML parsing bypasses owned parser via {call}",
+                        )
+                    )
+
         if relative.startswith("seasonalweather/") and not _under(
             relative,
             config.get("sqlite_owner_roots", []),

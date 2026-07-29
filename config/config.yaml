@@ -1,3 +1,5 @@
+config_schema: 1
+
 station:
   name: "SeasonalWeather"
   service_area_name: "The Baltimore and Washington, D.C. region, and surrounding counties across Maryland, Virginia, West Virginia, and Pennsylvania"

@@ -26,6 +26,8 @@ def test_invalid_architecture_fixture_proves_rules_fail_closed():
         "SWARCH015",
         "SWARCH016",
         "SWARCH017",
+        "SWARCH018",
+        "SWARCH019",
     }
     assert any("filesystem mutation" in finding.message for finding in findings)
 
@@ -78,3 +80,13 @@ def test_worker_boundary_declares_artifact_promotion_as_controller_authority():
         "seasonalweather.artifacts.service",
         "seasonalweather.artifacts.staging",
     } <= authorities
+
+
+def test_configuration_parser_and_schema_authority_stays_out_of_control_and_api():
+    control = (ROOT / "seasonalweather/control.py").read_text(encoding="utf-8")
+    api = "\n".join(path.read_text(encoding="utf-8") for path in (ROOT / "seasonalweather/api").glob("*.py"))
+
+    for source in (control, api):
+        assert "yaml.safe_load" not in source
+        assert "validate_schema(" not in source
+        assert "parse_document(" not in source

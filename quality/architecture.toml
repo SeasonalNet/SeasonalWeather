@@ -180,3 +180,27 @@ compatibility_default_terms = [
   "embedded_executor",
   "embedded_worker",
 ]
+
+configuration_core_roots = ["seasonalweather/configuration"]
+configuration_adapter_roots = ["seasonalweather/configuration/loader.py"]
+configuration_forbidden_imports = [
+  "fastapi",
+  "starlette",
+  "uvicorn",
+  "sqlite3",
+  "seasonalweather.api",
+  "seasonalweather.artifacts",
+  "seasonalweather.broadcast",
+  "seasonalweather.capabilities",
+  "seasonalweather.config",
+  "seasonalweather.control",
+  "seasonalweather.database",
+  "seasonalweather.job_store",
+  "seasonalweather.liquidsoap_telnet",
+  "seasonalweather.nwws",
+  "seasonalweather.swwp",
+  "seasonalweather.tts",
+  "seasonalweather.worker",
+  "seasonalweather.workers",
+]
+configuration_yaml_parser = "seasonalweather/configuration/yaml_parser.py"
