@@ -52,6 +52,8 @@ from .messages import (
     RegistrationRejected,
     ResultCommitted,
     SelectedVersions,
+    WorkerDiagnostic,
+    WorkerDiagnosticAck,
 )
 from .session import SessionMachine
 
@@ -113,6 +115,27 @@ class CapabilityControllerPort(Protocol):
     def reconcile_repository(self) -> None: ...
 
 
+class WorkerDiagnosticPort(Protocol):
+    def handle(
+        self,
+        diagnostic: WorkerDiagnostic,
+        *,
+        worker_id: str,
+        worker_instance_id: str,
+        session_id: str,
+        worker_epoch: int,
+    ) -> WorkerDiagnosticAck: ...
+
+    def release_session(
+        self,
+        *,
+        worker_id: str,
+        worker_instance_id: str,
+        session_id: str,
+        worker_epoch: int,
+    ) -> None: ...
+
+
 class ControllerSession(SessionMachine):
     def __init__(
         self,
@@ -130,6 +153,7 @@ class ControllerSession(SessionMachine):
         lease_seconds: int = 60,
         assignment_ack_seconds: int = 10,
         capabilities: CapabilityControllerPort | None = None,
+        diagnostics: WorkerDiagnosticPort | None = None,
     ) -> None:
         super().__init__(clock=clock, id_factory=id_factory, limits=limits)
         if controller_epoch < 1:
@@ -144,6 +168,7 @@ class ControllerSession(SessionMachine):
         self.lease_seconds = lease_seconds
         self.assignment_ack_seconds = assignment_ack_seconds
         self.capabilities = capabilities
+        self.diagnostics = diagnostics
         self.state = ControllerState.AWAITING_REGISTRATION
         self.session_id: str | None = None
         self.worker_id: str | None = None
@@ -436,6 +461,7 @@ class ControllerSession(SessionMachine):
             Reconcile: self._reconcile,
             CapabilityUpdate: self._capability_update,
             CapabilityReport: self._capability_report,
+            WorkerDiagnostic: self._worker_diagnostic,
         }
         handler = handlers.get(type(payload))
         if handler is None:
@@ -484,6 +510,31 @@ class ControllerSession(SessionMachine):
             self._work_port().acknowledge(payload.lease)
             self.assignments[key] = "accepted"
         return ()
+
+    def _worker_diagnostic(self, payload: WorkerDiagnostic) -> tuple[Envelope, ...]:
+        if (
+            self.diagnostics is None
+            or self.worker_id is None
+            or self.worker_instance_id is None
+            or self.session_id is None
+            or self.worker_epoch is None
+        ):
+            raise PermissionError("worker diagnostics are not authorized for this session")
+        try:
+            acknowledgment = self.diagnostics.handle(
+                payload,
+                worker_id=self.worker_id,
+                worker_instance_id=self.worker_instance_id,
+                session_id=self.session_id,
+                worker_epoch=self.worker_epoch,
+            )
+        except Exception:
+            acknowledgment = WorkerDiagnosticAck(
+                diagnostic_id=payload.diagnostic_id,
+                accepted=False,
+                summary="controller rejected worker diagnostic safely",
+            )
+        return (self._out(acknowledgment),)
 
     def _job_rejected(self, payload: JobRejected) -> tuple[Envelope, ...]:
         key = self._lease_key(payload.lease)
@@ -663,6 +714,7 @@ class ControllerSession(SessionMachine):
             return False
         if self.clock() - self.last_heartbeat_at <= dt.timedelta(seconds=self.heartbeat_timeout_seconds):
             return False
+        self._release_diagnostic_session()
         self.state = ControllerState.CLOSED
         return True
 
@@ -670,4 +722,21 @@ class ControllerSession(SessionMachine):
         if self.state not in _TERMINAL:
             if self.capabilities is not None and self.worker_id is not None and self.session_id is not None:
                 self.capabilities.disconnect(self.worker_id, session_id=self.session_id)
+            self._release_diagnostic_session()
             self.state = ControllerState.CLOSED
+
+    def _release_diagnostic_session(self) -> None:
+        if (
+            self.diagnostics is None
+            or self.worker_id is None
+            or self.worker_instance_id is None
+            or self.session_id is None
+            or self.worker_epoch is None
+        ):
+            return
+        self.diagnostics.release_session(
+            worker_id=self.worker_id,
+            worker_instance_id=self.worker_instance_id,
+            session_id=self.session_id,
+            worker_epoch=self.worker_epoch,
+        )

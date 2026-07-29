@@ -273,8 +273,9 @@ internal rejection. Summaries and correlation IDs are bounded and carry fatal
 close intent.
 
 These identifiers govern SWWP responses only. They do not replace Python
-exceptions, operational logs, or future permanent SeasonalWeather diagnostic
-codes.
+exceptions or operational logs. Simulated bounded worker diagnostic instances
+and controller-owned compatibility occurrences are documented in
+[`runtime-diagnostics.md`](runtime-diagnostics.md).
 
 ## Simulation and deferred transport
 

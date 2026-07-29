@@ -8,6 +8,7 @@ from enum import StrEnum
 from typing import Any, ClassVar, Self
 
 from ..capabilities.models import normalize_parameters
+from ..diagnostics.codes import DiagnosticCode, DiagnosticCodeError
 from ..jobs.contracts import AttemptOutcome
 from ..jobs.policies import ExecutorClass, FailureCategory, JobType, QueueClass
 from ..validation.modeling import (
@@ -584,6 +585,83 @@ class ProtocolErrorPayload(Payload):
         return _identifier(value, "correlated_message_id") if value is not None else None
 
 
+class DiagnosticTransition(StrEnum):
+    ACTIVE = "active"
+    RESOLVED = "resolved"
+
+
+class DiagnosticFrame(WireModel):
+    filename: str = Field(min_length=1, max_length=512)
+    line: int = Field(ge=1, le=10_000_000)
+    function: str = Field(min_length=1, max_length=256)
+    source: str = Field(default="", max_length=512)
+
+
+class DiagnosticEvidence(WireModel):
+    exception_type: str = Field(min_length=1, max_length=256)
+    message: str = Field(default="", max_length=1024)
+    notes: tuple[str, ...] = Field(default_factory=tuple, max_length=16)
+    frames: tuple[DiagnosticFrame, ...] = Field(default_factory=tuple, max_length=128)
+
+
+class WorkerDiagnostic(Payload):
+    message_type = "diagnostic"
+    envelope_schema_version: int = Field(ge=1, le=255)
+    diagnostic_schema_version: int = Field(ge=1, le=255)
+    catalog_version: int = Field(ge=1, le=2_147_483_647)
+    diagnostic_id: str
+    code: str = Field(min_length=7, max_length=32)
+    short_message: str = Field(min_length=1, max_length=512)
+    component: str = Field(min_length=1, max_length=64)
+    transition: DiagnosticTransition = DiagnosticTransition.ACTIVE
+    controller_occurrence_id: str | None = None
+    reason_code: str | None = Field(default=None, max_length=64)
+    capability: str | None = Field(default=None, max_length=64)
+    evidence: DiagnosticEvidence | None = None
+    retryable_hint: bool | None = None
+    fatal_hint: bool | None = None
+
+    _diagnostic_id = field_validator("diagnostic_id")(lambda value: _identifier(value, "diagnostic_id"))
+
+    @field_validator("controller_occurrence_id")
+    @classmethod
+    def validate_occurrence_id(cls, value: str | None) -> str | None:
+        return _identifier(value, "controller_occurrence_id") if value is not None else None
+
+    @field_validator("code")
+    @classmethod
+    def validate_code(cls, value: str) -> str:
+        try:
+            DiagnosticCode.parse(value)
+        except DiagnosticCodeError as exc:
+            raise ValueError("worker diagnostic code syntax is invalid") from exc
+        return value
+
+    @model_validator(mode="after")
+    def validate_transition(self) -> Self:
+        if self.transition is DiagnosticTransition.RESOLVED and self.controller_occurrence_id is None:
+            raise ValueError("worker resolution requires a controller occurrence identity")
+        if self.transition is DiagnosticTransition.ACTIVE and self.controller_occurrence_id is not None:
+            raise ValueError("worker activation cannot choose a controller occurrence identity")
+        return self
+
+
+class WorkerDiagnosticAck(Payload):
+    message_type = "diagnostic_ack"
+    diagnostic_id: str
+    accepted: bool
+    controller_occurrence_id: str | None = None
+    compatibility: bool = False
+    summary: str = Field(min_length=1, max_length=256)
+
+    _diagnostic_id = field_validator("diagnostic_id")(lambda value: _identifier(value, "diagnostic_id"))
+
+    @field_validator("controller_occurrence_id")
+    @classmethod
+    def validate_occurrence_id(cls, value: str | None) -> str | None:
+        return _identifier(value, "controller_occurrence_id") if value is not None else None
+
+
 PAYLOAD_TYPES: tuple[type[Payload], ...] = (
     Register,
     Registered,
@@ -608,6 +686,8 @@ PAYLOAD_TYPES: tuple[type[Payload], ...] = (
     ReconcileResult,
     ResultCommitted,
     ProtocolErrorPayload,
+    WorkerDiagnostic,
+    WorkerDiagnosticAck,
 )
 PAYLOAD_BY_TYPE = {model.message_type: model for model in PAYLOAD_TYPES}
 

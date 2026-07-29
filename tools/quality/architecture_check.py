@@ -269,6 +269,32 @@ def scan(root: Path, config: dict[str, Any], exceptions: list[dict[str, Any]] | 
                                 )
                             )
 
+        if _under(relative, config.get("api_roots", [])) and relative not in config.get(
+            "api_runtime_diagnostics_allowed", []
+        ):
+            for imported, line in imports:
+                if _matches_prefix(imported, ("seasonalweather.runtime_diagnostics",)):
+                    findings.append(
+                        Finding(
+                            relative,
+                            line,
+                            "SWARCH025",
+                            f"API route imports mutable runtime diagnostic authority {imported}",
+                        )
+                    )
+
+        if relative == config.get("runtime_fatal_renderer"):
+            for imported, line in imports:
+                if _matches_prefix(imported, config.get("runtime_fatal_forbidden_imports", [])):
+                    findings.append(
+                        Finding(
+                            relative,
+                            line,
+                            "SWARCH026",
+                            f"fatal emergency path imports unsafe runtime dependency {imported}",
+                        )
+                    )
+
         if relative.startswith("seasonalweather/") and relative != config.get("diagnostics_resource_loader"):
             for imported, line in imports:
                 if _matches_prefix(imported, ("importlib.resources",)):

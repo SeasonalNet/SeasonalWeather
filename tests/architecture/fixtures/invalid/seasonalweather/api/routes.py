@@ -3,6 +3,7 @@ import sqlite3
 from pathlib import Path
 
 from seasonalweather.diagnostics.loader import load_catalog
+from seasonalweather.runtime_diagnostics.repository import OccurrenceRepository
 
 
 async def mutate() -> None:
@@ -10,3 +11,4 @@ async def mutate() -> None:
     Path("runtime.txt").write_text("unsafe route mutation")
     asyncio.create_task(asyncio.sleep(1))
     load_catalog()
+    OccurrenceRepository(None)

@@ -388,7 +388,7 @@ def test_nwws_shutdown_closes_future_worker_start() -> None:
     asyncio.run(exercise())
 
 
-def test_entrypoint_returns_clean_and_propagates_fatal(
+def test_entrypoint_returns_zero_for_clean_and_nonzero_for_fatal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def clean(**_kwargs: Any) -> None:
@@ -403,9 +403,7 @@ def test_entrypoint_returns_clean_and_propagates_fatal(
         raise original
 
     monkeypatch.setattr(api_server, "run_api_server", fail)
-    with pytest.raises(RuntimeError) as exc_info:
-        api_server.main(["--config", "unused"])
-    assert exc_info.value is original
+    assert api_server.main(["--config", "unused"]) == 1
 
 
 def test_lifecycle_timeout_configuration_fails_closed(

@@ -19,11 +19,14 @@ controller_authority_imports = [
   "seasonalweather.database",
   "seasonalweather.job_store",
   "seasonalweather.liquidsoap_telnet",
+  "seasonalweather.runtime_diagnostics.repository",
+  "seasonalweather.runtime_diagnostics.service",
 ]
 
 sqlite_owner_roots = [
   "seasonalweather/database",
   "seasonalweather/job_store",
+  "seasonalweather/runtime_diagnostics/repository.py",
 ]
 
 job_store_roots = ["seasonalweather/job_store"]
@@ -228,6 +231,7 @@ diagnostics_forbidden_imports = [
   "seasonalweather.tts",
   "seasonalweather.worker",
   "seasonalweather.workers",
+  "seasonalweather.runtime_diagnostics",
 ]
 diagnostics_resource_loader = "seasonalweather/diagnostics/loader.py"
 diagnostics_file_authorities = [
@@ -237,6 +241,21 @@ diagnostics_file_authorities = [
 diagnostic_code_authorities = [
   "seasonalweather/diagnostics/bindings.py",
 ]
+runtime_diagnostics_roots = ["seasonalweather/runtime_diagnostics"]
+runtime_diagnostics_repository = "seasonalweather/runtime_diagnostics/repository.py"
+runtime_fatal_renderer = "seasonalweather/runtime_diagnostics/fatal.py"
+runtime_fatal_forbidden_imports = [
+  "httpx",
+  "requests",
+  "seasonalweather.api",
+  "seasonalweather.broadcast",
+  "seasonalweather.control",
+  "seasonalweather.database",
+  "seasonalweather.discord_log",
+  "seasonalweather.job_store",
+  "seasonalweather.liquidsoap_telnet",
+]
+api_runtime_diagnostics_allowed = ["seasonalweather/api/server.py"]
 api_diagnostics_forbidden_imports = [
   "seasonalweather.diagnostics.compiler",
   "seasonalweather.diagnostics.exporter",

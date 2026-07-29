@@ -4,16 +4,22 @@ import argparse
 import asyncio
 import logging
 import signal
+import uuid
 from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import uvicorn
+
+from seasonalweather import __version__
 
 from ..auth import AuthenticationRepository, AuthenticationService
 from ..commands import CommandStore
 from ..config import AuthMode, load_config
 from ..control import OrchestratorControl
 from ..database.bootstrap import bootstrap_database_from_config
+from ..diagnostics.bindings import RUNTIME_CODES
 from ..health_service import build_runtime_health_service
 from ..job_store import (
     CommandJobCoordinator,
@@ -23,6 +29,11 @@ from ..job_store import (
 )
 from ..lifecycle import Lifecycle, LifecycleState, TaskSupervisor
 from ..main import Orchestrator, _setup_logging
+from ..runtime_diagnostics.fatal import FatalBoundary, SecondaryFailureLedger, enable_faulthandler
+from ..runtime_diagnostics.marker import ProcessMarkerStore, controller_marker
+from ..runtime_diagnostics.models import CorrelationContext, DiagnosticRole, PromotionReason
+from ..runtime_diagnostics.repository import OccurrenceRepository
+from ..runtime_diagnostics.service import RuntimeDiagnosticService
 from .api import create_app
 
 log = logging.getLogger("seasonalweather.api")
@@ -31,6 +42,50 @@ log = logging.getLogger("seasonalweather.api")
 class _ControllerOwnedUvicornServer(uvicorn.Server):
     def install_signal_handlers(self) -> None:
         """The SeasonalWeather controller is the sole signal owner."""
+
+
+@dataclass
+class _MarkerLifecycleIntegration:
+    store: ProcessMarkerStore
+    secondary_failures: SecondaryFailureLedger
+    failure: BaseException | None = None
+    _failure_event: asyncio.Event = field(default_factory=asyncio.Event)
+
+    def transition(self, state: LifecycleState) -> None:
+        if state is LifecycleState.STOPPED or self.failure is not None:
+            return
+        try:
+            self.store.update_stage(state.value)
+        except BaseException as exc:
+            self._retain("process_marker_stage_update_failed", exc)
+
+    def terminal_failure(self) -> RuntimeError | None:
+        if self.failure is None:
+            return None
+        return RuntimeError("controller process marker integration failed")
+
+    async def wait_for_failure(self) -> None:
+        await self._failure_event.wait()
+
+    def finalize_clean(self) -> None:
+        if self.failure is not None:
+            raise RuntimeError("controller process marker integration failed")
+        try:
+            self.store.update_stage(LifecycleState.STOPPED.value)
+        except BaseException as exc:
+            self._retain("process_marker_stopped_update_failed", exc)
+            raise RuntimeError("controller process marker finalization failed") from None
+        try:
+            self.store.mark_clean()
+        except BaseException as exc:
+            self._retain("process_marker_clean_failed", exc)
+            raise RuntimeError("controller process marker finalization failed") from None
+
+    def _retain(self, event: str, error: BaseException) -> None:
+        if self.failure is None:
+            self.failure = error
+            self._failure_event.set()
+        self.secondary_failures.retain(event, error)
 
 
 def _build_job_service(cfg: Any, lifecycle: Lifecycle) -> DurableJobService | None:
@@ -51,6 +106,18 @@ def _build_job_service(cfg: Any, lifecycle: Lifecycle) -> DurableJobService | No
         job_repository,
         lifecycle,
         reconciliation_batch_size=cfg.jobs.reconciliation_batch_size,
+    )
+
+
+def _build_auth_service(cfg: Any, database: Any) -> AuthenticationService | None:
+    exchange_enabled = cfg.api.auth.mode in {AuthMode.EXCHANGE, AuthMode.HYBRID}
+    if exchange_enabled and database is None:
+        raise RuntimeError("Exchange authentication requires the controller SQLite database.")
+    if not exchange_enabled:
+        return None
+    return AuthenticationService(
+        AuthenticationRepository(database),
+        cfg.api.auth.exchange,
     )
 
 
@@ -87,10 +154,128 @@ def _install_signal_handlers(
     return remove
 
 
+def _install_loop_exception_handler(
+    loop: asyncio.AbstractEventLoop,
+    supervisor: TaskSupervisor,
+) -> Callable[[], None]:
+    prior = loop.get_exception_handler()
+
+    def handle(_loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+        exception = context.get("exception")
+        if not isinstance(exception, BaseException):
+            exception = RuntimeError(str(context.get("message") or "unhandled event-loop failure")[:256])
+        supervisor.report_background_failure(exception)
+
+    loop.set_exception_handler(handle)
+
+    def remove() -> None:
+        loop.set_exception_handler(prior)
+
+    return remove
+
+
+def _prepare_runtime_diagnostics(
+    *,
+    database: Any,
+    marker_store: ProcessMarkerStore,
+    supervisor: TaskSupervisor,
+    instance_id: str,
+) -> tuple[RuntimeDiagnosticService | None, CorrelationContext]:
+    service = RuntimeDiagnosticService(OccurrenceRepository(database)) if database is not None else None
+    context = CorrelationContext(
+        role=DiagnosticRole.CONTROLLER,
+        instance_id=instance_id,
+        component="controller",
+        build_identity=f"seasonalweather-{__version__}",
+    )
+    if service is None:
+        return None, context
+    service.initialize()
+    marker_store.reconcile_pending(service, current_context=context)
+    try:
+        service.prune_resolved(retention_days=90, retain_resolved=1_000)
+    except Exception:
+        log.warning("runtime_diagnostic_pruning_failed")
+    supervisor.optional_failure = lambda name, exc: _promote_optional_failure(
+        service,
+        context,
+        name,
+        exc,
+    )
+    return service, context
+
+
+def _promote_optional_failure(
+    service: RuntimeDiagnosticService,
+    controller_context: CorrelationContext,
+    name: str,
+    exception: BaseException,
+) -> None:
+    instance = service.build(
+        code=RUNTIME_CODES["optional_task_degraded"],
+        context=CorrelationContext(
+            role=DiagnosticRole.CONTROLLER,
+            instance_id=controller_context.instance_id,
+            component=name[:64],
+            build_identity=controller_context.build_identity,
+            reason_code="optional_task_failed",
+        ),
+        message=f"Optional supervised task {name[:64]} failed.",
+        operational_effect="The optional component is degraded for this controller process.",
+        recovery_action="Inspect the bounded exception evidence and recover the component.",
+        promotion_reason=PromotionReason.DEGRADATION,
+        exception=exception,
+    )
+    service.promote(instance)
+
+
 async def run_api_server(*, config_path: str, host: str, port: int) -> None:
+    instance_id = f"controller_{uuid.uuid4().hex}"
+    context = CorrelationContext(
+        role=DiagnosticRole.CONTROLLER,
+        instance_id=instance_id,
+        component="controller",
+        build_identity=f"seasonalweather-{__version__}",
+    )
+    secondary_failures = SecondaryFailureLedger()
+    fatal = [FatalBoundary(None, context, secondary_failures)]
+    enable_faulthandler()
+    try:
+        await _run_api_server_impl(
+            config_path=config_path,
+            host=host,
+            port=port,
+            instance_id=instance_id,
+            fatal=fatal,
+        )
+    except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
+        raise
+    except BaseException as exc:
+        fatal[0].report(exc)
+        raise
+
+
+async def _run_api_server_impl(
+    *,
+    config_path: str,
+    host: str,
+    port: int,
+    instance_id: str,
+    fatal: list[FatalBoundary],
+) -> None:
     cfg = load_config(config_path)
     _setup_logging(cfg)
-    lifecycle = Lifecycle(cfg.lifecycle)
+    state_root = Path(cfg.database.path).parent if str(cfg.database.path).strip() else Path(cfg.paths.work_dir)
+    marker_store = ProcessMarkerStore(state_root)
+    marker_store.start(controller_marker(instance_id=instance_id))
+    marker_integration = _MarkerLifecycleIntegration(
+        marker_store,
+        fatal[0].secondary_failures,
+    )
+    lifecycle = Lifecycle(
+        cfg.lifecycle,
+        transition_callback=marker_integration.transition,
+    )
     supervisor = TaskSupervisor(lifecycle)
     orch = Orchestrator(
         cfg,
@@ -99,17 +284,19 @@ async def run_api_server(*, config_path: str, host: str, port: int) -> None:
     )
     control = OrchestratorControl(orch, config_path=config_path)
     db = bootstrap_database_from_config(cfg) if getattr(cfg.database, "enabled", True) else None
-    job_service = _build_job_service(cfg, lifecycle)
-    if cfg.api.auth.mode in {AuthMode.EXCHANGE, AuthMode.HYBRID} and db is None:
-        raise RuntimeError("Exchange authentication requires the controller SQLite database.")
-    auth_service = (
-        AuthenticationService(
-            AuthenticationRepository(db),
-            cfg.api.auth.exchange,
-        )
-        if db is not None and cfg.api.auth.mode in {AuthMode.EXCHANGE, AuthMode.HYBRID}
-        else None
+    diagnostic_service, context = _prepare_runtime_diagnostics(
+        database=db,
+        marker_store=marker_store,
+        supervisor=supervisor,
+        instance_id=instance_id,
     )
+    fatal[0] = FatalBoundary(
+        diagnostic_service,
+        context,
+        fatal[0].secondary_failures,
+    )
+    job_service = _build_job_service(cfg, lifecycle)
+    auth_service = _build_auth_service(cfg, db)
     command_store = CommandStore(
         database=db,
         lifecycle=lifecycle,
@@ -159,72 +346,185 @@ async def run_api_server(*, config_path: str, host: str, port: int) -> None:
         asyncio.get_running_loop(),
         request_shutdown,
     )
-    primary_failure: BaseException | None = None
+    remove_loop_exception_handler = _install_loop_exception_handler(
+        asyncio.get_running_loop(),
+        supervisor,
+    )
+    terminal_failure: BaseException | None = None
     try:
-        api_task = supervisor.create_task(
-            server.serve(),
-            name="seasonalweather-api",
-            required=True,
+        terminal_failure = await _run_controller_session(
+            server=server,
+            supervisor=supervisor,
+            lifecycle=lifecycle,
+            orch=orch,
+            database=db,
+            job_service=job_service,
+            cfg=cfg,
+            marker_integration=marker_integration,
+            secondary_failures=fatal[0].secondary_failures,
         )
-        supervisor.create_task(
-            orch.run(),
-            name="seasonalweather-orchestrator",
-            required=True,
-        )
-        await lifecycle.wait_for_shutdown()
-        server.should_exit = True
-        if lifecycle.state is LifecycleState.FAILED:
-            primary_failure = await supervisor.wait_for_fatal()
+    except BaseException as exc:
+        terminal_failure = terminal_failure or exc
 
-        async def shutdown() -> None:
-            if not lifecycle.force_requested and not api_task.done():
-                await _wait_task_or_force(
-                    lifecycle,
-                    api_task,
-                    timeout=cfg.lifecycle.active_request_seconds,
-                )
-            if not lifecycle.force_requested:
-                alert_idle = await _wait_alert_or_force(
-                    lifecycle,
-                    orch,
-                    timeout=cfg.lifecycle.tts_stop_seconds,
-                )
-                if alert_idle is False:
-                    log.warning("alert_audio_drain_timeout")
-            if not lifecycle.force_requested:
-                publication_idle = await _wait_publication_or_force(
-                    lifecycle,
-                    orch,
-                    timeout=cfg.lifecycle.publication_seconds,
-                )
-                if publication_idle is False:
-                    log.warning("publication_fence_timeout")
-            if lifecycle.state is LifecycleState.DRAINING:
-                lifecycle.mark_stopping()
-            await supervisor.stop()
-            await _close_resources(
+    handler_failures = _remove_controller_handlers(
+        remove_loop_exception_handler,
+        remove_signal_handlers,
+        fatal[0].secondary_failures,
+    )
+    if terminal_failure is not None:
+        raise terminal_failure
+    if handler_failures:
+        raise RuntimeError("controller handler cleanup failed")
+    marker_integration.finalize_clean()
+    lifecycle.mark_stopped()
+
+
+async def _run_controller_session(
+    *,
+    server: _ControllerOwnedUvicornServer,
+    supervisor: TaskSupervisor,
+    lifecycle: Lifecycle,
+    orch: Orchestrator,
+    database: Any,
+    job_service: DurableJobService | None,
+    cfg: Any,
+    marker_integration: _MarkerLifecycleIntegration,
+    secondary_failures: SecondaryFailureLedger,
+) -> BaseException | None:
+    api_task = supervisor.create_task(
+        server.serve(),
+        name="seasonalweather-api",
+        required=True,
+    )
+    supervisor.create_task(
+        orch.run(),
+        name="seasonalweather-orchestrator",
+        required=True,
+    )
+    await _wait_for_shutdown_or_marker_failure(lifecycle, marker_integration)
+    server.should_exit = True
+    primary_failure = await supervisor.wait_for_fatal() if lifecycle.state is LifecycleState.FAILED else None
+
+    cleanup_failures: tuple[tuple[str, BaseException], ...] = ()
+    shutdown_failure: BaseException | None = None
+    try:
+        cleanup_failures = await asyncio.wait_for(
+            _shutdown_controller(
+                lifecycle=lifecycle,
+                supervisor=supervisor,
+                api_task=api_task,
                 orch=orch,
-                database=db,
+                database=database,
                 job_service=job_service,
-                job_close_timeout_seconds=cfg.jobs.shutdown_reconciliation_seconds,
-                timeout_seconds=cfg.lifecycle.resource_close_seconds,
-                tts_timeout_seconds=cfg.lifecycle.tts_stop_seconds,
-            )
+                cfg=cfg,
+            ),
+            timeout=cfg.lifecycle.total_seconds,
+        )
+    except TimeoutError as exc:
+        log.error("controller_shutdown_deadline_exceeded")
+        secondary_failures.retain("controller_shutdown_deadline_exceeded", exc)
+        shutdown_failure = RuntimeError("controller shutdown deadline exceeded")
+    except BaseException as exc:
+        secondary_failures.retain("controller_shutdown_failed", exc)
+        shutdown_failure = exc
+    for event, failure in cleanup_failures:
+        secondary_failures.retain(event, failure)
+    return _terminal_controller_failure(
+        primary_failure=primary_failure,
+        shutdown_failure=shutdown_failure,
+        marker_failure=marker_integration.terminal_failure(),
+        cleanup_failed=bool(cleanup_failures),
+    )
 
-        try:
-            await asyncio.wait_for(
-                shutdown(),
-                timeout=cfg.lifecycle.total_seconds,
-            )
-        except TimeoutError:
-            log.error("controller_shutdown_deadline_exceeded")
 
-        if primary_failure is None:
-            lifecycle.mark_stopped()
-        else:
-            raise primary_failure
+async def _wait_for_shutdown_or_marker_failure(
+    lifecycle: Lifecycle,
+    marker_integration: _MarkerLifecycleIntegration,
+) -> None:
+    shutdown_wait = asyncio.create_task(
+        lifecycle.wait_for_shutdown(),
+        name="controller-shutdown-wait",
+    )
+    marker_wait = asyncio.create_task(
+        marker_integration.wait_for_failure(),
+        name="process-marker-failure-wait",
+    )
+    try:
+        done, _ = await asyncio.wait(
+            {shutdown_wait, marker_wait},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if marker_wait in done and not shutdown_wait.done():
+            lifecycle.request_shutdown()
+        await shutdown_wait
     finally:
-        remove_signal_handlers()
+        for task in (shutdown_wait, marker_wait):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(shutdown_wait, marker_wait, return_exceptions=True)
+
+
+def _terminal_controller_failure(
+    *,
+    primary_failure: BaseException | None,
+    shutdown_failure: BaseException | None,
+    marker_failure: BaseException | None,
+    cleanup_failed: bool,
+) -> BaseException | None:
+    if primary_failure is not None:
+        return primary_failure
+    if shutdown_failure is not None:
+        return shutdown_failure
+    if marker_failure is not None:
+        return marker_failure
+    if cleanup_failed:
+        return RuntimeError("controller shutdown cleanup failed")
+    return None
+
+
+async def _shutdown_controller(
+    *,
+    lifecycle: Lifecycle,
+    supervisor: TaskSupervisor,
+    api_task: asyncio.Task[object],
+    orch: Orchestrator,
+    database: Any,
+    job_service: DurableJobService | None,
+    cfg: Any,
+) -> tuple[tuple[str, BaseException], ...]:
+    if not lifecycle.force_requested and not api_task.done():
+        await _wait_task_or_force(
+            lifecycle,
+            api_task,
+            timeout=cfg.lifecycle.active_request_seconds,
+        )
+    if not lifecycle.force_requested:
+        alert_idle = await _wait_alert_or_force(
+            lifecycle,
+            orch,
+            timeout=cfg.lifecycle.tts_stop_seconds,
+        )
+        if alert_idle is False:
+            log.warning("alert_audio_drain_timeout")
+    if not lifecycle.force_requested:
+        publication_idle = await _wait_publication_or_force(
+            lifecycle,
+            orch,
+            timeout=cfg.lifecycle.publication_seconds,
+        )
+        if publication_idle is False:
+            log.warning("publication_fence_timeout")
+    if lifecycle.state is LifecycleState.DRAINING:
+        lifecycle.mark_stopping()
+    await supervisor.stop()
+    return await _close_resources(
+        orch=orch,
+        database=database,
+        job_service=job_service,
+        job_close_timeout_seconds=cfg.jobs.shutdown_reconciliation_seconds,
+        timeout_seconds=cfg.lifecycle.resource_close_seconds,
+        tts_timeout_seconds=cfg.lifecycle.tts_stop_seconds,
+    )
 
 
 async def _wait_task_or_force(
@@ -314,6 +614,24 @@ async def _wait_alert_or_force(
         )
 
 
+def _remove_controller_handlers(
+    remove_loop_exception_handler: Callable[[], None],
+    remove_signal_handlers: Callable[[], None],
+    secondary_failures: SecondaryFailureLedger,
+) -> tuple[BaseException, ...]:
+    failures: list[BaseException] = []
+    for event, remove in (
+        ("loop_exception_handler_removal_failed", remove_loop_exception_handler),
+        ("signal_handler_removal_failed", remove_signal_handlers),
+    ):
+        try:
+            remove()
+        except BaseException as exc:
+            secondary_failures.retain(event, exc)
+            failures.append(exc)
+    return tuple(failures)
+
+
 async def _close_resources(
     *,
     orch: Orchestrator,
@@ -322,35 +640,41 @@ async def _close_resources(
     job_close_timeout_seconds: float,
     timeout_seconds: float,
     tts_timeout_seconds: float,
-) -> None:
+) -> tuple[tuple[str, BaseException], ...]:
+    failures: list[tuple[str, BaseException]] = []
     try:
         await asyncio.wait_for(
             orch.api.aclose(),
             timeout=timeout_seconds,
         )
-    except Exception:
+    except Exception as exc:
         log.warning("controller_resource_close_failed resource=nws_api")
+        failures.append(("nws_api_close_failed", exc))
     if job_service is not None:
         try:
             await asyncio.wait_for(
                 asyncio.to_thread(job_service.close),
                 timeout=job_close_timeout_seconds,
             )
-        except Exception:
+        except Exception as exc:
             log.warning("controller_resource_close_failed resource=job_repository")
+            failures.append(("job_repository_close_failed", exc))
     if database is not None:
         try:
             await asyncio.wait_for(
                 asyncio.to_thread(database.checkpoint),
                 timeout=timeout_seconds,
             )
-        except Exception:
+        except Exception as exc:
             log.warning("controller_resource_close_failed resource=sqlite")
+            failures.append(("sqlite_checkpoint_failed", exc))
     try:
         loop: Any = asyncio.get_running_loop()
         await loop.shutdown_default_executor(timeout=tts_timeout_seconds)
-    except Exception:
+    except Exception as exc:
         log.warning("controller_resource_close_failed resource=executor")
+        failures.append(("executor_shutdown_failed", exc))
+    return tuple(failures)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -360,13 +684,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--port", type=int, default=9080)
     args = ap.parse_args(argv)
 
-    asyncio.run(
-        run_api_server(
-            config_path=args.config,
-            host=args.host,
-            port=args.port,
+    try:
+        asyncio.run(
+            run_api_server(
+                config_path=args.config,
+                host=args.host,
+                port=args.port,
+            )
         )
-    )
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except BaseException:
+        return 1
     return 0
 
 

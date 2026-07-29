@@ -131,8 +131,9 @@ failure, and leaves the entrypoint nonzero. Fatal termination never transitions
 through or emits the clean stopped outcome.
 
 Lifecycle logs use stable event names and bounded state/task/resource fields.
-Permanent diagnostic codes, occurrence persistence, emergency diagnostic
-rendering, and previous-run reconciliation remain deferred.
+Runtime occurrences, emergency diagnostic rendering, fatal propagation, and
+previous-run reconciliation are documented in
+[`runtime-diagnostics.md`](runtime-diagnostics.md).
 
 ## Configuration
 

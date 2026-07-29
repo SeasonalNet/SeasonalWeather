@@ -53,6 +53,9 @@ class RequiredTaskStoppedError(RuntimeError):
     """A required long-running task returned without a shutdown request."""
 
 
+TransitionCallback = Callable[[LifecycleState], object]
+
+
 @dataclass(frozen=True)
 class LifecycleTimeouts:
     total_seconds: float = 30.0
@@ -97,9 +100,15 @@ class Lifecycle:
     the controller can skip remaining grace waits and proceed to cancellation.
     """
 
-    def __init__(self, timeouts: LifecycleTimeouts | None = None) -> None:
+    def __init__(
+        self,
+        timeouts: LifecycleTimeouts | None = None,
+        *,
+        transition_callback: TransitionCallback | None = None,
+    ) -> None:
         self.timeouts = timeouts or LifecycleTimeouts()
         self.timeouts.validate()
+        self.transition_callback = transition_callback
         self._state = LifecycleState.STARTING
         self._shutdown_requested = asyncio.Event()
         self._force_requested = asyncio.Event()
@@ -143,6 +152,8 @@ class Lifecycle:
         if target not in _ALLOWED_TRANSITIONS[self._state]:
             raise LifecycleTransitionError(f"invalid lifecycle transition {self._state.value} -> {target.value}")
         self._state = target
+        if self.transition_callback is not None:
+            self.transition_callback(target)
         if target is LifecycleState.RUNNING:
             log.info("lifecycle_event=service_ready state=running")
         elif target is LifecycleState.DRAINING:
@@ -276,6 +287,7 @@ class PublicationFence:
 
 
 StopCallback = Callable[[], object | Awaitable[object]]
+FailureCallback = Callable[[str, BaseException], object]
 
 
 @dataclass(frozen=True)
@@ -290,8 +302,14 @@ class SupervisedTask:
 class TaskSupervisor:
     """Registry and bounded shutdown for controller-owned long-running tasks."""
 
-    def __init__(self, lifecycle: Lifecycle) -> None:
+    def __init__(
+        self,
+        lifecycle: Lifecycle,
+        *,
+        optional_failure: FailureCallback | None = None,
+    ) -> None:
         self.lifecycle = lifecycle
+        self.optional_failure = optional_failure
         self._tasks: dict[str, SupervisedTask] = {}
         self._fatal: asyncio.Future[BaseException] | None = None
         self._optional_failures: set[str] = set()
@@ -339,6 +357,12 @@ class TaskSupervisor:
         if self._fatal is None:
             self._fatal = asyncio.get_running_loop().create_future()
         return await asyncio.shield(self._fatal)
+
+    def report_background_failure(self, exception: BaseException) -> None:
+        """Promote an otherwise-discarded event-loop failure to required fatal state."""
+        if self.lifecycle.is_shutting_down:
+            return
+        self._record_required_failure(exception)
 
     async def stop(self) -> None:
         registrations = self.tasks
@@ -404,7 +428,15 @@ class TaskSupervisor:
         if not registration.required:
             self._optional_failures.add(name)
             log.warning("optional_supervised_task_failed task=%s", name)
+            if self.optional_failure is not None:
+                try:
+                    self.optional_failure(name, exception)
+                except Exception:
+                    log.warning("optional_supervised_task_diagnostic_failed task=%s", name)
             return
+        self._record_required_failure(exception)
+
+    def _record_required_failure(self, exception: BaseException) -> None:
         if self._fatal is None:
             self._fatal = asyncio.get_running_loop().create_future()
         if not self._fatal.done():

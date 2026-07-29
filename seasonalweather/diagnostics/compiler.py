@@ -10,7 +10,7 @@ import tempfile
 from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 
-from .bindings import RULE_BINDINGS
+from .bindings import RULE_BINDINGS, RUNTIME_CODES, RuleCodeBinding
 from .codes import ConditionClass, DiagnosticCode, DiagnosticCodeError
 from .models import (
     DIAGNOSTIC_CATALOG_VERSION,
@@ -425,17 +425,35 @@ def _validate_markdown_links(text: str, explanation_path: Path) -> None:
 
 def _validate_bindings(definitions: tuple[DiagnosticDefinition, ...]) -> None:
     by_code = {str(item.code): item for item in definitions}
+    _validate_configuration_bindings(by_code)
+    _validate_runtime_bindings(by_code)
+
+
+def _validate_configuration_bindings(by_code: dict[str, DiagnosticDefinition]) -> None:
     binding_codes = {binding.code for binding in RULE_BINDINGS}
-    if binding_codes != set(by_code):
-        raise CatalogCompileError("active catalog codes and P1-11 rule bindings differ")
+    swcfg_codes = {code for code in by_code if code.startswith("SWCFG")}
+    if binding_codes != swcfg_codes:
+        raise CatalogCompileError("active SWCFG codes and P1-11 rule bindings differ")
     if len({binding.rule_id for binding in RULE_BINDINGS}) != len(RULE_BINDINGS):
         raise CatalogCompileError("duplicate P1-11 rule binding")
     for binding in RULE_BINDINGS:
-        definition = by_code.get(binding.code)
-        if definition is None:
-            raise CatalogCompileError(f"binding has no active catalog definition: {binding.rule_id}")
-        if definition.namespace != "SWCFG" or binding.phase not in definition.supported_phases:
-            raise CatalogCompileError(f"binding contradicts catalog definition: {binding.rule_id}")
+        _validate_configuration_binding(binding, by_code.get(binding.code))
+
+
+def _validate_configuration_binding(
+    binding: RuleCodeBinding,
+    definition: DiagnosticDefinition | None,
+) -> None:
+    if definition is None:
+        raise CatalogCompileError(f"binding has no active catalog definition: {binding.rule_id}")
+    if definition.namespace != "SWCFG" or binding.phase not in definition.supported_phases:
+        raise CatalogCompileError(f"binding contradicts catalog definition: {binding.rule_id}")
+
+
+def _validate_runtime_bindings(by_code: dict[str, DiagnosticDefinition]) -> None:
+    runtime_codes = set(RUNTIME_CODES.values())
+    if len(runtime_codes) != len(RUNTIME_CODES) or not runtime_codes.issubset(by_code):
+        raise CatalogCompileError("runtime code bindings are incomplete or duplicated")
 
 
 def catalog_dict(catalog: DiagnosticCatalog) -> dict[str, object]:

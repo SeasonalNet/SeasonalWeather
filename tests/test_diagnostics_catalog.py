@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from seasonalweather.diagnostics.bindings import RULE_BINDINGS, binding_for_rule
+from seasonalweather.diagnostics.bindings import RULE_BINDINGS, RUNTIME_CODES, binding_for_rule
 from seasonalweather.diagnostics.codes import (
     ConditionClass,
     DiagnosticCode,
@@ -134,7 +134,7 @@ def test_canonical_catalog_is_immutable_complete_and_deterministic() -> None:
 
     assert first == second == load_catalog()
     assert first_bytes == second_bytes == packaged_catalog_bytes()
-    assert len(first.definitions) == len(RULE_BINDINGS) == 28
+    assert len(first.definitions) == len(RULE_BINDINGS) + len(RUNTIME_CODES) == 33
     assert {definition.introduction_version for definition in first.definitions} == {"0.18.0"}
     assert not first.tombstones
     assert first_bytes.endswith(b"\n")
@@ -370,7 +370,7 @@ def test_package_data_metadata_covers_compiled_source_and_explanations() -> None
     assert "catalog/catalog.json" in declared
     assert "catalog/source.json" in declared
     assert "catalog/explanations/*.md" in declared
-    assert len(tuple((CATALOG_ROOT / "explanations").glob("*.md"))) == 28
+    assert len(tuple((CATALOG_ROOT / "explanations").glob("*.md"))) == 33
 
 
 def test_corrupt_compiled_catalog_and_invalid_resource_paths_fail_bounded() -> None:
@@ -420,7 +420,10 @@ def test_every_p1_11_rule_has_one_active_explainable_mapping() -> None:
         assert binding.phase in definition.supported_phases
         assert load_explanation(definition.explanation_path)
         assert binding_for_rule(binding.rule_id) is binding
-    assert {str(item.code) for item in catalog.definitions} == {item.code for item in RULE_BINDINGS}
+    assert {str(item.code) for item in catalog.definitions if item.namespace == "SWCFG"} == {
+        item.code for item in RULE_BINDINGS
+    }
+    assert set(RUNTIME_CODES.values()).issubset({str(item.code) for item in catalog.definitions})
 
 
 def test_public_representations_are_pure_deterministic_and_api_ready() -> None:

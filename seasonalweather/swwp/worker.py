@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from collections import OrderedDict
 from collections.abc import Callable
 from typing import Any
 
@@ -19,6 +20,7 @@ from .messages import (
     CapabilityRejectionCategory,
     CapabilityReport,
     CapabilityUpdate,
+    DiagnosticTransition,
     Drain,
     Drained,
     Envelope,
@@ -38,6 +40,8 @@ from .messages import (
     Registered,
     RegistrationRejected,
     ResultCommitted,
+    WorkerDiagnostic,
+    WorkerDiagnosticAck,
 )
 from .session import SessionMachine
 
@@ -63,6 +67,9 @@ class WorkerSession(SessionMachine):
         self.completions: dict[tuple[str, str, str, int], JobResult] = {}
         self.cancelled: set[tuple[str, str, str, int]] = set()
         self.capability_manifest = registration.capability_manifest
+        self.diagnostic_requests: OrderedDict[str, WorkerDiagnostic] = OrderedDict()
+        self.diagnostic_acknowledgments: OrderedDict[str, WorkerDiagnosticAck] = OrderedDict()
+        self.diagnostic_occurrences: dict[str, str] = {}
 
     def _out(self, payload: object) -> Envelope:
         return self.envelope(
@@ -116,9 +123,54 @@ class WorkerSession(SessionMachine):
             ReconcileResult: self._reconciled,
             ProtocolErrorPayload: self._protocol_error,
             CapabilityProbe: self._capability_probe,
+            WorkerDiagnosticAck: self._diagnostic_ack,
         }
         handler = handlers.get(type(payload))
         return handler(payload) if handler is not None else ()
+
+    @staticmethod
+    def _no_response(_: object) -> tuple[Envelope, ...]:
+        return ()
+
+    def diagnostic(self, payload: WorkerDiagnostic) -> Envelope:
+        if self.state not in {WorkerState.ACTIVE, WorkerState.DRAINING}:
+            raise ValueError("worker is not active")
+        self.diagnostic_requests[payload.diagnostic_id] = payload
+        self.diagnostic_requests.move_to_end(payload.diagnostic_id)
+        self._trim_diagnostic_state()
+        return self._out(payload)
+
+    def _diagnostic_ack(self, payload: WorkerDiagnosticAck) -> tuple[Envelope, ...]:
+        self.diagnostic_acknowledgments[payload.diagnostic_id] = payload
+        self.diagnostic_acknowledgments.move_to_end(payload.diagnostic_id)
+        request = self.diagnostic_requests.get(payload.diagnostic_id)
+        if payload.accepted and payload.controller_occurrence_id is not None:
+            if request is not None and request.transition is DiagnosticTransition.RESOLVED:
+                self.diagnostic_occurrences.pop(payload.diagnostic_id, None)
+            else:
+                self.diagnostic_occurrences[payload.diagnostic_id] = payload.controller_occurrence_id
+        self._trim_diagnostic_state()
+        return ()
+
+    def _trim_diagnostic_state(self) -> None:
+        maximum = self.limits.max_retained_errors * 8
+        while len(self.diagnostic_acknowledgments) > maximum:
+            diagnostic_id, _ = self.diagnostic_acknowledgments.popitem(last=False)
+            if diagnostic_id not in self.diagnostic_occurrences:
+                self.diagnostic_requests.pop(diagnostic_id, None)
+        while len(self.diagnostic_requests) > maximum:
+            removable = next(
+                (
+                    diagnostic_id
+                    for diagnostic_id in self.diagnostic_requests
+                    if diagnostic_id not in self.diagnostic_occurrences
+                ),
+                None,
+            )
+            if removable is None:
+                raise ValueError("active diagnostic relationship retention is full")
+            self.diagnostic_requests.pop(removable, None)
+            self.diagnostic_acknowledgments.pop(removable, None)
 
     def _registration_response(self, payload: object) -> tuple[Envelope, ...]:
         if isinstance(payload, RegistrationRejected):

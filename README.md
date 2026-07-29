@@ -93,6 +93,9 @@ Freeze products are supported natively. `FZ.W` maps to SAME `FZW` (**Freeze Warn
   `seasonalweather diagnostics list|explain` commands are documented in
   [`docs/diagnostic-catalog.md`](docs/diagnostic-catalog.md). The catalog is
   packaged software content, not mutable runtime occurrence state.
+- Controller-owned runtime diagnostic occurrences, simulated SWWP diagnostic
+  envelopes, fatal stderr fallback, and prior-shutdown reconciliation are
+  documented in [`docs/runtime-diagnostics.md`](docs/runtime-diagnostics.md).
 - Public handled-alerts feed API (`/v1/handled-alerts`) for external UI consumption, backed by SQLite.
   Persisted station-feed rows remain authoritative across restarts; startup does not synthesize degraded public records from AlertTracker state.
 

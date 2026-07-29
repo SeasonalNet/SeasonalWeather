@@ -46,6 +46,16 @@ RULE_BINDINGS = (
 
 _BINDING_BY_RULE = MappingProxyType({binding.rule_id: binding for binding in RULE_BINDINGS})
 
+RUNTIME_CODES = MappingProxyType(
+    {
+        "optional_task_degraded": "SWRUN4001",
+        "fatal_controller": "SWRUN5001",
+        "prior_incomplete_shutdown": "SWRUN8001",
+        "worker_diagnostic_rejected": "SWWP1001",
+        "worker_diagnostic_incompatible": "SWWP2001",
+    }
+)
+
 
 def binding_for_rule(rule_id: str) -> RuleCodeBinding:
     try:
