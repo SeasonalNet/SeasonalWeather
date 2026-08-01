@@ -45,9 +45,12 @@ from seasonalweather.diagnostics.representations import (
     tombstone_representation,
     unknown_representation,
 )
+from seasonalweather.validation.rules import RULE_BY_ID
 
 ROOT = Path(__file__).resolve().parents[1]
-CODE_PATTERN = re.compile(r'"((?:source|yaml|schema|compiler)\.[a-z_.]+)"')
+CODE_PATTERN = re.compile(
+    r'"((?:source|yaml|schema|compiler|semantic|compatibility|preflight|advisory|admission|validation)\.[a-z_.]+)"'
+)
 
 
 def _copy_catalog(tmp_path: Path) -> Path:
@@ -134,7 +137,7 @@ def test_canonical_catalog_is_immutable_complete_and_deterministic() -> None:
 
     assert first == second == load_catalog()
     assert first_bytes == second_bytes == packaged_catalog_bytes()
-    assert len(first.definitions) == len(RULE_BINDINGS) + len(RUNTIME_CODES) == 33
+    assert len(first.definitions) == len(RULE_BINDINGS) + len(RUNTIME_CODES) == 44
     assert {definition.introduction_version for definition in first.definitions} == {"0.18.0"}
     assert not first.tombstones
     assert first_bytes.endswith(b"\n")
@@ -370,7 +373,7 @@ def test_package_data_metadata_covers_compiled_source_and_explanations() -> None
     assert "catalog/catalog.json" in declared
     assert "catalog/source.json" in declared
     assert "catalog/explanations/*.md" in declared
-    assert len(tuple((CATALOG_ROOT / "explanations").glob("*.md"))) == 33
+    assert len(tuple((CATALOG_ROOT / "explanations").glob("*.md"))) == 44
 
 
 def test_corrupt_compiled_catalog_and_invalid_resource_paths_fail_bounded() -> None:
@@ -402,11 +405,13 @@ def test_export_is_clean_deterministic_and_matches_package(tmp_path: Path) -> No
         export_catalog(tmp_path / "safe/../unsafe")
 
 
-def test_every_p1_11_rule_has_one_active_explainable_mapping() -> None:
+def test_every_configuration_validation_rule_has_one_active_explainable_mapping() -> None:
     source = "\n".join(
-        path.read_text(encoding="utf-8") for path in (ROOT / "seasonalweather/configuration").glob("*.py")
+        path.read_text(encoding="utf-8")
+        for package in ("configuration", "validation")
+        for path in (ROOT / f"seasonalweather/{package}").glob("*.py")
     )
-    emitted = set(CODE_PATTERN.findall(source))
+    emitted = set(CODE_PATTERN.findall(source)) - set(RULE_BY_ID)
     mapped = {binding.rule_id for binding in RULE_BINDINGS}
     catalog = load_catalog()
 

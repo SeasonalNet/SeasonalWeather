@@ -20,11 +20,14 @@ COMPILER_REPORT_VERSION = 2
 class SourceSummary:
     source_id: str
     sha256: str | None
+    byte_length: int | None = None
 
     def to_dict(self) -> dict[str, object]:
         result: dict[str, object] = {"source": self.source_id}
         if self.sha256:
             result["sha256"] = self.sha256
+        if self.byte_length is not None:
+            result["byte_length"] = self.byte_length
         return result
 
 

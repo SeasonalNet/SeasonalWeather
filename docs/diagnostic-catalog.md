@@ -10,7 +10,7 @@ evidence, and active/resolved state are not catalog content.
 
 Catalog version `1` is the first externally contractual code allocation.
 Diagnostic schema version `1` identifies the public catalog representation.
-Its 28 initial definitions record introduction version `0.18.0`, the intended
+Its definitions record introduction version `0.18.0`, the intended
 first release containing the catalog; released version `0.17.0` did not
 contain it.
 They evolve independently:
@@ -181,11 +181,33 @@ later application-service delegation, but P1-12 adds no HTTP route.
 | `source.limit.scalar` | `SWCFG7005` |
 | `compiler.issue_limit` | `SWCFG7006` |
 
-The compiler preserves phases, paths, primary/related spans, origins, notes,
+### P1-14 staged-validation diagnostic bindings
+
+These diagnostic binding identifiers are separate from stable validator-rule
+identities. Validator stamps record the complete executed validator-rule set;
+issues carry both identities and the stable code.
+
+| Diagnostic binding | Stable code |
+|---|---|
+| `advisory.configuration` | `SWCFG0001` |
+| `admission.invalid` | `SWCFG1021` |
+| `semantic.invariant` | `SWCFG2002` |
+| `compatibility.advisory` | `SWCFG0003` |
+| `compatibility.unsupported` | `SWCFG2003` |
+| `compatibility.degraded` | `SWCFG4002` |
+| `validation.report_rejected` | `SWCFG2004` |
+| `preflight.dependency_unavailable` | `SWCFG3002` |
+| `preflight.degraded` | `SWCFG4001` |
+| `preflight.timeout` | `SWCFG7007` |
+| `advisory.deprecated` | `SWCFG0002` |
+
+The compiler and validator preserve phases, paths, primary/related spans, origins, notes,
 help, and redaction. Human output uses the stable code and explanation footer;
 machine output includes both versions. No semantic/preflight condition was
-added.
+added to the P1-11 parse/schema compiler itself.
 
-Runtime occurrences/fatal boundaries remain P1-13; semantic,
-compatibility/preflight conditions P1-14; reload P1-15; HTTP catalog and
-configuration routes P1-22; build stamps, images, and host packaging P2.
+Runtime occurrences/fatal boundaries remain P1-13. P1-14 adds canonical
+semantic, compatibility, advisory, preflight, report-verification, fix, and
+reusable-admission conditions described in
+[`configuration-validation.md`](configuration-validation.md). Reload remains
+P1-15; HTTP catalog/configuration routes P1-22; image and host packaging P2.

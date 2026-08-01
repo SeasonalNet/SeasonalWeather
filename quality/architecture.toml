@@ -144,6 +144,22 @@ domain_forbidden_imports = [
   "pymysql",
 ]
 
+validation_roots = ["seasonalweather/validation"]
+validation_forbidden_imports = [
+  "fastapi",
+  "starlette",
+  "uvicorn",
+  "seasonalweather.api",
+  "seasonalweather.broadcast",
+  "seasonalweather.config",
+  "seasonalweather.control",
+  "seasonalweather.database",
+  "seasonalweather.job_store",
+  "seasonalweather.liquidsoap_telnet",
+  "seasonalweather.runtime_diagnostics",
+  "seasonalweather.tts",
+]
+
 contract_roots = [
   "seasonalweather/commands/contracts.py",
   "seasonalweather/jobs",

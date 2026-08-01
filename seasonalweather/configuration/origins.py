@@ -25,6 +25,9 @@ class ValueOrigin:
     environment_variable: str | None = None
     declaration_id: str | None = None
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "related", tuple(self.related))
+
     def to_dict(self) -> dict[str, object]:
         result: dict[str, object] = {
             "path": self.path.to_pointer(),

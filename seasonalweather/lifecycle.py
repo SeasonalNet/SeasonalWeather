@@ -67,8 +67,9 @@ class LifecycleTimeouts:
     resource_close_seconds: float = 5.0
 
     def validate(self) -> None:
-        values = (
-            self.total_seconds,
+        from .configuration.semantic_rules import lifecycle_timeout_error
+
+        stage_seconds = (
             self.active_request_seconds,
             self.publication_seconds,
             self.source_stop_seconds,
@@ -76,11 +77,11 @@ class LifecycleTimeouts:
             self.task_cancel_seconds,
             self.resource_close_seconds,
         )
-        if any(value <= 0 for value in values):
-            raise ValueError("lifecycle timeout values must be positive")
-        largest_stage = max(values[1:])
-        if self.total_seconds < largest_stage:
-            raise ValueError("lifecycle.total_seconds must cover every stage timeout")
+        if error := lifecycle_timeout_error(
+            total_seconds=self.total_seconds,
+            stage_seconds=stage_seconds,
+        ):
+            raise ValueError(error)
 
 
 _ALLOWED_TRANSITIONS: dict[LifecycleState, frozenset[LifecycleState]] = {

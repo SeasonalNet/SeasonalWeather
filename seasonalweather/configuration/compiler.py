@@ -66,7 +66,7 @@ def compile_path(
             schema_valid=False,
             explicit_config_schema=None,
             resolved_config_schema=None,
-            sources=(SourceSummary(exc.source_id, None),),
+            sources=(SourceSummary(exc.source_id, exc.sha256, exc.byte_length),),
             issues=(issue,),
         )
         return CompiledConfiguration(report=report)
@@ -80,7 +80,7 @@ def compile_source(
     limits: CompilerLimits = DEFAULT_LIMITS,
 ) -> CompiledConfiguration:
     parse = parse_document(source, limits=limits)
-    summary = (SourceSummary(source.source_id, source.digest),)
+    summary = (SourceSummary(source.source_id, source.digest, source.byte_length),)
     if parse.parsed is None:
         report = CompileReport(
             parse_valid=False,

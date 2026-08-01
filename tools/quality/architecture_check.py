@@ -212,6 +212,30 @@ def scan(root: Path, config: dict[str, Any], exceptions: list[dict[str, Any]] | 
                         Finding(relative, line, "SWARCH004", f"domain/validation imports deployment concern {imported}")
                     )
 
+        if _under(relative, config.get("validation_roots", [])):
+            for imported, line in imports:
+                if _matches_prefix(imported, config.get("validation_forbidden_imports", [])):
+                    findings.append(
+                        Finding(
+                            relative,
+                            line,
+                            "SWARCH027",
+                            f"validation imports runtime or mutation authority {imported}",
+                        )
+                    )
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call):
+                    mutation = _filesystem_mutation(node, path_variables)
+                    if mutation:
+                        findings.append(
+                            Finding(
+                                relative,
+                                node.lineno,
+                                "SWARCH028",
+                                f"validation performs dependency mutation via {mutation}",
+                            )
+                        )
+
         if _under(relative, config.get("contract_roots", [])):
             for imported, line in imports:
                 if _matches_prefix(imported, config.get("contract_forbidden_imports", [])):

@@ -14,7 +14,15 @@ class RuleCodeBinding:
 
 
 RULE_BINDINGS = (
+    RuleCodeBinding("advisory.configuration", "SWCFG0001", "advisory"),
+    RuleCodeBinding("admission.invalid", "SWCFG1021", "semantic"),
     RuleCodeBinding("compiler.issue_limit", "SWCFG7006", "schema"),
+    RuleCodeBinding("compatibility.advisory", "SWCFG0003", "compatibility"),
+    RuleCodeBinding("compatibility.unsupported", "SWCFG2003", "compatibility"),
+    RuleCodeBinding("compatibility.degraded", "SWCFG4002", "compatibility"),
+    RuleCodeBinding("preflight.degraded", "SWCFG4001", "preflight"),
+    RuleCodeBinding("preflight.dependency_unavailable", "SWCFG3002", "preflight"),
+    RuleCodeBinding("preflight.timeout", "SWCFG7007", "preflight"),
     RuleCodeBinding("schema.config_schema_type", "SWCFG1013", "schema"),
     RuleCodeBinding("schema.config_schema_unsupported", "SWCFG2001", "schema"),
     RuleCodeBinding("schema.enum", "SWCFG1016", "schema"),
@@ -31,6 +39,8 @@ RULE_BINDINGS = (
     RuleCodeBinding("source.limit.nodes", "SWCFG7003", "parse"),
     RuleCodeBinding("source.limit.scalar", "SWCFG7005", "parse"),
     RuleCodeBinding("source.read", "SWCFG3001", "parse"),
+    RuleCodeBinding("semantic.invariant", "SWCFG2002", "semantic"),
+    RuleCodeBinding("validation.report_rejected", "SWCFG2004", "compatibility"),
     RuleCodeBinding("yaml.alias", "SWCFG1008", "parse"),
     RuleCodeBinding("yaml.anchor", "SWCFG1007", "parse"),
     RuleCodeBinding("yaml.duplicate_key", "SWCFG1012", "parse"),
@@ -42,6 +52,7 @@ RULE_BINDINGS = (
     RuleCodeBinding("yaml.scalar_construction", "SWCFG1011", "parse"),
     RuleCodeBinding("yaml.syntax", "SWCFG1003", "parse"),
     RuleCodeBinding("yaml.tag", "SWCFG1005", "parse"),
+    RuleCodeBinding("advisory.deprecated", "SWCFG0002", "deprecation"),
 )
 
 _BINDING_BY_RULE = MappingProxyType({binding.rule_id: binding for binding in RULE_BINDINGS})

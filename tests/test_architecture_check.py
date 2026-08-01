@@ -35,6 +35,8 @@ def test_invalid_architecture_fixture_proves_rules_fail_closed():
         "SWARCH024",
         "SWARCH025",
         "SWARCH026",
+        "SWARCH027",
+        "SWARCH028",
     }
     assert any("filesystem mutation" in finding.message for finding in findings)
 
@@ -122,3 +124,14 @@ def test_control_and_api_routes_have_no_mutable_occurrence_authority():
         assert "runtime_diagnostics" not in source
         assert "diagnostic_occurrences" not in source
         assert "OccurrenceRepository" not in source
+
+
+def test_control_and_api_have_no_staged_validation_or_preflight_authority():
+    control = (ROOT / "seasonalweather/control.py").read_text(encoding="utf-8")
+    api = "\n".join(path.read_text(encoding="utf-8") for path in (ROOT / "seasonalweather/api").glob("*.py"))
+
+    for source in (control, api):
+        assert "validate_compiled(" not in source
+        assert "run_preflight(" not in source
+        assert "ValidationReport(" not in source
+        assert "verify_report(" not in source

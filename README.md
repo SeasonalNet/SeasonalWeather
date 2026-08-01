@@ -93,6 +93,10 @@ Freeze products are supported natively. `FZ.W` maps to SAME `FZW` (**Freeze Warn
   `seasonalweather diagnostics list|explain` commands are documented in
   [`docs/diagnostic-catalog.md`](docs/diagnostic-catalog.md). The catalog is
   packaged software content, not mutable runtime occurrence state.
+- Deterministic staged configuration semantic/compatibility/advisory
+  validation, opt-in bounded environmental preflight, independently bound
+  candidate/report verification, and reusable admission diagnostics are documented in
+  [`docs/configuration-validation.md`](docs/configuration-validation.md).
 - Controller-owned runtime diagnostic occurrences, simulated SWWP diagnostic
   envelopes, fatal stderr fallback, and prior-shutdown reconciliation are
   documented in [`docs/runtime-diagnostics.md`](docs/runtime-diagnostics.md).
@@ -147,9 +151,11 @@ This is the single source of truth for all runtime behaviour. The file is well-c
 The repository example declares `config_schema: 1`. Configuration is parsed
 with duplicate-key detection and strict structural types before startup.
 Legacy files without the field resolve explicitly to schema 1. Use
-`seasonalweather config lint --config PATH` for offline parse/schema validation;
-see [`docs/configuration-compiler.md`](docs/configuration-compiler.md) for YAML
-rules, source locations, provenance, redaction, reports, and stage boundaries.
+`seasonalweather config lint --config PATH` for deterministic offline staged
+validation, and add `--preflight` only for explicit read-only environmental
+checks. See [`docs/configuration-compiler.md`](docs/configuration-compiler.md)
+for YAML rules and [`docs/configuration-validation.md`](docs/configuration-validation.md)
+for semantic, compatibility, advisory, stamp, policy, and probe contracts.
 
 | Section | What it controls |
 |---|---|

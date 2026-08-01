@@ -53,7 +53,7 @@ review_date = "2026-10-23"
 removal_condition = "Remediate or replace each finding with a narrow governed exception."
 
 [checks.complexity]
-maximum = 181
+maximum = 180
 owner = "SeasonalWeather maintainers"
 rationale = "Initial v0.17.0 functions rated C or worse by Radon."
 scope = "seasonalweather/"

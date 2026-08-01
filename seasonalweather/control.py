@@ -36,6 +36,7 @@ from .same.locations import (
     normalize_same_location,
     same_location_matches_service_area,
 )
+from .validation.admission import validate_wav_upload
 
 
 class ControlError(Exception):
@@ -518,22 +519,22 @@ class OrchestratorControl:
         return {"ok": True, "event_code": event_code, "actor": actor}
 
     async def stage_wav_upload(self, *, filename: str, content_type: str, data: bytes, actor: str) -> dict[str, Any]:
-        if not data:
-            raise ControlError("empty_upload", "Uploaded audio file was empty.")
-        if len(data) > self._asset_max_size_bytes():
+        rejection = validate_wav_upload(
+            filename=filename,
+            content_type=content_type,
+            size_bytes=len(data),
+            maximum_bytes=self._asset_max_size_bytes(),
+        )
+        if rejection is not None:
+            details = {"max_bytes": rejection.maximum_bytes} if rejection.maximum_bytes is not None else None
             raise ControlError(
-                "upload_too_large",
-                "Uploaded audio exceeds the configured size limit.",
-                status_code=413,
-                details={"max_bytes": self._asset_max_size_bytes()},
+                rejection.reason_code,
+                rejection.message,
+                status_code=rejection.status_code,
+                details=details,
             )
 
         filename_clean = Path(filename or "upload.wav").name or "upload.wav"
-        ext = Path(filename_clean).suffix.lower()
-        if ext != ".wav":
-            raise ControlError("unsupported_audio_type", "Only .wav uploads are supported in v1.")
-        if content_type and content_type.lower() not in {"audio/wav", "audio/x-wav", "audio/wave", "application/octet-stream"}:
-            raise ControlError("unsupported_audio_type", "Only WAV uploads are supported in v1.")
 
         asset_id = f"aud_{uuid.uuid4().hex[:20]}"
         asset_dir = self._audio_asset_dir()

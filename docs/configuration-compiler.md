@@ -21,11 +21,13 @@ bounded UTF-8 source
 
 The compiler does not decide cross-field semantics, capability or release
 compatibility, environmental readiness, deprecations, reload disposition,
-configuration generations, or rollback. Existing startup checks for those
-concerns remain after compilation. P1-14 owns their eventual classification;
-P1-15 owns transactional reload. P1-12 binds every supported parse/schema
-condition to a stable diagnostic catalog code. Retained `rule_id` values are
-deliberately non-contractual implementation identifiers.
+configuration generations, or rollback. The P1-14 staged validator consumes
+the compiler result for the first four concerns without reparsing; see
+[`configuration-validation.md`](configuration-validation.md). P1-15 owns
+transactional reload. P1-12 binds every supported public condition to a stable
+diagnostic catalog code. Compiler `rule_id` values are diagnostic binding
+identifiers; P1-14 adds a separate stable validator-rule identity and records
+the complete executed rule set in its validator stamp.
 
 ## Source and YAML rules
 
@@ -178,7 +180,8 @@ stable message tie-breaker. Compiler report version 2 includes:
 
 - aggregate parse/schema validity;
 - explicit and resolved configuration-schema versions;
-- source display identifiers and optional exact-source SHA-256;
+- source display identifiers, optional exact-source SHA-256, and exact bounded
+  byte lengths when bytes were available;
 - structural issues and locations;
 - safe origin counts;
 - whether redaction occurred.
@@ -195,7 +198,8 @@ versioning, and authoring rules.
 
 ## Offline lint CLI
 
-Run parse and schema validation without starting any operational subsystem:
+Run deterministic staged validation without starting any operational
+subsystem:
 
 ```bash
 seasonalweather config lint \
@@ -210,10 +214,11 @@ seasonalweather config lint \
 Human mode writes errors to stderr and a bounded success line to stdout. JSON
 mode writes exactly one JSON document to stdout. Exit codes are:
 
-- `0`: parse and schema valid;
-- `1`: source, parse, or schema invalid;
+- `0`: deterministic stages valid and requested preflight ready;
+- `1`: deterministic validation invalid or requested preflight not ready;
 - `2`: argparse usage error.
 
-Lint does not test semantics, compatibility, executables, directories,
-endpoints, workers, databases, Liquidsoap, reload applicability, or live
-configuration.
+Lint continues through deterministic semantic, compatibility, deprecation,
+and advisory stages. Environmental checks run only with explicit
+`--preflight`; reload applicability and live configuration changes remain out
+of scope.

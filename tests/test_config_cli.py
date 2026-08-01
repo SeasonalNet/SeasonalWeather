@@ -33,6 +33,18 @@ def test_config_lint_json_is_one_clean_document(capsys) -> None:
     parsed = json.loads(captured.out)
 
     assert parsed["valid"] is True
+    assert [stage["stage"] for stage in parsed["stages"]] == [
+        "parse",
+        "schema",
+        "semantic",
+        "compatibility",
+        "deprecation",
+        "advisory",
+        "preflight",
+    ]
+    assert parsed["stages"][-1]["state"] == "skipped"
+    assert parsed["preflight_ready"] is False
+    assert parsed["summary"]["acceptable_for_reload_decision"] is False
     assert captured.out.count("\n") == 1
     assert captured.err == ""
 
@@ -43,7 +55,8 @@ def test_config_lint_source_read_failure_is_structured(tmp_path: Path, capsys) -
     captured = capsys.readouterr()
     parsed = json.loads(captured.out)
 
-    assert parsed["issues"][0]["rule_id"] == "source.read"
+    assert parsed["issues"][0]["rule_id"] == "compiler.parse"
+    assert parsed["issues"][0]["diagnostic_rule_id"] == "source.read"
     assert captured.err == ""
 
 
@@ -59,3 +72,39 @@ def test_config_lint_never_prints_secret_sentinel(tmp_path: Path, capsys) -> Non
     captured = capsys.readouterr()
     assert sentinel not in captured.out
     assert sentinel not in captured.err
+
+
+def test_config_lint_preflight_is_explicit_read_only_and_does_not_create_database(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    executable = tmp_path / "espeak-ng"
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    text = EXAMPLE.read_text(encoding="utf-8")
+    database = tmp_path / "must-not-be-created.sqlite3"
+    text = text.replace(
+        'path: "/var/lib/seasonalweather/seasonalweather.sqlite3"',
+        f'path: "{database}"',
+    )
+    for configured in (
+        "/var/lib/seasonalweather/audio",
+        "/var/lib/seasonalweather/cache",
+        "/etc/seasonalweather",
+        "/var/log/seasonalweather",
+        "/var/lib/seasonalweather",
+    ):
+        text = text.replace(f'"{configured}"', f'"{runtime}"')
+    candidate = tmp_path / "candidate.yaml"
+    candidate.write_text(text, encoding="utf-8")
+
+    assert main(["lint", "--config", str(candidate), "--format", "json", "--preflight"]) == 0
+    parsed = json.loads(capsys.readouterr().out)
+
+    assert parsed["preflight_ready"] is True
+    assert parsed["stages"][-1]["state"] == "completed"
+    assert not database.exists()

@@ -94,6 +94,7 @@ class SourceDocument:
     source_id: str
     text: str = field(repr=False)
     digest: str
+    byte_length: int
 
     @classmethod
     def from_bytes(
@@ -103,13 +104,16 @@ class SourceDocument:
         source_id: str,
         limits: CompilerLimits = DEFAULT_LIMITS,
     ) -> SourceDocument:
+        digest = sha256(data).hexdigest()
         if len(data) > limits.max_source_bytes:
             raise SourceReadError(
                 "source.limit.bytes",
                 "Configuration source exceeds the byte limit.",
                 source_id,
+                sha256=digest,
+                byte_length=len(data),
+                bytes_available=True,
             )
-        digest = sha256(data).hexdigest()
         content = data[3:] if data.startswith(b"\xef\xbb\xbf") else data
         try:
             text = content.decode("utf-8", errors="strict")
@@ -118,8 +122,11 @@ class SourceDocument:
                 "source.encoding",
                 "Configuration source is not valid UTF-8.",
                 source_id,
+                sha256=digest,
+                byte_length=len(data),
+                bytes_available=True,
             ) from exc
-        return cls(source_id=source_id, text=text, digest=digest)
+        return cls(source_id=source_id, text=text, digest=digest, byte_length=len(data))
 
     @classmethod
     def read(
@@ -153,10 +160,22 @@ class ParsedSource:
 
 
 class SourceReadError(Exception):
-    def __init__(self, rule_id: str, message: str, source_id: str) -> None:
+    def __init__(
+        self,
+        rule_id: str,
+        message: str,
+        source_id: str,
+        *,
+        sha256: str | None = None,
+        byte_length: int | None = None,
+        bytes_available: bool = False,
+    ) -> None:
         self.rule_id = rule_id
         self.safe_message = message
         self.source_id = source_id
+        self.sha256 = sha256
+        self.byte_length = byte_length
+        self.bytes_available = bytes_available
         super().__init__(message)
 
 

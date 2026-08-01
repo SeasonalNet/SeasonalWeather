@@ -93,3 +93,20 @@ def test_job_and_operational_databases_cannot_share_a_path(
 
     with pytest.raises(ValueError, match="separate"):
         _load(monkeypatch, tmp_path, mutate)
+
+
+def test_runtime_job_database_separation_rejects_symlink_alias(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    operations_path = tmp_path / "operations.sqlite3"
+    jobs_alias = tmp_path / "jobs-alias.sqlite3"
+    operations_path.write_text("existing database", encoding="utf-8")
+    jobs_alias.symlink_to(operations_path)
+
+    def mutate(raw):
+        raw["database"]["path"] = str(operations_path)
+        raw["jobs"].update({"enabled": True, "path": str(jobs_alias)})
+
+    with pytest.raises(ValueError, match="separate"):
+        _load(monkeypatch, tmp_path, mutate)

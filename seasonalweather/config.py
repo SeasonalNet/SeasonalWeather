@@ -770,21 +770,31 @@ def _validate_job_repository_identity(
     cfg: JobRepositoryConfig,
     operational_database_path: str,
 ) -> None:
-    if cfg.enabled and not cfg.path.strip():
-        raise ValueError("jobs.path must be explicitly configured when jobs are enabled")
-    if cfg.enabled and Path(cfg.path).resolve() == Path(operational_database_path).resolve():
+    from .configuration.semantic_rules import job_repository_identity_errors
+
+    errors = job_repository_identity_errors(
+        enabled=cfg.enabled,
+        required=cfg.required,
+        path=cfg.path,
+        operational_database_path=operational_database_path,
+    )
+    if errors:
+        raise ValueError(errors[0])
+    if cfg.enabled and Path(cfg.path).resolve(strict=False) == Path(operational_database_path).resolve(strict=False):
         raise ValueError("jobs.path must be separate from database.path")
-    if cfg.required and not cfg.enabled:
-        raise ValueError("jobs.required cannot be true when jobs are disabled")
 
 
 def _validate_job_repository_timing(cfg: JobRepositoryConfig) -> None:
-    if not 100 <= cfg.busy_timeout_ms <= 30_000:
-        raise ValueError("jobs.busy_timeout_ms must be between 100 and 30000")
-    if not 1 <= cfg.assignment_ack_seconds < cfg.lease_seconds <= 3600:
-        raise ValueError("jobs lease timing must satisfy 1 <= assignment_ack_seconds < lease_seconds <= 3600")
-    if not 0.1 <= cfg.shutdown_reconciliation_seconds <= 30.0:
-        raise ValueError("jobs.shutdown_reconciliation_seconds must be between 0.1 and 30")
+    from .configuration.semantic_rules import job_repository_timing_errors
+
+    errors = job_repository_timing_errors(
+        busy_timeout_ms=cfg.busy_timeout_ms,
+        assignment_ack_seconds=cfg.assignment_ack_seconds,
+        lease_seconds=cfg.lease_seconds,
+        shutdown_reconciliation_seconds=cfg.shutdown_reconciliation_seconds,
+    )
+    if errors:
+        raise ValueError(errors[0])
 
 
 def _validate_job_repository_retention(cfg: JobRepositoryConfig) -> None:
@@ -1064,7 +1074,9 @@ def _parse_static_credentials(
     scope_value: Any,
     scope_path: str,
 ) -> tuple[tuple[StaticCredentialConfig, ...], bool]:
-    if single_token and tokens_json:
+    from .configuration.semantic_rules import static_credential_sources_conflict
+
+    if static_credential_sources_conflict(single_token, tokens_json):
         raise _auth_error(
             "conflicting_credentials",
             "api.auth.credentials",
@@ -1165,12 +1177,13 @@ def _load_exchange_auth_config(auth_block: dict[str, Any] | None) -> ExchangeAut
             "api.auth.exchange",
             "Exchange token TTL policy must contain integers.",
         ) from exc
-    ordered = (
-        0
-        < exchange.minimum_ttl_seconds
-        <= exchange.default_ttl_seconds
-        <= exchange.maximum_write_ttl_seconds
-        <= exchange.maximum_read_ttl_seconds
+    from .configuration.semantic_rules import exchange_ttls_are_ordered
+
+    ordered = exchange_ttls_are_ordered(
+        exchange.minimum_ttl_seconds,
+        exchange.default_ttl_seconds,
+        exchange.maximum_write_ttl_seconds,
+        exchange.maximum_read_ttl_seconds,
     )
     if not ordered:
         raise _auth_error(
@@ -1205,7 +1218,9 @@ def _load_api_auth_config(
         )
 
     legacy_fields = {"scopes", "subject"}.intersection(api_raw)
-    if auth_present and legacy_fields:
+    from .configuration.semantic_rules import current_and_legacy_auth_conflict
+
+    if current_and_legacy_auth_conflict(auth_present=auth_present, legacy_fields=legacy_fields):
         raise _auth_error(
             "conflicting_fields",
             "api.auth",
