@@ -4,15 +4,12 @@ import asyncio
 import datetime as dt
 import hashlib
 import json
-import os
 import shutil
 import subprocess
 import uuid
 import wave
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from .api.models import (
     CreateAudioInsertRequest,
@@ -22,25 +19,22 @@ from .api.models import (
     OriginateTextRequest,
     VoiceMode,
 )
-from .config import AppConfig, load_config
-from .broadcast.cycle import CycleBuilder
 from .broadcast.segment_store import render_segment_wav
 from .database.assets import AudioAssetRepository
 from .database.inserts import CycleInsertRepository
 from .database.station_feed import StationFeedRepository
-from .lifecycle import WorkClass
-from .tts.audio import wav_duration_seconds
-from .tts.tts import TTS
 from .same.locations import (
-    normalize_same_allow_set,
     normalize_same_location,
     same_location_matches_service_area,
 )
+from .tts.audio import wav_duration_seconds
 from .validation.admission import validate_wav_upload
 
 
 class ControlError(Exception):
-    def __init__(self, code: str, message: str, *, status_code: int = 422, details: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self, code: str, message: str, *, status_code: int = 422, details: dict[str, Any] | None = None
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
@@ -80,10 +74,10 @@ class OrchestratorControl:
             self._station_feed_repo = StationFeedRepository(db)
 
     def _now_utc(self) -> dt.datetime:
-        return dt.datetime.now(dt.timezone.utc)
+        return dt.datetime.now(dt.UTC)
 
     def _now_local(self) -> dt.datetime:
-        tz = getattr(self.orch, "_tz", dt.timezone.utc)
+        tz = getattr(self.orch, "_tz", dt.UTC)
         return dt.datetime.now(tz=tz)
 
     def _work_paths(self) -> tuple[Path, Path, Path, Path]:
@@ -141,7 +135,7 @@ class OrchestratorControl:
     def _to_utc_dt(self, value: dt.datetime) -> dt.datetime:
         if value.tzinfo is None or value.utcoffset() is None:
             raise ControlError("invalid_datetime", "Datetime values must include a timezone offset.")
-        return value.astimezone(dt.timezone.utc).replace(microsecond=0)
+        return value.astimezone(dt.UTC).replace(microsecond=0)
 
     def _insert_audio_path(self, insert_id: str) -> Path:
         _work_dir, audio_dir, _cache_dir, _logs_dir = self._work_paths()
@@ -155,7 +149,6 @@ class OrchestratorControl:
 
     def _enum_value(self, value: Any) -> str:
         return str(getattr(value, "value", value))
-
 
     def _station_sample_rate(self) -> int:
         try:
@@ -185,7 +178,9 @@ class OrchestratorControl:
                 frames = int(wf.getnframes())
                 sampwidth = int(wf.getsampwidth())
         except wave.Error as exc:
-            raise ControlError("invalid_wav", "Normalized WAV could not be parsed.", details={"path": str(path)}) from exc
+            raise ControlError(
+                "invalid_wav", "Normalized WAV could not be parsed.", details={"path": str(path)}
+            ) from exc
 
         duration_seconds = float(frames) / float(sample_rate_hz or 1)
         expected_rate = self._station_sample_rate()
@@ -253,13 +248,15 @@ class OrchestratorControl:
     def _serialize_dt(self, value: dt.datetime | None) -> str | None:
         if value is None:
             return None
-        return value.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat()
+        return value.astimezone(dt.UTC).replace(microsecond=0).isoformat()
 
     def _ensure_backend_ready(self) -> None:
         try:
             ok = bool(self.orch.telnet.ping())
         except Exception as exc:
-            raise DependencyUnavailableError("liquidsoap_unreachable", "Liquidsoap telnet backend is unavailable.") from exc
+            raise DependencyUnavailableError(
+                "liquidsoap_unreachable", "Liquidsoap telnet backend is unavailable."
+            ) from exc
         if not ok:
             raise DependencyUnavailableError("liquidsoap_unreachable", "Liquidsoap telnet backend is unavailable.")
 
@@ -479,7 +476,9 @@ class OrchestratorControl:
     async def clear_heightened_mode(self, *, reason: str | None, actor: str) -> dict[str, Any]:
         self.orch.heightened_until = None
         self.orch._update_mode()
-        self.orch.last_product_desc = (f"Manual heightened mode cleared: {reason}" if reason else "Manual heightened mode cleared")[:200]
+        self.orch.last_product_desc = (
+            f"Manual heightened mode cleared: {reason}" if reason else "Manual heightened mode cleared"
+        )[:200]
         self.orch._schedule_cycle_refill(reason="api-clear-heightened")
         # _API_CLEAR_HEIGHTENED_DL_
         try:
@@ -503,7 +502,9 @@ class OrchestratorControl:
         self._ensure_backend_ready()
         allowed, why = self.orch.tests_runtime.gate()
         if not allowed:
-            raise ConflictError("test_gate_blocked", "Required test origination is currently blocked.", details={"reason": why})
+            raise ConflictError(
+                "test_gate_blocked", "Required test origination is currently blocked.", details={"reason": why}
+            )
         await self.orch.tests_runtime.originate_required_test(event_code)
         # _API_ORIGINATE_TEST_DL_
         try:
@@ -602,7 +603,9 @@ class OrchestratorControl:
 
         if meta is None:
             if not meta_path.exists():
-                raise NotFoundError("audio_asset_not_found", "Audio asset was not found.", details={"audio_asset_id": asset_id})
+                raise NotFoundError(
+                    "audio_asset_not_found", "Audio asset was not found.", details={"audio_asset_id": asset_id}
+                )
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
             if self._audio_asset_repo is not None:
                 try:
@@ -612,8 +615,8 @@ class OrchestratorControl:
 
         expires_at = dt.datetime.fromisoformat(meta["expires_at"])
         if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=dt.timezone.utc)
-        if self._now_utc() > expires_at.astimezone(dt.timezone.utc):
+            expires_at = expires_at.replace(tzinfo=dt.UTC)
+        if self._now_utc() > expires_at.astimezone(dt.UTC):
             raise NotFoundError("audio_asset_expired", "Audio asset has expired.", details={"audio_asset_id": asset_id})
         wav_path = Path(meta["path"])
         if not wav_path.exists():
@@ -697,7 +700,9 @@ class OrchestratorControl:
         except NotImplementedError as exc:
             raise ControlError("manual_origination_not_supported", str(exc)) from exc
         except FileNotFoundError as exc:
-            raise NotFoundError("manual_audio_missing", "Manual origination audio source is missing.", details={"path": str(exc)}) from exc
+            raise NotFoundError(
+                "manual_audio_missing", "Manual origination audio source is missing.", details={"path": str(exc)}
+            ) from exc
         except ValueError as exc:
             raise ControlError("invalid_manual_origination", str(exc)) from exc
         # _API_ORIGINATE_TEXT_DL_
@@ -755,7 +760,9 @@ class OrchestratorControl:
             )
         except FileNotFoundError as exc:
             out_path.unlink(missing_ok=True)
-            raise NotFoundError("manual_audio_missing", "Manual origination audio source is missing.", details={"path": str(exc)}) from exc
+            raise NotFoundError(
+                "manual_audio_missing", "Manual origination audio source is missing.", details={"path": str(exc)}
+            ) from exc
         except ValueError as exc:
             out_path.unlink(missing_ok=True)
             raise ControlError("invalid_manual_origination", str(exc)) from exc
@@ -833,8 +840,8 @@ class OrchestratorControl:
             if start_raw:
                 start = dt.datetime.fromisoformat(str(start_raw))
                 if start.tzinfo is None:
-                    start = start.replace(tzinfo=dt.timezone.utc)
-                start = start.astimezone(dt.timezone.utc).replace(microsecond=0)
+                    start = start.replace(tzinfo=dt.UTC)
+                start = start.astimezone(dt.UTC).replace(microsecond=0)
             else:
                 start = now
         except Exception:
@@ -843,8 +850,8 @@ class OrchestratorControl:
         try:
             expires = dt.datetime.fromisoformat(str(item.get("expires_at")))
             if expires.tzinfo is None:
-                expires = expires.replace(tzinfo=dt.timezone.utc)
-            expires = expires.astimezone(dt.timezone.utc).replace(microsecond=0)
+                expires = expires.replace(tzinfo=dt.UTC)
+            expires = expires.astimezone(dt.UTC).replace(microsecond=0)
         except Exception:
             expires = now
         if expires <= now:
@@ -1035,7 +1042,11 @@ class OrchestratorControl:
                 actor=actor,
                 status="succeeded",
                 headline=req.title,
-                details={"insert_id": insert_id, "placement": self._enum_value(req.placement), "asset_id": req.audio_asset_id},
+                details={
+                    "insert_id": insert_id,
+                    "placement": self._enum_value(req.placement),
+                    "asset_id": req.audio_asset_id,
+                },
             )
         except Exception:
             pass
@@ -1047,7 +1058,10 @@ class OrchestratorControl:
         now_iso = self._serialize_dt(self._now_utc())
         if now_iso is not None:
             repo.expire_due(now_iso)
-        return [self._format_insert_snapshot(item) for item in repo.list_inserts(include_inactive=include_inactive, limit=limit)]
+        return [
+            self._format_insert_snapshot(item)
+            for item in repo.list_inserts(include_inactive=include_inactive, limit=limit)
+        ]
 
     async def get_insert(self, insert_id: str) -> dict[str, Any]:
         repo = self._require_insert_repo()
@@ -1081,61 +1095,6 @@ class OrchestratorControl:
             pass
         return {"ok": True, "insert": self._format_insert_snapshot(item), "insert_id": insert_id}
 
-    async def reload_config(self, *, actor: str, reason: str | None = None) -> dict[str, Any]:
-        old_hash = self._config_file_hash()
-        new_cfg = load_config(self.config_path)
-        old_cfg = self.orch.cfg
-
-        self.orch.cfg = new_cfg
-        self.orch._tz = ZoneInfo(new_cfg.station.timezone)
-        self.orch.local_tz = self.orch._tz
-        self.orch.tts = TTS(
-            backend=new_cfg.tts.backend,
-            voice=new_cfg.tts.voice,
-            rate_wpm=new_cfg.tts.rate_wpm,
-            volume=new_cfg.tts.volume,
-            sample_rate=new_cfg.audio.sample_rate,
-            text_overrides=new_cfg.tts.text_overrides,
-            vtp_cfg=new_cfg.tts.voicetext_paul,
-            admission_check=lambda: self.orch.lifecycle.require(WorkClass.TTS),
-        )
-        self.orch.cycle_builder = CycleBuilder(
-            api=self.orch.api,
-            tz_name=new_cfg.station.timezone,
-            obs_stations=new_cfg.observations.stations,
-            reference_points=new_cfg.cycle.reference_points,
-            same_fips_all=new_cfg.service_area.same_fips_all,
-        )
-        self.orch._same_fips_allow_set = normalize_same_allow_set(new_cfg.service_area.same_fips_all)
-        self.orch._nwws_allowed_wfos = self.orch._norm_wfo_set(getattr(new_cfg.nwws, "allowed_wfos", []))
-        self.orch.last_product_desc = (f"Config reloaded: {reason}" if reason else "Config reloaded")[:200]
-        self.orch._schedule_cycle_refill(reason="api-config-reload")
-
-        caveats: list[str] = []
-        if old_cfg.nwws.server != new_cfg.nwws.server or old_cfg.nwws.port != new_cfg.nwws.port:
-            caveats.append("NWWS client tasks keep their existing connection settings until the process restarts.")
-        if old_cfg.paths != new_cfg.paths:
-            caveats.append("Changed paths are only partly hot-applied; a process restart is safer for path changes.")
-
-        # _API_RELOAD_CONFIG_DL_
-        try:
-            self.orch.discord.api_action(
-                method="POST",
-                endpoint="/v1/config/reload",
-                actor=actor,
-                status="succeeded",
-                details={"reason": reason or "", "warnings": len(caveats)},
-            )
-        except Exception:
-            pass
-        return {
-            "ok": True,
-            "old_config_sha256": old_hash,
-            "new_config_sha256": self._config_file_hash(),
-            "actor": actor,
-            "reason": reason,
-            "warnings": caveats,
-        }
 
 # _CONTROL_DL_APPLIED_
 

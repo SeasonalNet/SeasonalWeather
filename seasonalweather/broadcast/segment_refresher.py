@@ -52,12 +52,14 @@ Wiring in main.py (summary)
             last_product_desc=self.last_product_desc,
         )
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
-from typing import Callable, Dict, List, Optional, Set
+from collections.abc import Callable
+from typing import AsyncContextManager
 from zoneinfo import ZoneInfo
 
 from ..alerts.active import AlertTracker
@@ -68,17 +70,17 @@ from .segment_store import SegmentStore
 log = logging.getLogger("seasonalweather.segment_refresher")
 
 # Default refresh intervals (seconds).  Override via refresh_intervals kwarg.
-_DEFAULT_INTERVALS: Dict[str, int] = {
-    "id":         60,
-    "health":      60,
-    "status":     180,
-    "hwo":        3600,
-    "spc":        1800,
-    "zfp":        3600,
-    "fcst":       1800,
-    "cwf":        7200,
-    "marine_obs": 900,   # same cadence as land obs — RWR updates hourly
-    "obs":        900,
+_DEFAULT_INTERVALS: dict[str, int] = {
+    "id": 60,
+    "health": 60,
+    "status": 180,
+    "hwo": 3600,
+    "spc": 1800,
+    "zfp": 3600,
+    "fcst": 1800,
+    "cwf": 7200,
+    "marine_obs": 900,  # same cadence as land obs — RWR updates hourly
+    "obs": 900,
 }
 
 # How often the refresher polls for stale segments (regardless of events).
@@ -90,21 +92,30 @@ _BUILD_CACHE_TTL_S: float = 20.0
 
 # All segment keys managed by the refresher (excluding live "time" and
 # dynamic "_alert_*" keys which have their own paths).
-_ALL_CONTENT_KEYS: List[str] = [
-    "id", "health", "status", "hwo", "spc", "zfp", "fcst", "cwf", "obs", "marine_obs",
+_ALL_CONTENT_KEYS: list[str] = [
+    "id",
+    "health",
+    "status",
+    "hwo",
+    "spc",
+    "zfp",
+    "fcst",
+    "cwf",
+    "obs",
+    "marine_obs",
 ]
 
-_SEGMENT_TITLES: Dict[str, str] = {
-    "id":         "Station identification.",
-    "health":     "Data feed status.",
-    "status":     "Overall station status and alerts.",
-    "hwo":        "Hazardous weather outlook for the service area.",
-    "spc":        "Severe weather outlook for the service area.",
-    "zfp":        "Weather synopsis for the area.",
-    "fcst":       "The forecast for the service area.",
-    "cwf":        "Coastal and marine weather forecast.",
+_SEGMENT_TITLES: dict[str, str] = {
+    "id": "Station identification.",
+    "health": "Data feed status.",
+    "status": "Overall station status and alerts.",
+    "hwo": "Hazardous weather outlook for the service area.",
+    "spc": "Severe weather outlook for the service area.",
+    "zfp": "Weather synopsis for the area.",
+    "fcst": "The forecast for the service area.",
+    "cwf": "Coastal and marine weather forecast.",
     "marine_obs": "Marine observations for the service area.",
-    "obs":        "Current conditions in our area.",
+    "obs": "Current conditions in our area.",
 }
 
 
@@ -136,9 +147,10 @@ class SegmentRefresher:
         tz: ZoneInfo,
         sample_rate: int,
         seg_gap_s: float = 0.45,
-        refresh_intervals: Optional[Dict[str, int]] = None,
+        refresh_intervals: dict[str, int] | None = None,
         tick_s: float = _TICK_S,
-        on_alert_segments_changed: Optional[Callable[[str], None]] = None,
+        on_alert_segments_changed: Callable[[str], None] | None = None,
+        activity_context: Callable[[], AsyncContextManager[None]] | None = None,
     ) -> None:
         self._store = store
         self._builder = cycle_builder
@@ -151,24 +163,25 @@ class SegmentRefresher:
         self._tz = tz
         self._sample_rate = sample_rate
         self._seg_gap_s = seg_gap_s
-        self._intervals: Dict[str, int] = dict(_DEFAULT_INTERVALS)
+        self._intervals: dict[str, int] = dict(_DEFAULT_INTERVALS)
         if refresh_intervals:
             self._intervals.update(refresh_intervals)
         self._tick_s = tick_s
         self._on_alert_segments_changed = on_alert_segments_changed
+        self._activity_context = activity_context
 
         # Immediate-refresh request queue
-        self._pending: Set[str] = set()
+        self._pending: set[str] = set()
         self._pending_alert_sync: bool = False
         self._wake_event: asyncio.Event = asyncio.Event()
 
         # build_segments() result cache (amortises API calls on multi-stale ticks)
-        self._seg_cache: Optional[List[CycleSegment]] = None
+        self._seg_cache: list[CycleSegment] | None = None
         self._seg_cache_ts: float = 0.0
         self._seg_cache_mode: str = ""
 
         # Alert segment tracking
-        self._known_alert_ids: Set[str] = set()
+        self._known_alert_ids: set[str] = set()
 
     # ------------------------------------------------------------------
     #  Public API
@@ -226,7 +239,7 @@ class SegmentRefresher:
                     self._wake_event.wait(),
                     timeout=self._tick_s,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
 
     # ------------------------------------------------------------------
@@ -249,6 +262,13 @@ class SegmentRefresher:
 
     async def _refresh_one(self, key: str) -> None:
         """Fetch fresh text and re-synthesise audio for *key*."""
+        if self._activity_context is not None:
+            async with self._activity_context():
+                await self._refresh_one_untracked(key)
+            return
+        await self._refresh_one_untracked(key)
+
+    async def _refresh_one_untracked(self, key: str) -> None:
         log.debug("SegmentRefresher: refreshing key=%s", key)
         try:
             if key == "id":
@@ -288,7 +308,10 @@ class SegmentRefresher:
         """
         ctx = self._ctx_fn()
         if getattr(ctx, "health_detached_loop_only", False):
-            text = (getattr(ctx, "health_notice", None) or "SeasonalWeather is temporarily unable to receive current National Weather Service information. Please use another weather information source or visit weather.gov for the latest information.").strip()
+            text = (
+                getattr(ctx, "health_notice", None)
+                or "SeasonalWeather is temporarily unable to receive current National Weather Service information. Please use another weather information source or visit weather.gov for the latest information."
+            ).strip()
         elif ctx.mode == "heightened":
             text = (
                 f"This is the SeasonalNet I P Weather Radio Station, {self._station_name}, "
@@ -363,7 +386,7 @@ class SegmentRefresher:
     #  build_segments() cache
     # ------------------------------------------------------------------
 
-    async def _get_segments(self, ctx: CycleContext) -> List[CycleSegment]:
+    async def _get_segments(self, ctx: CycleContext) -> list[CycleSegment]:
         """
         Return a recent CycleBuilder.build_segments() result, re-fetching
         only when the cache has expired or the mode has changed.
@@ -406,7 +429,7 @@ class SegmentRefresher:
                 log.info("SegmentRefresher: purged %d expired AlertTracker entries", purged)
 
             active = self._alert_tracker.get_cycle_alerts()
-            active_ids: Set[str] = {ae.id for ae in active}
+            active_ids: set[str] = {ae.id for ae in active}
 
             # Synthesise newly-appeared entries
             for ae in active:
@@ -415,7 +438,8 @@ class SegmentRefresher:
                     if ae.script_text.strip():
                         log.info(
                             "SegmentRefresher: synthesising alert segment id=%s event=%s",
-                            ae.id, ae.event,
+                            ae.id,
+                            ae.event,
                         )
                         await self._synth(
                             key=store_key,
@@ -512,5 +536,7 @@ class SegmentRefresher:
         )
         log.info(
             "SegmentRefresher: synthesised key=%s dur=%.1fs title=%r",
-            key, dur, title,
+            key,
+            dur,
+            title,
         )

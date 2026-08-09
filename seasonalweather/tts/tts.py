@@ -11,16 +11,16 @@
 
 from __future__ import annotations
 
-import re
+import fcntl
 import os
+import re
 import shutil
-import time
 import subprocess
 import tempfile
-import fcntl
-from dataclasses import dataclass
-from contextlib import contextmanager
+import time
 from collections.abc import Callable
+from contextlib import AbstractContextManager, contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 
 _SPACE_RE = re.compile(r"[ \t]+")
@@ -61,11 +61,55 @@ _NWS_TZ_ABBR_RE = re.compile(
 )
 _NWS_AMPM_ABBR_RE = re.compile(r"\b(AM|PM)\b", re.IGNORECASE)
 _NWS_STATE_ABBRS = {
-    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
-    "HI", "ID", "IL", "IA", "KS", "KY", "LA", "ME", "MD", "MA",
-    "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM",
-    "NY", "NC", "ND", "OH", "OK", "PA", "RI", "SC", "SD", "TN",
-    "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "DC",
+    "AL",
+    "AK",
+    "AZ",
+    "AR",
+    "CA",
+    "CO",
+    "CT",
+    "DE",
+    "FL",
+    "GA",
+    "HI",
+    "ID",
+    "IL",
+    "IA",
+    "KS",
+    "KY",
+    "LA",
+    "ME",
+    "MD",
+    "MA",
+    "MI",
+    "MN",
+    "MS",
+    "MO",
+    "MT",
+    "NE",
+    "NV",
+    "NH",
+    "NJ",
+    "NM",
+    "NY",
+    "NC",
+    "ND",
+    "OH",
+    "OK",
+    "PA",
+    "RI",
+    "SC",
+    "SD",
+    "TN",
+    "TX",
+    "UT",
+    "VT",
+    "VA",
+    "WA",
+    "WV",
+    "WI",
+    "WY",
+    "DC",
 }
 _NWS_STATE_ABBR_RE = re.compile(
     r"\b(" + "|".join(sorted(_NWS_STATE_ABBRS)) + r")\b",
@@ -74,6 +118,7 @@ _NWS_STATE_ABBR_RE = re.compile(
 
 # Characters that commonly trail a URL in NWS product text but are not part of it.
 _URL_TRAIL_RE = re.compile(r"[.,;:)\]]+$")
+
 
 def verbalize_url(url: str) -> str:
     """Convert a URL to a spoken form suitable for TTS / NWR broadcast.
@@ -133,6 +178,7 @@ def _compile_text_override_rx(spec: dict) -> re.Pattern[str]:
         return re.compile(match, flags)
     return re.compile(re.escape(match), flags)
 
+
 def _apply_text_overrides(text: str, overrides: list[dict] | None) -> str:
     s = text or ""
     for spec in overrides or []:
@@ -148,6 +194,7 @@ def _apply_text_overrides(text: str, overrides: list[dict] | None) -> str:
             continue
         s = rx.sub(repl, s)
     return s
+
 
 # Common “NWS product wrapper” / footer junk we do NOT want spoken
 _SKIP_LINE_RE = re.compile(r"^\s*(?:\$\$|&&|NNNN|0{3,})\s*$")
@@ -363,10 +410,7 @@ def clean_for_tts(text: str) -> str:
         if _METAISH_RE.match(line) and (" " not in line or line == line.upper()):
             if not is_hwo:
                 # Try to keep things that look like real sentences
-                if (
-                    not _looks_like_all_caps_prose(line)
-                    and not any(ch in line for ch in (".", ",", "!", "?", "'"))
-                ):
+                if not _looks_like_all_caps_prose(line) and not any(ch in line for ch in (".", ",", "!", "?", "'")):
                     continue
             else:
                 # In HWO, only drop meta-ish if it's a pure token (no spaces)
@@ -492,6 +536,7 @@ class TTS:
     text_overrides: list[dict] | None = None
     vtp_cfg: object = None  # VoiceTextPaulConfig | None
     admission_check: Callable[[], None] | None = None
+    activity_context: Callable[[], AbstractContextManager[None]] | None = None
 
     def _voicetext_available(self) -> bool:
         state_base = Path(
@@ -503,10 +548,7 @@ class TTS:
         engine_root = Path(
             os.getenv(
                 "VOICETEXT_PAUL_ENGINE_ROOT",
-                str(
-                    state_base
-                    / "voices/voicetext_paul/WeatherRadioSuite-LIB"
-                ),
+                str(state_base / "voices/voicetext_paul/WeatherRadioSuite-LIB"),
             )
         )
         engine_dir = Path(
@@ -533,30 +575,25 @@ class TTS:
             "espeak": "espeak-ng",
         }.get(self.backend)
         if required_binary is not None:
-            return (
-                (True, "tts_available")
-                if shutil.which(required_binary)
-                else (False, "backend_unavailable")
-            )
+            return (True, "tts_available") if shutil.which(required_binary) else (False, "backend_unavailable")
         if self.backend == "dectalk":
             say_bin = Path("/opt/dectalk/dectalk/dist/say")
             available = say_bin.is_file() and bool(shutil.which("dectalk-env"))
-            return (
-                (True, "tts_available")
-                if available
-                else (False, "backend_unavailable")
-            )
+            return (True, "tts_available") if available else (False, "backend_unavailable")
         if self.backend == "voicetext_paul":
-            return (
-                (True, "tts_available")
-                if self._voicetext_available()
-                else (False, "backend_unavailable")
-            )
+            return (True, "tts_available") if self._voicetext_available() else (False, "backend_unavailable")
         return False, "backend_unsupported"
 
     def synth_to_wav(self, text: str, out_wav: Path) -> None:
         if self.admission_check is not None:
             self.admission_check()
+        if self.activity_context is not None:
+            with self.activity_context():
+                self._synth_to_wav_impl(text, out_wav)
+            return
+        self._synth_to_wav_impl(text, out_wav)
+
+    def _synth_to_wav_impl(self, text: str, out_wav: Path) -> None:
         out_wav.parent.mkdir(parents=True, exist_ok=True)
 
         msg = clean_for_tts(text)
@@ -650,9 +687,9 @@ class TTS:
                 ]
                 subprocess.run(cmd, input=(msg + "\n").encode("utf-8"), check=True)
 
-
             elif self.backend == "voicetext_paul":
                 from .voicetext_paul_vtml import apply_voicetext_paul_vtml
+
                 _vtml_on = bool(getattr(self.vtp_cfg, "vtml_lexicon", True))
                 _alias_overrides = list(getattr(self.vtp_cfg, "alias_overrides", []) or [])
                 _phoneme_overrides = list(getattr(self.vtp_cfg, "phoneme_overrides_x_cmu", []) or [])
@@ -665,7 +702,11 @@ class TTS:
 
                 # VoiceText Paul via wrapper run as voicetext (or VOICETEXT_PAUL_RUN_AS) (avoids Wine crashes + perms under seasonalweather).
                 state_base = Path(os.getenv("SEASONALWEATHER_DATA_BASE", "/var/lib/seasonalweather"))
-                engine_root = Path(os.getenv("VOICETEXT_PAUL_ENGINE_ROOT", str(state_base / "voices/voicetext_paul/WeatherRadioSuite-LIB")))
+                engine_root = Path(
+                    os.getenv(
+                        "VOICETEXT_PAUL_ENGINE_ROOT", str(state_base / "voices/voicetext_paul/WeatherRadioSuite-LIB")
+                    )
+                )
                 engine_dir = Path(os.getenv("VOICETEXT_PAUL_BIN_DIR", str(engine_root / "binary")))
                 exe = engine_dir / "voicetext_paul.exe"
                 if not exe.exists():
@@ -680,7 +721,6 @@ class TTS:
                 # Run Wine engine as a dedicated low-priv user (default: voicetext)
                 run_as = (getattr(self.vtp_cfg, "run_as", None) or "voicetext").strip() or "voicetext"
 
-
                 out_src = engine_dir / "output.wav"
 
                 retries = int(getattr(self.vtp_cfg, "retries", 1) or 1)
@@ -693,13 +733,19 @@ class TTS:
 
                 with _flock_path(lock_path, timeout_s=120.0):
                     calls = getattr(self, "_vt_paul_calls", 0) + 1
-                    setattr(self, "_vt_paul_calls", calls)
+                    self._vt_paul_calls = calls
 
                     def _wineserver_kill() -> None:
-                        subprocess.run([
-                            "sudo", "-n", "-u", run_as,
-                            "/usr/local/bin/voicetext_paul_wineserver_kill",
-                        ], check=False)
+                        subprocess.run(
+                            [
+                                "sudo",
+                                "-n",
+                                "-u",
+                                run_as,
+                                "/usr/local/bin/voicetext_paul_wineserver_kill",
+                            ],
+                            check=False,
+                        )
 
                     if kill_before or (reset_every > 0 and (calls % reset_every) == 0):
                         _wineserver_kill()
@@ -718,7 +764,9 @@ class TTS:
                             if attempt < retries:
                                 time.sleep(max(0.0, retry_sleep_ms / 1000.0))
                     else:
-                        raise RuntimeError(f"voicetext_paul failed after wineserver reset/retry: {last_err}") from last_err
+                        raise RuntimeError(
+                            f"voicetext_paul failed after wineserver reset/retry: {last_err}"
+                        ) from last_err
 
                     shutil.copyfile(out_src, tmp_wav)
                     out_src.unlink(missing_ok=True)

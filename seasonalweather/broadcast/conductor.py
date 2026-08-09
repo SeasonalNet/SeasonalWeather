@@ -23,6 +23,7 @@ Key differences from the old architecture
 - In focus mode, routine low-priority segments are deferred instead of
   forcing heightened-mode text truncation.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -31,8 +32,9 @@ import logging
 import os
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, AsyncContextManager
 from zoneinfo import ZoneInfo
 
 from ..alerts.active import AlertTracker
@@ -67,13 +69,13 @@ _MAX_PUSHES_PER_TICK: int = 30
 _INTERRUPT_STATUS_POLL_S: float = 0.5
 
 # Fixed base content order — alert segments are injected after "time".
-_BASE_CONTENT: List[str] = ["health", "status", "hwo", "spc", "zfp", "fcst", "cwf", "obs", "marine_obs"]
+_BASE_CONTENT: list[str] = ["health", "status", "hwo", "spc", "zfp", "fcst", "cwf", "obs", "marine_obs"]
 
 # Heightened/active-alert mode is deliberately more selective: alerts and
 # severe-weather context stay hot, while routine forecast/marine products are
 # spaced out instead of truncated mid-sentence.
-_FOCUS_CONTENT: List[str] = ["health", "status", "hwo", "spc", "obs"]
-_FOCUS_DEFERRED_CONTENT: Dict[str, float] = {
+_FOCUS_CONTENT: list[str] = ["health", "status", "hwo", "spc", "obs"]
+_FOCUS_DEFERRED_CONTENT: dict[str, float] = {
     "zfp": 20 * 60.0,
     "fcst": 20 * 60.0,
     "marine_obs": 30 * 60.0,
@@ -81,18 +83,18 @@ _FOCUS_DEFERRED_CONTENT: Dict[str, float] = {
 }
 
 # Metadata titles for the Now-Playing / IP-RDS display.
-_NP_TITLES: Dict[str, str] = {
-    "id":         "Station identification.",
-    "time":       "The current time in our service area.",
-    "health":     "Data feed status.",
-    "status":     "Overall station status and alerts.",
-    "hwo":        "Hazardous weather outlook for the service area.",
-    "spc":        "Severe weather outlook for the service area.",
-    "zfp":        "Weather synopsis for the area.",
-    "fcst":       "The forecast for the service area.",
-    "cwf":        "Coastal and marine weather forecast.",
+_NP_TITLES: dict[str, str] = {
+    "id": "Station identification.",
+    "time": "The current time in our service area.",
+    "health": "Data feed status.",
+    "status": "Overall station status and alerts.",
+    "hwo": "Hazardous weather outlook for the service area.",
+    "spc": "Severe weather outlook for the service area.",
+    "zfp": "Weather synopsis for the area.",
+    "fcst": "The forecast for the service area.",
+    "cwf": "Coastal and marine weather forecast.",
     "marine_obs": "Marine observations for the service area.",
-    "obs":        "Current conditions in our area.",
+    "obs": "Current conditions in our area.",
 }
 
 
@@ -100,7 +102,7 @@ _NP_TITLES: Dict[str, str] = {
 #  Time formatting (mirrors cycle.py — kept local to avoid a circular import)
 # ---------------------------------------------------------------------------
 
-_TZ_NAME_MAP: Dict[str, str] = {
+_TZ_NAME_MAP: dict[str, str] = {
     "EST": "Eastern Standard Time",
     "EDT": "Eastern Daylight Time",
     "CST": "Central Standard Time",
@@ -132,6 +134,7 @@ def _short_tz(now: dt.datetime) -> str:
 #  CycleConductor
 # ---------------------------------------------------------------------------
 
+
 class CycleConductor:
     """
     Continuously feeds Liquidsoap's cycle queue one segment at a time.
@@ -152,16 +155,17 @@ class CycleConductor:
         tz: ZoneInfo,
         audio_dir: Path,
         sample_rate: int,
-        np_meta_fn: Callable[..., Dict[str, str]],
+        np_meta_fn: Callable[..., dict[str, str]],
         seg_gap_s: float = _SEG_GAP_S,
         lookahead_s: float = _LOOKAHEAD_S,
         tick_s: float = _TICK_S,
-        discord_fn: Optional[Callable[..., Any]] = None,
-        active_alerts_fn: Optional[Callable[[], int]] = None,
-        mode_fn: Optional[Callable[[], str]] = None,
-        alert_focus_policy: Optional[AlertFocusPolicy] = None,
-        scheduled_inserts_fn: Optional[Callable[[str, int, bool], List[Dict[str, Any]]]] = None,
-        mark_insert_aired_fn: Optional[Callable[[str, int], Any]] = None,
+        discord_fn: Callable[..., Any] | None = None,
+        active_alerts_fn: Callable[[], int] | None = None,
+        mode_fn: Callable[[], str] | None = None,
+        alert_focus_policy: AlertFocusPolicy | None = None,
+        scheduled_inserts_fn: Callable[[str, int, bool], list[dict[str, Any]]] | None = None,
+        mark_insert_aired_fn: Callable[[str, int], Any] | None = None,
+        activity_context: Callable[[], AsyncContextManager[None]] | None = None,
     ) -> None:
         """
         Parameters
@@ -197,12 +201,13 @@ class CycleConductor:
         self._audio_dir = Path(audio_dir)
         self._sample_rate = sample_rate
         self._np_meta_fn = np_meta_fn
-        self._discord_fn = discord_fn            # optional: fires cycle_rebuilt embed
+        self._discord_fn = discord_fn  # optional: fires cycle_rebuilt embed
         self._active_alerts_fn = active_alerts_fn  # optional: count for embed
         self._mode_fn = mode_fn
         self._alert_focus_policy = alert_focus_policy or AlertFocusPolicy()
         self._scheduled_inserts_fn = scheduled_inserts_fn
         self._mark_insert_aired_fn = mark_insert_aired_fn
+        self._activity_context = activity_context
         self._seg_gap_s = seg_gap_s
         self._lookahead_s = lookahead_s
         self._tick_s = tick_s
@@ -213,18 +218,15 @@ class CycleConductor:
 
         # Cycle position tracking
         self._position_in_rotation: int = 0
-        self._cycle_order: List[str] = []   # rebuilt at each rotation start
-        self._last_cycle_order: List[str] = []
-        self._insert_cache: Dict[str, Dict[str, Any]] = {}
-        self._last_pushed_at: Dict[str, float] = {}
+        self._cycle_order: list[str] = []  # rebuilt at each rotation start
+        self._last_cycle_order: list[str] = []
+        self._insert_cache: dict[str, dict[str, Any]] = {}
+        self._last_pushed_at: dict[str, float] = {}
         self._focus_mode_active: bool = False
 
         # Double-buffer for live time WAV (prevents overwriting while queued)
         self._audio_dir.mkdir(parents=True, exist_ok=True)
-        self._time_bufs: List[Path] = [
-            self._audio_dir / f"cycle_time_{i}.wav"
-            for i in range(_TIME_BUF_COUNT)
-        ]
+        self._time_bufs: list[Path] = [self._audio_dir / f"cycle_time_{i}.wav" for i in range(_TIME_BUF_COUNT)]
         self._time_buf_idx: int = 0
 
         # Flush notification event (set by notify_flush to wake the loop early)
@@ -324,7 +326,7 @@ class CycleConductor:
                 while self.estimated_remaining_s < self._lookahead_s:
                     if self._interrupt_hold:
                         break
-                    pushed = await self._push_next_segment()
+                    pushed = await self._tracked_push_next_segment()
                     pushes += 1
                     if not pushed:
                         # Nothing was ready — don't busy-spin.
@@ -340,7 +342,7 @@ class CycleConductor:
             self._flush_event.clear()
             try:
                 await asyncio.wait_for(self._flush_event.wait(), timeout=self._tick_s)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
 
     async def _wait_for_interrupt_end(self) -> None:
@@ -351,11 +353,11 @@ class CycleConductor:
             self._flush_event.clear()
             try:
                 await asyncio.wait_for(self._flush_event.wait(), timeout=remaining)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
             return
 
-        active: Optional[bool] = None
+        active: bool | None = None
         try:
             active = self._telnet.interrupt_active()
         except AttributeError:
@@ -393,6 +395,12 @@ class CycleConductor:
             reset_ok,
         )
 
+    async def _tracked_push_next_segment(self) -> bool:
+        if self._activity_context is None:
+            return await self._push_next_segment()
+        async with self._activity_context():
+            return await self._push_next_segment()
+
     # ------------------------------------------------------------------
     #  Segment push orchestration
     # ------------------------------------------------------------------
@@ -400,10 +408,7 @@ class CycleConductor:
     def _focus_mode_enabled(self, now: float) -> bool:
         active = False
         try:
-            active = any(
-                alert_holds_focus(a, self._alert_focus_policy)
-                for a in self._alert_tracker.get_cycle_alerts()
-            )
+            active = any(alert_holds_focus(a, self._alert_focus_policy) for a in self._alert_tracker.get_cycle_alerts())
         except Exception:
             active = False
         try:
@@ -424,18 +429,18 @@ class CycleConductor:
         self._focus_mode_active = active
         return active
 
-    def _deferred_focus_segments_due(self, now: float) -> List[str]:
-        due: List[str] = []
+    def _deferred_focus_segments_due(self, now: float) -> list[str]:
+        due: list[str] = []
         for key, min_gap_s in _FOCUS_DEFERRED_CONTENT.items():
             last = self._last_pushed_at.get(key, now)
             if now - last >= min_gap_s:
                 due.append(key)
         return due
 
-    def _insert_keys_for(self, placement: str, *, rotation_count: int, focus: bool) -> List[str]:
+    def _insert_keys_for(self, placement: str, *, rotation_count: int, focus: bool) -> list[str]:
         if not self._scheduled_inserts_fn:
             return []
-        keys: List[str] = []
+        keys: list[str] = []
         try:
             for item in self._scheduled_inserts_fn(placement, rotation_count, focus) or []:
                 insert_id = str(item.get("insert_id") or "").strip()
@@ -497,7 +502,7 @@ class CycleConductor:
         self._rotation_seg_count = 0
         self._rotation_start_ts = now
 
-        order: List[str] = ["id", "time"]
+        order: list[str] = ["id", "time"]
         self._insert_cache = {}
 
         try:
@@ -573,15 +578,13 @@ class CycleConductor:
             self._rebuild_cycle_order()
 
         key = self._cycle_order[self._position_in_rotation]
-        self._position_in_rotation = (
-            (self._position_in_rotation + 1) % len(self._cycle_order)
-        )
+        self._position_in_rotation = (self._position_in_rotation + 1) % len(self._cycle_order)
 
         try:
             if key == "time":
                 dur = await self._push_live_time()
             elif key.startswith("_alert_"):
-                dur = self._push_tracker_alert(key[len("_alert_"):])
+                dur = self._push_tracker_alert(key[len("_alert_") :])
             elif key.startswith("_insert_"):
                 dur = self._push_scheduled_insert(key)
             else:
@@ -602,7 +605,7 @@ class CycleConductor:
 
     def _push_scheduled_insert(self, key: str) -> float:
         item = self._insert_cache.get(key) or {}
-        insert_id = str(item.get("insert_id") or key[len("_insert_"):])
+        insert_id = str(item.get("insert_id") or key[len("_insert_") :])
         audio = Path(str(item.get("audio_path") or ""))
         if not audio.exists():
             log.warning("CycleConductor: scheduled insert audio missing id=%s path=%s", insert_id, audio)
@@ -622,11 +625,7 @@ class CycleConductor:
             extra={
                 "sw_cycle_key": "insert",
                 "sw_insert_id": insert_id,
-                "sw_insert_kind": str(
-                    ((item.get("meta") or {}).get("source_type"))
-                    or item.get("kind")
-                    or ""
-                ),
+                "sw_insert_kind": str(((item.get("meta") or {}).get("source_type")) or item.get("kind") or ""),
             },
         )
         try:
@@ -660,7 +659,8 @@ class CycleConductor:
         if not audio.exists():
             log.warning(
                 "CycleConductor: audio file missing key=%s path=%s",
-                key, audio,
+                key,
+                audio,
             )
             return 0.0
 
@@ -692,7 +692,8 @@ class CycleConductor:
 
         if entry is None or entry.is_placeholder:
             log.debug(
-                "CycleConductor: alert segment not ready id=%s", alert_id,
+                "CycleConductor: alert segment not ready id=%s",
+                alert_id,
             )
             return 0.0
 
@@ -712,13 +713,16 @@ class CycleConductor:
             self._telnet.push_cycle(str(audio), meta=meta)
         except Exception:
             log.exception(
-                "CycleConductor: failed pushing tracker alert id=%s", alert_id,
+                "CycleConductor: failed pushing tracker alert id=%s",
+                alert_id,
             )
             return 0.0
 
         self._rotation_seg_count += 1
         log.info(
-            "CycleConductor: → alert_%s (%.1fs)", alert_id, entry.duration_s,
+            "CycleConductor: → alert_%s (%.1fs)",
+            alert_id,
+            entry.duration_s,
         )
         return entry.duration_s
 
@@ -752,7 +756,10 @@ class CycleConductor:
             # TTS is blocking — run in thread executor
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(
-                None, self._tts.synth_to_wav, text, tts_tmp,
+                None,
+                self._tts.synth_to_wav,
+                text,
+                tts_tmp,
             )
             write_silence_wav(gap_tmp, self._seg_gap_s, self._sample_rate)
             concat_wavs(out_tmp, [gap_tmp, tts_tmp, gap_tmp])

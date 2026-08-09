@@ -4,6 +4,7 @@ from pathlib import Path
 
 from seasonalweather.diagnostics.loader import load_catalog
 from seasonalweather.runtime_diagnostics.repository import OccurrenceRepository
+from seasonalweather.configuration_reload.service import ConfigurationReloadService
 
 
 async def mutate() -> None:

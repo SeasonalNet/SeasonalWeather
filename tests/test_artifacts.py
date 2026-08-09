@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import asyncio
 import hashlib
 import os
 import stat
@@ -21,6 +22,12 @@ from seasonalweather.artifacts.service import AcceptanceState, ArtifactService
 from seasonalweather.artifacts.staging import StagingService
 from seasonalweather.jobs.contracts import JobStatus
 from seasonalweather.jobs.policies import ConfigFence, ReplayPolicy
+from seasonalweather.configuration_reload.safe_point import (
+    ActivityRegistry,
+    PUBLICATION,
+    SafePointCoordinator,
+    SafePointTimeout,
+)
 
 NOW = dt.datetime(2026, 7, 26, 12, tzinfo=dt.UTC)
 
@@ -253,6 +260,114 @@ def test_controller_claims_hashes_and_promotes_blob(tmp_path: Path) -> None:
     assert (
         service.accept(result, _fence(result), target_key="current.bin", commit_result=commit).digest == receipt.digest
     )
+
+
+def test_artifact_promotion_participates_in_reload_gate_and_new_work_waits(tmp_path: Path) -> None:
+    registry = ActivityRegistry()
+    coordinator = SafePointCoordinator(registry, poll_interval_seconds=0.001)
+    entered_commit = threading.Event()
+    release_commit = threading.Event()
+    namespace = tmp_path / "staging" / "worker_0001"
+    namespace.mkdir(parents=True)
+    source = namespace / "result.bin"
+    source.write_bytes(b"artifact race")
+    result = _result(_reference(source))
+    service = ArtifactService(
+        StagingService(tmp_path / "staging", tmp_path / "blobs", maximum_bytes=1024),
+        PromotionService(tmp_path / "active", maximum_bytes=1024),
+        Journal(),
+        clock=lambda: NOW,
+        activity_context=lambda: registry.activity(PUBLICATION),
+    )
+
+    def commit():
+        entered_commit.set()
+        assert release_commit.wait(timeout=1.0)
+        return SimpleNamespace(committed_at=NOW, result_hash="sha256:" + "f" * 64)
+
+    promotion = threading.Thread(
+        target=lambda: service.accept(result, _fence(result), target_key="current.bin", commit_result=commit),
+        daemon=True,
+    )
+    promotion.start()
+    assert entered_commit.wait(timeout=1.0)
+    with pytest.raises(SafePointTimeout) as raised:
+        asyncio.run(coordinator.acquire(0.01))
+    assert raised.value.snapshot.blockers == (PUBLICATION,)
+    release_commit.set()
+    promotion.join(timeout=1.0)
+    assert not promotion.is_alive()
+
+    second_source = namespace / "second.bin"
+    second_source.write_bytes(b"second artifact")
+    second = _result(_reference(second_source)).model_copy(
+        update={"job_id": "job_1123456789", "lease_id": "lease_1123456789", "attempt_id": "attempt_1123456789"}
+    )
+    second_done = threading.Event()
+
+    async def held_gate_scenario() -> None:
+        lease = await coordinator.acquire(0.2)
+        thread = threading.Thread(
+            target=lambda: (
+                service.accept(
+                    second,
+                    _fence(second),
+                    target_key="second.bin",
+                    commit_result=lambda: SimpleNamespace(
+                        committed_at=NOW,
+                        result_hash="sha256:" + "e" * 64,
+                    ),
+                ),
+                second_done.set(),
+            ),
+            daemon=True,
+        )
+        thread.start()
+        await asyncio.sleep(0.01)
+        assert not second_done.is_set()
+        lease.release()
+        thread.join(timeout=1.0)
+        assert second_done.is_set() and not thread.is_alive()
+
+    asyncio.run(held_gate_scenario())
+
+
+def test_old_generation_artifact_result_stays_fenced_after_reload_commit(tmp_path: Path) -> None:
+    namespace = tmp_path / "staging" / "worker_0001"
+    namespace.mkdir(parents=True)
+    source = namespace / "result.bin"
+    source.write_bytes(b"old generation")
+    result = _result(_reference(source))
+    stale_fence = ExpectedResultFence(
+        job_id=result.job_id,
+        job_type=result.job_type,
+        lease_id=result.lease_id,
+        attempt_id=result.attempt_id,
+        result_schema_version=1,
+        deadline_at=NOW + dt.timedelta(minutes=1),
+        replay_policy=ReplayPolicy.IDEMPOTENT_FENCED,
+        artifact_class=result.artifact.artifact_class,
+        generation_policy=ConfigFence.REQUIRED,
+        configuration_generation=3,
+        current_configuration_generation=4,
+        content_identity=result.content_identity,
+    )
+    service = ArtifactService(
+        StagingService(tmp_path / "staging", tmp_path / "blobs", maximum_bytes=1024),
+        PromotionService(tmp_path / "active", maximum_bytes=1024),
+        Journal(),
+        clock=lambda: NOW,
+    )
+
+    assert evaluate_fence(result, stale_fence, now=NOW) is FenceDecision.STALE_CONFIGURATION_GENERATION
+    with pytest.raises(ValueError, match="stale_configuration_generation"):
+        service.accept(
+            result,
+            stale_fence,
+            target_key="current.bin",
+            commit_result=lambda: SimpleNamespace(committed_at=NOW, result_hash="sha256:" + "d" * 64),
+        )
+    assert source.exists()
 
 
 def test_wav_claimed_metadata_is_controller_validated(tmp_path: Path) -> None:

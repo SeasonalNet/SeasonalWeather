@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
@@ -63,12 +64,14 @@ class ArtifactService:
         admission_check: Callable[[], None] = lambda: None,
         failure_injector: Callable[[str], None] = lambda _: None,
         required_targets: tuple[str, ...] = (),
+        activity_context: Callable[[], AbstractContextManager[None]] | None = None,
     ) -> None:
         self._staging, self._promotion, self._journal, self._clock = staging, promotion, journal, clock
         self._closed = False
         self._last_reason = "none"
         self._admission_check = admission_check
         self._failure_injector = failure_injector
+        self._activity_context = activity_context
         if len(required_targets) > 8:
             raise ValueError("too many required artifact targets")
         self._required_targets = required_targets
@@ -104,6 +107,19 @@ class ArtifactService:
         return {key: value for key, value in values.items() if value is not None}
 
     def accept(
+        self,
+        result: ArtifactResult,
+        fence: ExpectedResultFence,
+        *,
+        target_key: str,
+        commit_result: Callable[[], Any],
+    ) -> AcceptanceReceipt:
+        if self._activity_context is not None:
+            with self._activity_context():
+                return self._accept(result, fence, target_key=target_key, commit_result=commit_result)
+        return self._accept(result, fence, target_key=target_key, commit_result=commit_result)
+
+    def _accept(
         self,
         result: ArtifactResult,
         fence: ExpectedResultFence,

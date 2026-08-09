@@ -7,8 +7,7 @@ It's designed for homelab / hobby IP-based stream use with a focus on resiliency
 > **Not affiliated with NOAA / NWS / FEMA.**
 > This is an **unofficial** hobby project. **Do not** rely on it for life safety.
 > Always use official sources for real warnings (e.g., NOAA Weather Radio, weather.gov, local authorities).
-
-> **Please note, SeasonalWeather is a project coded with the use of generative AI.**
+> **Please note, SeasonalWeather is a project assisted by, and mostly coded by generative AI.**
 > Keep this in mind if you're against certain projects coded with the use of such tools.
 
 ## Safety, scope, and acceptable use
@@ -102,12 +101,13 @@ Freeze products are supported natively. `FZ.W` maps to SAME `FZW` (**Freeze Warn
   documented in [`docs/runtime-diagnostics.md`](docs/runtime-diagnostics.md).
 - Public handled-alerts feed API (`/v1/handled-alerts`) for external UI consumption, backed by SQLite.
   Persisted station-feed rows remain authoritative across restarts; startup does not synthesize degraded public records from AlertTracker state.
+- Transactional configuration reload behavior and operator boundaries are documented in [docs/configuration-reload.md](docs/configuration-reload.md).
 
 ---
 
 ## Repo layout
 
-```
+```text
 config/
   config.yaml       — repo template/example for runtime behaviour
   example.env       — secrets template (copy to /etc/seasonalweather/seasonalweather.env)
@@ -446,6 +446,7 @@ journalctl -u seasonalweather -f
 SeasonalWeather now has a central runtime logging policy in `seasonalweather/logging_config.py`, driven by `logs.runtime` in `config.yaml`.
 
 The defaults are intentionally quieter for systemd/journalctl:
+
 - suppress `httpx` and `httpcore` request lines unless you opt back in
 - suppress routine CAP/IPAWS zero-change poll summaries
 - suppress routine cycle conductor push chatter and segment refresher synthesis chatter
@@ -477,7 +478,7 @@ Set the per-logger levels back to `INFO` or enable the boolean toggles when you 
 
 ### 6) Listen
 
-```
+```text
 http://<your-ip>:8000/seasonalweather.ogg
 http://<your-ip>:8000/seasonalweather.mp3
 ```
@@ -497,9 +498,9 @@ Generate a test alert WAV and optionally push it into the Liquidsoap queue:
 
 ## SAME encoding
 
-SeasonalWeather uses a custom Rust `samegen` binary for fast SAME encoding for alerts it generates with SAME tones when `native_encoder` is enabled and the binary is installed and present. 
+SeasonalWeather uses a custom Rust `samegen` binary for fast SAME encoding for alerts it generates with SAME tones when `native_encoder` is enabled and the binary is installed and present.
 
-The `samegen` binary is located in `tools/samegen` from the repo root, and is currently not provisioned and installed by the bootstrapper. 
+The `samegen` binary is located in `tools/samegen` from the repo root, and is currently not provisioned and installed by the bootstrapper.
 
 Configuration flags:
 

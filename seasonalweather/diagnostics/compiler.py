@@ -10,7 +10,7 @@ import tempfile
 from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 
-from .bindings import RULE_BINDINGS, RUNTIME_CODES, RuleCodeBinding
+from .bindings import RELOAD_CODES, RULE_BINDINGS, RUNTIME_CODES, RuleCodeBinding
 from .codes import ConditionClass, DiagnosticCode, DiagnosticCodeError
 from .models import (
     DIAGNOSTIC_CATALOG_VERSION,
@@ -430,7 +430,7 @@ def _validate_bindings(definitions: tuple[DiagnosticDefinition, ...]) -> None:
 
 
 def _validate_configuration_bindings(by_code: dict[str, DiagnosticDefinition]) -> None:
-    binding_codes = {binding.code for binding in RULE_BINDINGS}
+    binding_codes = {binding.code for binding in RULE_BINDINGS} | set(RELOAD_CODES.values())
     swcfg_codes = {code for code in by_code if code.startswith("SWCFG")}
     if binding_codes != swcfg_codes:
         raise CatalogCompileError("active SWCFG codes and P1-11 rule bindings differ")

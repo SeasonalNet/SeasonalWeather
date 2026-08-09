@@ -1,0 +1,3 @@
+from seasonalweather.configuration_reload.service import ConfigurationReloadService
+
+authority = ConfigurationReloadService

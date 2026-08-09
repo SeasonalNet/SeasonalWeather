@@ -34,11 +34,23 @@ def load_runtime_config(
     if not compiled.valid or compiled.value is None:
         _raise_legacy_auth_error(compiled)
         raise ConfigurationCompileError(compiled)
+    return build_runtime_config(compiled, environ=effective_environment)
+
+
+def build_runtime_config(
+    compiled: CompiledConfiguration,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> AppConfig:
+    """Adapt one already compiled candidate without reparsing its source."""
+
+    if not compiled.valid or compiled.value is None:
+        raise ConfigurationCompileError(compiled)
     from seasonalweather.config import _build_app_config
 
     return _build_app_config(
         dict(compiled.value),
-        environment=EnvironmentValues(effective_environment),
+        environment=EnvironmentValues(os.environ if environ is None else environ),
     )
 
 

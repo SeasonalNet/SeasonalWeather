@@ -1,0 +1,3 @@
+from seasonalweather.configuration_reload.resources import OrchestratorResourcePreparer
+
+authority = OrchestratorResourcePreparer

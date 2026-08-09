@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 9
 
 MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: (
@@ -214,5 +214,86 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
         "ALTER TABLE api_commands ADD COLUMN audit_context_json TEXT NOT NULL DEFAULT '{}'",
         "UPDATE api_commands SET created_at = accepted_at WHERE created_at IS NULL",
         "UPDATE api_commands SET status = 'accepted' WHERE status = 'pending'",
+    ),
+    7: (
+        """
+        CREATE TABLE IF NOT EXISTS configuration_reload_active (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            generation INTEGER NOT NULL CHECK (generation >= 0),
+            candidate_reference TEXT NOT NULL,
+            source_sha256 TEXT NOT NULL,
+            candidate_identity_sha256 TEXT NOT NULL,
+            report_sha256 TEXT,
+            diff_sha256 TEXT,
+            audit_reference TEXT,
+            updated_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS configuration_reload_attempts (
+            attempt_id TEXT PRIMARY KEY,
+            command_id TEXT NOT NULL UNIQUE,
+            phase TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            reason TEXT,
+            dry_run INTEGER NOT NULL CHECK (dry_run IN (0, 1)),
+            old_generation INTEGER NOT NULL CHECK (old_generation >= 0),
+            expected_generation INTEGER,
+            final_generation INTEGER,
+            candidate_reference TEXT,
+            source_sha256 TEXT,
+            candidate_sha256 TEXT,
+            candidate_identity_sha256 TEXT,
+            report_reference TEXT,
+            report_sha256 TEXT,
+            diff_sha256 TEXT,
+            disposition TEXT,
+            outcome TEXT,
+            intent_json TEXT,
+            audit_json TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            finished_at TEXT
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_configuration_reload_attempts_updated ON configuration_reload_attempts (updated_at)",
+        "CREATE INDEX IF NOT EXISTS idx_configuration_reload_attempts_phase ON configuration_reload_attempts (phase)",
+    ),
+    8: (
+        "ALTER TABLE configuration_reload_attempts ADD COLUMN request_json TEXT",
+        "ALTER TABLE configuration_reload_attempts ADD COLUMN idempotency_identity TEXT",
+        "ALTER TABLE configuration_reload_attempts ADD COLUMN source_byte_length INTEGER",
+        "ALTER TABLE configuration_reload_attempts ADD COLUMN source_manifest_sha256 TEXT",
+        "ALTER TABLE configuration_reload_attempts ADD COLUMN old_candidate_reference TEXT",
+        "ALTER TABLE configuration_reload_attempts ADD COLUMN old_source_sha256 TEXT",
+        "ALTER TABLE configuration_reload_attempts ADD COLUMN old_candidate_identity_sha256 TEXT",
+        "CREATE INDEX IF NOT EXISTS idx_configuration_reload_attempts_command_finish ON configuration_reload_attempts (command_id, finished_at)",
+    ),
+    9: (
+        """
+        CREATE TABLE IF NOT EXISTS configuration_reload_admissions (
+            idempotency_key TEXT PRIMARY KEY,
+            attempt_id TEXT NOT NULL UNIQUE,
+            command_id TEXT UNIQUE,
+            actor TEXT NOT NULL,
+            reason TEXT,
+            request_json TEXT NOT NULL,
+            candidate_reference TEXT NOT NULL,
+            source_sha256 TEXT NOT NULL,
+            source_byte_length INTEGER NOT NULL,
+            source_manifest_sha256 TEXT NOT NULL,
+            candidate_sha256 TEXT NOT NULL,
+            candidate_identity_sha256 TEXT NOT NULL,
+            old_generation INTEGER NOT NULL,
+            old_candidate_reference TEXT NOT NULL,
+            old_source_sha256 TEXT NOT NULL,
+            old_candidate_identity_sha256 TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """,
+        "ALTER TABLE configuration_reload_attempts ADD COLUMN retirement_json TEXT",
+        "ALTER TABLE configuration_reload_attempts ADD COLUMN retirement_evidence_json TEXT",
+        "ALTER TABLE configuration_reload_attempts ADD COLUMN recovery_json TEXT",
     ),
 }

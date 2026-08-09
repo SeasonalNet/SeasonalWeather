@@ -16,6 +16,9 @@ controller_authority_imports = [
   "seasonalweather.artifacts.staging",
   "seasonalweather.broadcast",
   "seasonalweather.config",
+  "seasonalweather.configuration_reload.resources",
+  "seasonalweather.configuration_reload.service",
+  "seasonalweather.database.configuration_reload",
   "seasonalweather.database",
   "seasonalweather.job_store",
   "seasonalweather.liquidsoap_telnet",
@@ -276,4 +279,48 @@ api_diagnostics_forbidden_imports = [
   "seasonalweather.diagnostics.compiler",
   "seasonalweather.diagnostics.exporter",
   "seasonalweather.diagnostics.loader",
+]
+
+reload_roots = ["seasonalweather/configuration_reload"]
+reload_forbidden_imports = [
+  "fastapi",
+  "starlette",
+  "uvicorn",
+  "sqlalchemy",
+  "psycopg",
+  "redis",
+  "seasonalweather.api",
+  "seasonalweather.nwws",
+  "seasonalweather.worker",
+  "seasonalweather.workers",
+]
+reload_validation_roots = ["seasonalweather/configuration_reload/validation_job.py"]
+reload_validation_forbidden_imports = [
+  "seasonalweather.configuration_reload.resources",
+  "seasonalweather.configuration_reload.safe_point",
+  "seasonalweather.configuration_reload.service",
+  "seasonalweather.database",
+  "seasonalweather.main",
+]
+api_reload_composition_allowed = ["seasonalweather/api/server.py"]
+api_reload_authority_imports = [
+  "seasonalweather.configuration_reload.candidate_store",
+  "seasonalweather.configuration_reload.resources",
+  "seasonalweather.configuration_reload.safe_point",
+  "seasonalweather.configuration_reload.service",
+  "seasonalweather.configuration_reload.validation_job",
+  "seasonalweather.database.configuration_reload",
+]
+control_reload_authority_imports = [
+  "seasonalweather.configuration_reload",
+  "seasonalweather.database.configuration_reload",
+]
+cli_roots = ["seasonalweather/cli"]
+cli_reload_authority_imports = [
+  "seasonalweather.configuration_reload.candidate_store",
+  "seasonalweather.configuration_reload.resources",
+  "seasonalweather.configuration_reload.safe_point",
+  "seasonalweather.configuration_reload.service",
+  "seasonalweather.configuration_reload.validation_job",
+  "seasonalweather.database.configuration_reload",
 ]

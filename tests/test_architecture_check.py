@@ -37,6 +37,11 @@ def test_invalid_architecture_fixture_proves_rules_fail_closed():
         "SWARCH026",
         "SWARCH027",
         "SWARCH028",
+        "SWARCH029",
+        "SWARCH030",
+        "SWARCH031",
+        "SWARCH032",
+        "SWARCH033",
     }
     assert any("filesystem mutation" in finding.message for finding in findings)
 
@@ -135,3 +140,12 @@ def test_control_and_api_have_no_staged_validation_or_preflight_authority():
         assert "run_preflight(" not in source
         assert "ValidationReport(" not in source
         assert "verify_report(" not in source
+
+
+def test_control_has_no_duplicate_configuration_reload_authority():
+    source = (ROOT / "seasonalweather/control.py").read_text(encoding="utf-8")
+
+    assert "configuration_reload" not in source
+    assert "reload_config" not in source
+    assert "ReloadRepository" not in source
+    assert "SafePointCoordinator" not in source

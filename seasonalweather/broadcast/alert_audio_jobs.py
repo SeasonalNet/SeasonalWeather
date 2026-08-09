@@ -7,7 +7,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, AsyncContextManager, Literal
 
 from ..lifecycle import PublicationFence
 
@@ -50,12 +50,14 @@ class AlertAudioDispatcher:
         *,
         admission_check: Callable[[], None] | None = None,
         publication_fence: PublicationFence | None = None,
+        activity_context: Callable[[], AsyncContextManager[None]] | None = None,
     ) -> None:
         self._queue: asyncio.PriorityQueue[_QueuedAlertAudioJob] = asyncio.PriorityQueue()
         self._seq = itertools.count()
         self._started = False
         self._admission_check = admission_check
         self._publication_fence = publication_fence
+        self._activity_context = activity_context
 
     def start_supervised(self, supervisor: Any) -> None:
         if self._started:
@@ -124,6 +126,35 @@ class AlertAudioDispatcher:
         )
 
     async def submit(
+        self,
+        *,
+        priority: int,
+        mode: AlertAudioMode,
+        source: str,
+        render: RenderCallable,
+        push: PushCallable,
+        stale_check: StaleCheck | None = None,
+    ) -> Path:
+        if self._activity_context is not None:
+            async with self._activity_context():
+                return await self._submit(
+                    priority=priority,
+                    mode=mode,
+                    source=source,
+                    render=render,
+                    push=push,
+                    stale_check=stale_check,
+                )
+        return await self._submit(
+            priority=priority,
+            mode=mode,
+            source=source,
+            render=render,
+            push=push,
+            stale_check=stale_check,
+        )
+
+    async def _submit(
         self,
         *,
         priority: int,

@@ -22,6 +22,7 @@ from .contracts import (
     RelationshipCompletion,
     command_error_from_mapping,
     command_result_from_mapping,
+    request_command_cancellation,
     transition_command,
 )
 
@@ -117,7 +118,7 @@ class CommandStore:
 
     @staticmethod
     def _relationship_for(command_type: CommandType) -> CommandRelationshipPolicy:
-        if command_type is CommandType.CYCLE_REBUILD:
+        if command_type in {CommandType.CYCLE_REBUILD, CommandType.CONFIG_RELOAD}:
             return CommandRelationshipPolicy(
                 completion=RelationshipCompletion.CONTROLLER_FINALIZATION,
                 controller_finalization_required=True,
@@ -313,6 +314,30 @@ class CommandStore:
     async def mark_failed(self, command_id: str, error: dict[str, Any]) -> CommandRecord:
         return await self._transition(command_id, CommandStatus.FAILED, error=error)
 
+    async def request_cancellation(self, command_id: str) -> CommandRecord:
+        async with self._lock:
+            record = request_command_cancellation(await self._find(command_id), at=self._clock())
+            self._commands_by_id[command_id] = record
+            self._persist_record(record)
+        await self._broker.publish(
+            "command.cancellation_requested",
+            {"command_id": record.command_id, "command_type": record.command_type.value},
+        )
+        return record
+
+    async def mark_cancelled(self, command_id: str) -> CommandRecord:
+        return await self._transition(command_id, CommandStatus.CANCELLED)
+
     async def get(self, command_id: str) -> CommandRecord:
         async with self._lock:
             return await self._find(command_id)
+
+    def cancellation_requested(self, command_id: str) -> bool:
+        """Read cancellation without awaiting while the safety gate is held."""
+        record = self._commands_by_id.get(command_id)
+        if record is not None:
+            return record.cancel_requested_at is not None
+        if self._repo is None:
+            return False
+        raw = self._repo.get_by_command_id(command_id)
+        return raw is not None and raw.get("cancel_requested_at") is not None

@@ -100,7 +100,10 @@ class MaintenanceReconcilePayloadV1(JobSchema):
 
 class ConfigValidationPayloadV1(JobSchema):
     candidate_ref: str
+    candidate_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    candidate_identity_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     current_generation: int = Field(ge=0)
+    preflight_required: bool = True
 
     _candidate_ref = field_validator("candidate_ref")(lambda value: _validate_ref(value, "candidate_ref"))
 
@@ -166,15 +169,21 @@ class ReconcileResultV1(JobSchema):
 
 class ConfigValidationResultV1(JobSchema):
     candidate_ref: str
+    candidate_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    candidate_identity_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    report_ref: str
+    report_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     valid: bool
+    preflight_ready: bool
     issue_codes: tuple[str, ...] = Field(default_factory=tuple, max_length=64)
 
     _candidate_ref = field_validator("candidate_ref")(lambda value: _validate_ref(value, "candidate_ref"))
+    _report_ref = field_validator("report_ref")(lambda value: _validate_ref(value, "report_ref"))
 
     @field_validator("issue_codes")
     @classmethod
     def validate_issue_codes(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        if any(not _KEY_RE.fullmatch(item) for item in value):
+        if any(not (_KEY_RE.fullmatch(item) or re.fullmatch(r"^[A-Z]{4,8}[0-9]{4}$", item)) for item in value):
             raise ValueError("issue codes must be bounded declared keys")
         return value
 

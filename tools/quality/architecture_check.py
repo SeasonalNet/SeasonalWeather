@@ -236,6 +236,50 @@ def scan(root: Path, config: dict[str, Any], exceptions: list[dict[str, Any]] | 
                             )
                         )
 
+        if _under(relative, config.get("reload_roots", [])):
+            for imported, line in imports:
+                if _matches_prefix(imported, config.get("reload_forbidden_imports", [])):
+                    findings.append(
+                        Finding(
+                            relative,
+                            line,
+                            "SWARCH029",
+                            f"reload package imports future or deployment authority {imported}",
+                        )
+                    )
+
+        if _under(relative, config.get("reload_validation_roots", [])):
+            for imported, line in imports:
+                if _matches_prefix(imported, config.get("reload_validation_forbidden_imports", [])):
+                    findings.append(
+                        Finding(
+                            relative, line, "SWARCH030", f"reload validation imports active-state authority {imported}"
+                        )
+                    )
+
+        if _under(relative, config.get("api_roots", [])) and relative not in config.get(
+            "api_reload_composition_allowed", []
+        ):
+            for imported, line in imports:
+                if _matches_prefix(imported, config.get("api_reload_authority_imports", [])):
+                    findings.append(
+                        Finding(relative, line, "SWARCH031", f"API route imports reload mutation authority {imported}")
+                    )
+
+        if relative == "seasonalweather/control.py":
+            for imported, line in imports:
+                if _matches_prefix(imported, config.get("control_reload_authority_imports", [])):
+                    findings.append(
+                        Finding(relative, line, "SWARCH032", f"control module retains reload authority {imported}")
+                    )
+
+        if _under(relative, config.get("cli_roots", [])):
+            for imported, line in imports:
+                if _matches_prefix(imported, config.get("cli_reload_authority_imports", [])):
+                    findings.append(
+                        Finding(relative, line, "SWARCH033", f"CLI imports reload mutation authority {imported}")
+                    )
+
         if _under(relative, config.get("contract_roots", [])):
             for imported, line in imports:
                 if _matches_prefix(imported, config.get("contract_forbidden_imports", [])):

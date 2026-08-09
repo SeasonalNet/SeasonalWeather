@@ -200,6 +200,10 @@ class OriginateAudioRequest(OriginateBaseRequest):
 
 class ConfigReloadRequest(ApiModel):
     reason: str | None = Field(default=None, min_length=3, max_length=160)
+    dry_run: bool = False
+    expected_generation: int | None = Field(default=None, ge=0)
+    safe_point_timeout_seconds: float = Field(default=30.0, ge=0.1, le=120.0)
+    acknowledgment: ConfigWarningAcknowledgment | None = None
 
     @field_validator("reason")
     @classmethod
@@ -208,6 +212,35 @@ class ConfigReloadRequest(ApiModel):
             return None
         if not _PRINTABLE_RE.fullmatch(value):
             raise ValueError("reason contains unsupported characters")
+        return value
+
+
+class ConfigWarningAcknowledgment(ApiModel):
+    schema_version: Literal[1] = 1
+    actor: str = Field(min_length=1, max_length=128)
+    candidate_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    candidate_identity_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    report_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    active_generation: int = Field(ge=0)
+    warning_identities: list[str] = Field(min_length=1, max_length=128)
+    acknowledged_at: dt.datetime
+    validator_completed_at: dt.datetime
+    expires_at: dt.datetime
+    maximum_age_seconds: Literal[300]
+    clock_skew_seconds: Literal[5]
+
+    @field_validator("warning_identities")
+    @classmethod
+    def _validate_warning_identities(cls, value: list[str]) -> list[str]:
+        if value != sorted(set(value)) or any(not re.fullmatch(r"^warning:[a-f0-9]{24}$", item) for item in value):
+            raise ValueError("warning identities must be an exact sorted set")
+        return value
+
+    @field_validator("acknowledged_at", "validator_completed_at", "expires_at")
+    @classmethod
+    def _validate_acknowledged_at(cls, value: dt.datetime) -> dt.datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("acknowledged_at must include a timezone offset")
         return value
 
 

@@ -1,16 +1,23 @@
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import hashlib
+import threading
 import wave
+from types import SimpleNamespace
 
 import pytest
 
-from seasonalweather.artifacts.integration import ArtifactResultCoordinator, CurrentArtifactAuthority
+from seasonalweather.artifacts.composition import build_controller_artifact_composition
 from seasonalweather.artifacts.models import ArtifactClass, ArtifactReference, ArtifactResult, MediaMetadata
-from seasonalweather.artifacts.promotion import PromotionService
-from seasonalweather.artifacts.service import ArtifactService
-from seasonalweather.artifacts.staging import StagingService
+from seasonalweather.configuration_reload.safe_point import (
+    PUBLICATION,
+    WORKER_RESULT,
+    ActivityRegistry,
+    SafePointCoordinator,
+    SafePointTimeout,
+)
 from seasonalweather.job_store import DurableJobService, JobDatabase, JobRepository, JobScheduler
 from seasonalweather.jobs.policies import JobType
 from seasonalweather.lifecycle import Lifecycle
@@ -38,7 +45,7 @@ def test_swwp_artifact_result_promotes_then_commits_and_replays(tmp_path) -> Non
         config_generation=7,
     )
     scheduler = JobScheduler(repository, lifecycle, lease_seconds=60, acknowledgment_seconds=10, clock=lambda: NOW)
-    staging_dir = tmp_path / "staging" / "worker_00000001"
+    staging_dir = tmp_path / "worker-artifacts" / "staging" / "worker_00000001"
     staging_dir.mkdir(parents=True)
     staged = staging_dir / "result.wav"
     with wave.open(str(staged), "wb") as writer:
@@ -64,24 +71,36 @@ def test_swwp_artifact_result_promotes_then_commits_and_replays(tmp_path) -> Non
         ),
     )
     injected = {"armed": True}
+    activities = ActivityRegistry()
+    observed_activities: list[frozenset[str]] = []
+    promotion_entered = threading.Event()
+    release_promotion = threading.Event()
 
     def fail_after_result_commit(stage: str) -> None:
+        if stage == "after_replace" and injected["armed"]:
+            promotion_entered.set()
+            assert release_promotion.wait(timeout=1.0)
         if stage == "after_result_commit" and injected["armed"]:
+            observed_activities.append(frozenset(activities.blockers()))
             injected["armed"] = False
             raise RuntimeError("lost result acknowledgment")
 
-    artifact_service = ArtifactService(
-        StagingService(tmp_path / "staging", tmp_path / "blobs", maximum_bytes=8192),
-        PromotionService(tmp_path / "active", maximum_bytes=8192),
+    orch = SimpleNamespace(
+        reload_activities=activities,
+        lifecycle=lifecycle,
+        configuration_generation=7,
+    )
+    composition = build_controller_artifact_composition(
+        orch,
         repository,
-        clock=lambda: NOW,
-        failure_injector=fail_after_result_commit,
+        work_root=tmp_path,
+        maximum_bytes=8192,
     )
-    coordinator = ArtifactResultCoordinator(
-        artifact_service,
-        authority=lambda _: CurrentArtifactAuthority(7, None, None, "content_00000001"),
-        target_policy=lambda _: "current.wav",
-    )
+    assert composition.activities is activities
+    artifact_service = composition.service
+    artifact_service._clock = lambda: NOW
+    artifact_service._failure_injector = fail_after_result_commit
+    coordinator = composition.results
     adapter = JobStoreSwwpAdapter(scheduler, repository, artifact_results=coordinator)
     assignment = scheduler.assign(owner="worker_00000001", capabilities=("tts.synthesis.v1",))
     assert assignment is not None
@@ -109,13 +128,48 @@ def test_swwp_artifact_result_promotes_then_commits_and_replays(tmp_path) -> Non
         result=result.model_dump(mode="json"),
         completion_id="completion_00000001",
     )
-    with pytest.raises(RuntimeError, match="lost result acknowledgment"):
+    orch.configuration_generation = 8
+    with pytest.raises(ValueError, match="stale_configuration_generation"):
         adapter.result(message)
+    orch.configuration_generation = 7
+    failure: list[BaseException] = []
+
+    def promote() -> None:
+        try:
+            adapter.result(message)
+        except BaseException as exc:
+            failure.append(exc)
+
+    thread = threading.Thread(target=promote, daemon=True)
+    thread.start()
+    assert promotion_entered.wait(timeout=1.0)
+    with pytest.raises(SafePointTimeout) as blocked:
+        asyncio.run(SafePointCoordinator(activities, poll_interval_seconds=0.001).acquire(0.01))
+    assert blocked.value.snapshot.blockers == (PUBLICATION, WORKER_RESULT)
+    release_promotion.set()
+    thread.join(timeout=1.0)
+    assert not thread.is_alive()
+    assert len(failure) == 1 and isinstance(failure[0], RuntimeError)
+    assert observed_activities == [frozenset({PUBLICATION, WORKER_RESULT})]
     assert repository.get(admitted.job.job_id).status.value == "succeeded"
     assert (
         repository.artifact_receipt(admitted.job.job_id, assignment.attempt_id).disposition == "reconciliation_required"
     )
-    assert (tmp_path / "active" / "current.wav").read_bytes() == data
+    active_files = tuple((tmp_path / "worker-artifacts" / "active").iterdir())
+    assert len(active_files) == 1 and active_files[0].read_bytes() == data
     receipt = adapter.result(message)
     assert repository.artifact_receipt(admitted.job.job_id, assignment.attempt_id).disposition == "committed"
     assert adapter.result(message).result_hash == receipt.result_hash
+
+    async def new_result_waits_for_commit_gate() -> None:
+        lease = await SafePointCoordinator(activities, poll_interval_seconds=0.001).acquire(0.2)
+        completed = threading.Event()
+        replay = threading.Thread(target=lambda: (adapter.result(message), completed.set()), daemon=True)
+        replay.start()
+        await asyncio.sleep(0.01)
+        assert not completed.is_set()
+        lease.release()
+        replay.join(timeout=1.0)
+        assert completed.is_set() and not replay.is_alive()
+
+    asyncio.run(new_result_waits_for_commit_gate())

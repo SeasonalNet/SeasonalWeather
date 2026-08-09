@@ -67,6 +67,17 @@ RUNTIME_CODES = MappingProxyType(
     }
 )
 
+RELOAD_CODES = MappingProxyType(
+    {
+        "operator_action_required": "SWCFG0004",
+        "unclassified_change": "SWCFG2005",
+        "candidate_or_preparation_failed": "SWCFG3003",
+        "retirement_pending": "SWCFG4003",
+        "safe_point_timeout": "SWCFG7008",
+        "reconciliation_required": "SWCFG8001",
+    }
+)
+
 
 def binding_for_rule(rule_id: str) -> RuleCodeBinding:
     try:

@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ..auth.service import AuthenticationError, AuthenticationService
+from ..configuration_reload.models import ReloadRequest, WarningAcknowledgment
 from ..control import ControlError, OrchestratorControl
 from ..health_service import (
     ComponentProbe,
@@ -239,6 +240,7 @@ def create_app(
     auth_service: AuthenticationService | None = None,
     health_service: HealthService | None = None,
     lifecycle: Lifecycle | None = None,
+    reload_service: Any | None = None,
 ) -> FastAPI:
     command_store = store or CommandStore()
     if health_service is None:
@@ -265,6 +267,7 @@ def create_app(
     app.state.auth_service = auth_service
     app.state.health_service = health_service
     app.state.lifecycle = lifecycle
+    app.state.reload_service = reload_service
     install_openapi(app)
 
     @app.middleware("http")
@@ -798,6 +801,7 @@ def create_app(
     @app.post(
         "/v1/config/reload",
         response_model=CommandAccepted,
+        status_code=202,
         tags=["configuration"],
         summary="Reload runtime configuration where hot reload is safe.",
         responses=STANDARD_PROBLEM_RESPONSES,
@@ -807,16 +811,56 @@ def create_app(
         principal: ApiPrincipal = Depends(require_route_policy("POST", "/v1/config/reload")),
         idempotency_key: str = Depends(_require_idempotency_key),
     ) -> CommandAccepted:
-        payload = req.model_dump(mode="json")
-        return await _execute_command(
-            store=command_store,
-            principal=principal,
-            idempotency_key=idempotency_key,
-            command_type="config.reload",
-            payload=payload,
-            action=lambda: control.reload_config(actor=principal.subject, reason=req.reason),
-            success_event="config.reloaded",
+        if reload_service is None:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "config_reload_unavailable", "message": "Transactional reload is unavailable."},
+            )
+        if req.acknowledgment is not None and req.acknowledgment.actor != principal.subject:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "warning_acknowledgment_actor_mismatch",
+                    "message": "Warning acknowledgment belongs to a different principal.",
+                },
+            )
+        acknowledgment = (
+            WarningAcknowledgment(
+                actor=req.acknowledgment.actor,
+                candidate_sha256=req.acknowledgment.candidate_sha256,
+                candidate_identity_sha256=req.acknowledgment.candidate_identity_sha256,
+                report_sha256=req.acknowledgment.report_sha256,
+                active_generation=req.acknowledgment.active_generation,
+                warning_identities=tuple(req.acknowledgment.warning_identities),
+                acknowledged_at=req.acknowledgment.acknowledged_at,
+                validator_completed_at=req.acknowledgment.validator_completed_at,
+                expires_at=req.acknowledgment.expires_at,
+                maximum_age_seconds=req.acknowledgment.maximum_age_seconds,
+                clock_skew_seconds=req.acknowledgment.clock_skew_seconds,
+                schema_version=req.acknowledgment.schema_version,
+            )
+            if req.acknowledgment is not None
+            else None
         )
+        record, replayed = await reload_service.admit(
+            ReloadRequest(
+                actor=principal.subject,
+                reason=req.reason,
+                dry_run=req.dry_run,
+                expected_generation=req.expected_generation,
+                safe_point_timeout_seconds=req.safe_point_timeout_seconds,
+                acknowledgment=acknowledgment,
+                authorization_context={
+                    "kind": principal.kind,
+                    "scopes": tuple(sorted(principal.scopes)),
+                    "client_host": principal.client_host,
+                    "client_id": principal.client_id,
+                    "token_id": principal.token_id,
+                },
+            ),
+            idempotency_key=idempotency_key,
+        )
+        return _command_accepted(record, replayed=replayed)
 
     @app.get(
         "/v1/events",

@@ -15,12 +15,19 @@ import uvicorn
 
 from seasonalweather import __version__
 
+from ..artifacts.composition import build_controller_artifact_composition
 from ..auth import AuthenticationRepository, AuthenticationService
 from ..commands import CommandStore
 from ..config import AuthMode, load_config
+from ..configuration_reload.candidate_store import CandidateStore
+from ..configuration_reload.resources import OrchestratorResourcePreparer
+from ..configuration_reload.safe_point import SafePointCoordinator, orchestrator_blockers
+from ..configuration_reload.service import ConfigurationReloadService
+from ..configuration_reload.validation_job import ValidationJobRunner
 from ..control import OrchestratorControl
 from ..database.bootstrap import bootstrap_database_from_config
-from ..diagnostics.bindings import RUNTIME_CODES
+from ..database.configuration_reload import ReloadRepository
+from ..diagnostics.bindings import RELOAD_CODES, RUNTIME_CODES
 from ..health_service import build_runtime_health_service
 from ..job_store import (
     CommandJobCoordinator,
@@ -230,6 +237,43 @@ def _promote_optional_failure(
     service.promote(instance)
 
 
+def _reload_diagnostic_promoter(
+    service: RuntimeDiagnosticService | None,
+    controller_context: CorrelationContext,
+) -> Callable[[str, str, BaseException], None]:
+    def promote(code: str, component: str, exception: BaseException) -> None:
+        if service is None:
+            return
+        if code == RELOAD_CODES["retirement_pending"]:
+            reason = PromotionReason.DEGRADATION
+        elif code == RELOAD_CODES["safe_point_timeout"]:
+            reason = PromotionReason.OPERATOR_ATTENTION
+        else:
+            reason = PromotionReason.RECONCILIATION
+        try:
+            service.promote(
+                service.build(
+                    code=code,
+                    context=CorrelationContext(
+                        role=DiagnosticRole.CONTROLLER,
+                        instance_id=controller_context.instance_id,
+                        component=component,
+                        build_identity=controller_context.build_identity,
+                        reason_code="configuration_reload_failure",
+                    ),
+                    message="Transactional configuration reload requires operational attention.",
+                    operational_effect="The reload audit records whether the old or new generation remains active.",
+                    recovery_action="Inspect the bounded reload audit and follow the catalog recovery guidance.",
+                    promotion_reason=reason,
+                    exception=exception,
+                )
+            )
+        except BaseException:
+            log.exception("configuration_reload_diagnostic_promotion_failed")
+
+    return promote
+
+
 async def run_api_server(*, config_path: str, host: str, port: int) -> None:
     instance_id = f"controller_{uuid.uuid4().hex}"
     context = CorrelationContext(
@@ -308,6 +352,35 @@ async def _run_api_server_impl(
         database_available=db is not None,
         reconciliation_batch_size=cfg.jobs.reconciliation_batch_size,
     )
+    artifact_composition = None
+    if job_service is not None:
+        artifact_composition = build_controller_artifact_composition(
+            orch,
+            job_service.repository,
+            work_root=Path(cfg.paths.work_dir),
+            maximum_bytes=cfg.jobs.result_max_bytes,
+        )
+        orch.artifact_service = artifact_composition.service
+        orch.artifact_results = artifact_composition.results
+    reload_service = None
+    if db is not None and job_service is not None:
+        candidate_store = CandidateStore(Path(cfg.paths.work_dir) / "configuration-candidates")
+        reload_service = ConfigurationReloadService(
+            config_path=config_path,
+            candidate_store=candidate_store,
+            repository=ReloadRepository(db),
+            command_store=command_store,
+            validation_jobs=ValidationJobRunner(candidate_store, job_service),
+            resource_preparer=OrchestratorResourcePreparer(orch, orch.reload_activities),
+            safe_points=SafePointCoordinator(
+                orch.reload_activities,
+                external_blockers=lambda: orchestrator_blockers(orch),
+            ),
+            active_configuration=orch.cfg,
+            supervisor=supervisor,
+            diagnostic_promoter=_reload_diagnostic_promoter(diagnostic_service, context),
+        )
+        await reload_service.reconcile_startup()
     health_service = build_runtime_health_service(
         orch,
         command_store=command_store,
@@ -320,6 +393,7 @@ async def _run_api_server_impl(
         auth_service=auth_service,
         health_service=health_service,
         lifecycle=lifecycle,
+        reload_service=reload_service,
     )
 
     server = _ControllerOwnedUvicornServer(

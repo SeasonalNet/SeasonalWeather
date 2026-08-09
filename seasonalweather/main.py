@@ -10,21 +10,32 @@ from __future__ import annotations
 #      MMMMMMMMMMM                                                Seasonal_Currency      MMMMMMMMMMM                                                            .88
 #                                                                                                                                                           d8888P.
 # =========================================================================================
-
 import argparse
 import asyncio
 import datetime as dt
 import hashlib
 import logging
-import time
 import sys
-
-import re
+import time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from .config import load_config, AppConfig
-from .logging_config import setup_logging
+from .config import AppConfig, load_config
+from .configuration_reload.safe_point import (
+    ALERT as RELOAD_ALERT_ACTIVITY,
+)
+from .configuration_reload.safe_point import (
+    CONDUCTOR as RELOAD_CONDUCTOR_ACTIVITY,
+)
+from .configuration_reload.safe_point import (
+    SEGMENT_REFRESH as RELOAD_SEGMENT_ACTIVITY,
+)
+from .configuration_reload.safe_point import (
+    TTS as RELOAD_TTS_ACTIVITY,
+)
+from .configuration_reload.safe_point import (
+    ActivityRegistry,
+)
 from .lifecycle import (
     Lifecycle,
     LifecycleState,
@@ -32,63 +43,72 @@ from .lifecycle import (
     TaskSupervisor,
     WorkClass,
 )
+from .logging_config import setup_logging
 
 # Module-level config reference — set once at startup before Orchestrator is created.
-_APP_CFG: "AppConfig | None" = None
-from .alerts.nws_api import NWSApi
-from .alerts.product import parse_product_text, ParsedProduct
-from .tts.tts import TTS
-from .tts.audio import wav_duration_seconds
-from .liquidsoap_telnet import LiquidsoapTelnet
-from .broadcast.cycle import CycleBuilder, CycleContext
-from .broadcast.segment_store import SegmentStore
-from .broadcast.conductor import CycleConductor
-from .broadcast.segment_refresher import SegmentRefresher
-from .broadcast.cap_text import CapTextRenderer
-from .broadcast.audio_origination import AudioOriginator, safe_event_code as _safe_event_code
-from .broadcast.alert_audio_jobs import AlertAudioDispatcher
-from .broadcast.ern_relay_runtime import ErnRelayRuntime
-from .broadcast.ipaws_runtime import IpawsRuntime
-from .broadcast.cap_runtime import CapRuntime
-from .broadcast.nwws_runtime import NwwsRuntime
-from .broadcast.pns_runtime import PnsRuntime
-from .broadcast.now_runtime import NowRuntime
-from .broadcast.tests_runtime import RequiredTestRuntime
-from .broadcast.manual_runtime import ManualOriginationRuntime
-from .broadcast.service_runtime import SeasonalWeatherServiceRuntime
-from .broadcast.cap_policy import best_expiry_from_vtec, cap_vtec_list
-
+_APP_CFG: AppConfig | None = None
 # Active alert tracker (persistent cycle state across restarts)
 from .alerts.active import AlertTracker
+from .alerts.nws_api import NWSApi
+from .alerts.product import ParsedProduct, parse_product_text
+
+# VTEC policy + SAME event code libraries — Orchestrator defers to these.
+from .alerts.vtec import (
+    VTEC_FIND_RE as _VTEC_FIND_RE,
+)
+from .alerts.vtec import (
+    VTEC_PARSE_RE as _VTEC_PARSE_RE,
+)
+from .broadcast.alert_audio_jobs import AlertAudioDispatcher
+from .broadcast.audio_origination import AudioOriginator
+from .broadcast.audio_origination import safe_event_code as _safe_event_code
+from .broadcast.cap_policy import best_expiry_from_vtec, cap_vtec_list
+from .broadcast.cap_runtime import CapRuntime
+from .broadcast.cap_text import CapTextRenderer
+from .broadcast.conductor import CycleConductor
+from .broadcast.cycle import CycleBuilder, CycleContext
+from .broadcast.ern_relay_runtime import ErnRelayRuntime
+from .broadcast.ern_script import (
+    _parse_duration_minutes as _ern_parse_duration_minutes,
+)
+from .broadcast.ern_script import (
+    _same_jday_to_utc as _ern_same_jday_to_utc,
+)
+from .broadcast.ipaws_runtime import IpawsRuntime
+from .broadcast.manual_runtime import ManualOriginationRuntime
+from .broadcast.now_runtime import NowRuntime
+from .broadcast.nwws_runtime import NwwsRuntime
+from .broadcast.pns_runtime import PnsRuntime
+from .broadcast.segment_refresher import SegmentRefresher
+from .broadcast.segment_store import SegmentStore
+from .broadcast.service_runtime import SeasonalWeatherServiceRuntime
+from .broadcast.tests_runtime import RequiredTestRuntime
 from .database.bootstrap import bootstrap_database_from_config
 from .database.housekeeping import DatabaseHousekeeper
 from .database.inserts import CycleInsertRepository
 from .database.station_feed import StationFeedRepository
 from .discord_log import DiscordLogger
 from .health_state import HealthStateMachine
-from .broadcast.ern_script import (
-    _parse_duration_minutes as _ern_parse_duration_minutes,
-    _same_jday_to_utc as _ern_same_jday_to_utc,
-)
-
-# VTEC policy + SAME event code libraries — Orchestrator defers to these.
-from .alerts.vtec import (
-    VTEC_FIND_RE as _VTEC_FIND_RE,
-    VTEC_PARSE_RE as _VTEC_PARSE_RE,
-)
-from .same.targeting import SameTargetResolver
+from .liquidsoap_telnet import LiquidsoapTelnet
 from .same.locations import normalize_same_allow_set as _normalize_same_allow_set
-
+from .same.targeting import SameTargetResolver
+from .tts.audio import wav_duration_seconds
+from .tts.tts import TTS
 
 log = logging.getLogger("seasonalweather")
 
 from .broadcast.station_feed_runtime import (
-    set_app_config as _sf_set_app_config,
-    set_repository as _sf_set_repository,
-    station_feed_housekeeping_start as _sf_station_feed_hk_start,
     remove_ern_relays_matching as _sf_remove_ern_relays_matching,
 )
-
+from .broadcast.station_feed_runtime import (
+    set_app_config as _sf_set_app_config,
+)
+from .broadcast.station_feed_runtime import (
+    set_repository as _sf_set_repository,
+)
+from .broadcast.station_feed_runtime import (
+    station_feed_housekeeping_start as _sf_station_feed_hk_start,
+)
 
 # _VTEC_FIND_RE and _VTEC_PARSE_RE are now imported from .alerts.vtec above.
 
@@ -116,6 +136,10 @@ class Orchestrator:
         self.lifecycle = lifecycle or Lifecycle(cfg.lifecycle)
         self.supervisor = supervisor or TaskSupervisor(self.lifecycle)
         self.publication_fence = PublicationFence(self.lifecycle)
+        self.reload_activities = ActivityRegistry()
+        self.artifact_service: object | None = None
+        self.artifact_results: object | None = None
+        self.configuration_generation = 0
         self.api = NWSApi()
         self.telnet = LiquidsoapTelnet(
             host=cfg.secrets.liquidsoap_host,
@@ -151,6 +175,7 @@ class Orchestrator:
             text_overrides=cfg.tts.text_overrides,
             vtp_cfg=cfg.tts.voicetext_paul,
             admission_check=lambda: self.lifecycle.require(WorkClass.TTS),
+            activity_context=lambda: self.reload_activities.activity(RELOAD_TTS_ACTIVITY),
         )
 
         self.mode = "normal"
@@ -216,11 +241,9 @@ class Orchestrator:
         self._dedupe_lock = asyncio.Lock()
         self._recent_air_keys: dict[str, dt.datetime] = {}
 
-
         # --- NWWS decision visibility counters ---
         self._nwws_seen = 0
         self._nwws_acted = 0
-
 
         # --- Embedded SQLite runtime state ---
         self.database = bootstrap_database_from_config(cfg) if getattr(cfg.database, "enabled", True) else None
@@ -253,6 +276,7 @@ class Orchestrator:
         self.alert_audio = AlertAudioDispatcher(
             admission_check=lambda: self.lifecycle.require(WorkClass.ALERT),
             publication_fence=self.publication_fence,
+            activity_context=lambda: self.reload_activities.async_activity(RELOAD_ALERT_ACTIVITY),
         )
         self.ern_relay_runtime = ErnRelayRuntime(self)
         self.ipaws_runtime = IpawsRuntime(self)
@@ -263,7 +287,6 @@ class Orchestrator:
         self.tests_runtime = RequiredTestRuntime(self)
         self.manual_runtime = ManualOriginationRuntime(self)
         self.service_runtime = SeasonalWeatherServiceRuntime(self)
-
 
         # SegmentStore: persistent per-segment audio cache.
         # Placed last so alert_tracker and all other attributes are available.
@@ -287,9 +310,8 @@ class Orchestrator:
             disclaimer=cfg.station.disclaimer,
             tz=self._tz,
             sample_rate=cfg.audio.sample_rate,
-            on_alert_segments_changed=lambda reason: self.conductor.notify_flush(
-                reset_rotation=True, reason=reason
-            ),
+            on_alert_segments_changed=lambda reason: self.conductor.notify_flush(reset_rotation=True, reason=reason),
+            activity_context=lambda: self.reload_activities.async_activity(RELOAD_SEGMENT_ACTIVITY),
         )
 
         # CycleConductor: continuous cycle driver.  Flush notifications restart
@@ -309,12 +331,13 @@ class Orchestrator:
             alert_focus_policy=cfg.cycle.alert_focus,
             scheduled_inserts_fn=self._cycle_due_inserts,
             mark_insert_aired_fn=self._mark_cycle_insert_aired,
+            activity_context=lambda: self.reload_activities.async_activity(RELOAD_CONDUCTOR_ACTIVITY),
         )
         self.alert_tracker.set_change_callback(self._on_alert_tracker_changed)
 
     def _utc_iso(self, value: dt.datetime | None = None) -> str:
-        when = value or dt.datetime.now(dt.timezone.utc)
-        return when.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat()
+        when = value or dt.datetime.now(dt.UTC)
+        return when.astimezone(dt.UTC).replace(microsecond=0).isoformat()
 
     def _cycle_due_inserts(self, placement: str, rotation_count: int, focus: bool) -> list[dict]:
         repo = getattr(self, "cycle_insert_repo", None)
@@ -348,7 +371,6 @@ class Orchestrator:
             self.conductor.notify_flush(reset_rotation=True, reason=f"alert-state:{reason}")
         except Exception:
             log.debug("AlertTracker change: conductor notify failed", exc_info=True)
-
 
     # --- Now Playing / IP-RDS helpers (edit phrases freely) ---
 
@@ -409,7 +431,6 @@ class Orchestrator:
         tpl = self._NP_ALERT_TEMPLATES.get(template_key, self._NP_ALERT_TEMPLATES["default"])
         return tpl.format(event=(event or "Alert").strip())
 
-
     def _norm_wfo_set(self, wfos: list[str] | set[str] | tuple[str, ...]) -> set[str]:
         """
         Normalizes allowed WFOs so YAML can use LWX or KLWX interchangeably.
@@ -442,7 +463,7 @@ class Orchestrator:
             await asyncio.sleep(1)
         raise RuntimeError("Liquidsoap telnet did not become reachable (is seasonalweather-liquidsoap running?)")
 
-    def _make_cycle_ctx(self) -> "CycleContext":
+    def _make_cycle_ctx(self) -> CycleContext:
         """Return a CycleContext reflecting current station state.
         Used by SegmentRefresher so it can build segments without holding
         a reference to the full Orchestrator.
@@ -551,7 +572,6 @@ class Orchestrator:
         blob = code_u + "|" + ",".join(locs_norm)
         return f"FUNC_FULL:{code_u}:{self._sha1_12(blob)}"
 
-
     async def _push_interrupt_audio(self, wav_path, *, meta: dict[str, str] | None = None, full: bool = False) -> None:
         """Push rendered interrupt audio to the proper Liquidsoap priority plane.
 
@@ -644,7 +664,6 @@ class Orchestrator:
                     "Liquidsoap does not expose sw.cycle.reset; cycle freshness protection is disabled for this interrupt"
                 )
 
-
     async def _render_and_push_interrupt_audio(
         self,
         *,
@@ -707,7 +726,6 @@ class Orchestrator:
                 log.debug("Discord audio pipeline failure audit failed", exc_info=True)
             raise
 
-
     def _nwws_api_product_matches_raw(self, parsed: ParsedProduct, api_text: str) -> bool:
         """
         Accept an api.weather.gov product override only when it appears to be the
@@ -753,8 +771,6 @@ class Orchestrator:
 
         # No VTEC in raw payload: fall back to AWIPS/WFO agreement only.
         return True
-
-
 
     def _extract_vtec(self, text: str) -> list[str]:
         if not text:
@@ -829,7 +845,7 @@ class Orchestrator:
 
     def _alert_expires_from_ern(self, ev) -> str:
         """Best-effort expiry ISO for an ERN SAME relay from JJJHHMM + TTTT."""
-        now_utc = dt.datetime.now(dt.timezone.utc)
+        now_utc = dt.datetime.now(dt.UTC)
         start_utc = _ern_same_jday_to_utc(getattr(ev, "jjjhhmm", None), now_utc=now_utc)
         duration_min = _ern_parse_duration_minutes(getattr(ev, "tttt", None))
         if start_utc is not None and duration_min is not None:

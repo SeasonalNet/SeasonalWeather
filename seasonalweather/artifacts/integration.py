@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 
 from ..job_store.models import JobAssignment, ResultCommitReceipt
@@ -33,12 +34,25 @@ class ArtifactResultCoordinator:
         *,
         authority: Callable[[JobAssignment], CurrentArtifactAuthority],
         target_policy: Callable[[JobAssignment], str],
+        activity_context: Callable[[], AbstractContextManager[None]] | None = None,
     ) -> None:
         self.service = service
         self.authority = authority
         self.target_policy = target_policy
+        self.activity_context = activity_context
 
     def accept(
+        self,
+        assignment: JobAssignment,
+        message: JobResult,
+        commit: Callable[[dict[str, object]], ResultCommitReceipt],
+    ) -> ResultCommitReceipt:
+        if self.activity_context is not None:
+            with self.activity_context():
+                return self._accept(assignment, message, commit)
+        return self._accept(assignment, message, commit)
+
+    def _accept(
         self,
         assignment: JobAssignment,
         message: JobResult,
