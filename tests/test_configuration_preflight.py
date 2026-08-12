@@ -26,6 +26,7 @@ from seasonalweather.validation import (
 )
 from seasonalweather.validation.preflight import (
     LocalPathSpecification,
+    _poll_worker,
     _SpawnProbeExecutor,
 )
 
@@ -113,6 +114,79 @@ def _read_pid_pair(path: Path) -> tuple[int, int] | None:
         return int(values[0]), int(values[1])
     except (OSError, ValueError):
         return None
+
+
+class _QueuedWorkerPipe:
+    def __init__(self, messages: list[object], *, eof: bool = False) -> None:
+        self.messages = messages
+        self.eof = eof
+
+    def poll(self) -> bool:
+        return bool(self.messages) or self.eof
+
+    def recv(self) -> object:
+        if self.messages:
+            return self.messages.pop(0)
+        raise EOFError
+
+
+class _ScriptedWorker:
+    pid = 12345
+
+    def __init__(self, alive: bool) -> None:
+        self.alive = alive
+
+    def is_alive(self) -> bool:
+        return self.alive
+
+
+def _poll_protocol(
+    messages: list[object], *, eof: bool = False, alive: bool = False
+) -> tuple[ProbeObservation, ProbeFailureKind | None]:
+    receiver = _QueuedWorkerPipe(messages, eof=eof)
+    worker = _ScriptedWorker(alive)
+    return asyncio.run(
+        _poll_worker(
+            receiver,  # type: ignore[arg-type]
+            worker,
+            deadline=1.0,
+            monotonic=lambda: 0.0,
+        )
+    )
+
+
+def test_poll_worker_dead_after_ready_prefers_queued_result() -> None:
+    observation, failure_kind = _poll_protocol(
+        [("ready", None), ("result", ProbeObservation(ProbeStatus.AVAILABLE, "available"))]
+    )
+
+    assert observation.status is ProbeStatus.AVAILABLE
+    assert failure_kind is None
+
+
+def test_poll_worker_dead_after_ready_without_result_is_internal_failure() -> None:
+    observation, failure_kind = _poll_protocol([("ready", None)], eof=True)
+
+    assert observation.status is ProbeStatus.INDETERMINATE
+    assert failure_kind is ProbeFailureKind.INTERNAL_FAILURE
+
+
+def test_poll_worker_error_terminal_message_is_internal_failure() -> None:
+    observation, failure_kind = _poll_protocol([("ready", None), ("error", "RuntimeError")])
+
+    assert observation.status is ProbeStatus.INDETERMINATE
+    assert failure_kind is ProbeFailureKind.INTERNAL_FAILURE
+
+
+def test_poll_worker_deadline_expiry_is_timeout() -> None:
+    receiver = _QueuedWorkerPipe([])
+    worker = _ScriptedWorker(alive=True)
+    observation, failure_kind = asyncio.run(
+        _poll_worker(receiver, worker, deadline=1.0, monotonic=lambda: 1.0)  # type: ignore[arg-type]
+    )
+
+    assert observation.status is ProbeStatus.INDETERMINATE
+    assert failure_kind is ProbeFailureKind.TIMEOUT
 
 
 def test_required_optional_degraded_and_exception_results_are_policy_distinct() -> None:

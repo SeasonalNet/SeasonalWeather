@@ -373,6 +373,35 @@ def _signal_process_group(group_id: int, selected_signal: signal.Signals) -> Non
         os.killpg(group_id, selected_signal)
 
 
+def _consume_worker_message(
+    receiver: Connection,
+    ready: bool,
+) -> tuple[bool, tuple[ProbeObservation, ProbeFailureKind | None] | None]:
+    try:
+        message = receiver.recv()
+    except EOFError:
+        return ready, _failed_observation(ProbeFailureKind.INTERNAL_FAILURE)
+    if not isinstance(message, tuple) or len(message) != 2:
+        return ready, _failed_observation(ProbeFailureKind.INTERNAL_FAILURE)
+    kind, value = message
+    if kind == "ready" and value is None:
+        return True, None
+    if kind == "result" and isinstance(value, ProbeObservation):
+        return ready, (value, None)
+    return ready, _failed_observation(ProbeFailureKind.INTERNAL_FAILURE)
+
+
+def _drain_worker_messages(
+    receiver: Connection,
+    ready: bool,
+) -> tuple[bool, tuple[ProbeObservation, ProbeFailureKind | None] | None]:
+    while receiver.poll():
+        ready, terminal = _consume_worker_message(receiver, ready)
+        if terminal is not None:
+            return ready, terminal
+    return ready, None
+
+
 async def _poll_worker(
     receiver: Connection,
     worker: _ProcessHandle,
@@ -383,21 +412,15 @@ async def _poll_worker(
     ready = False
     while True:
         if receiver.poll():
-            try:
-                kind, value = receiver.recv()
-            except EOFError:
-                return _failed_observation(ProbeFailureKind.INTERNAL_FAILURE)
-            if kind == "ready":
-                ready = True
-            elif kind == "result" and isinstance(value, ProbeObservation):
-                return value, None
-            else:
-                return _failed_observation(ProbeFailureKind.INTERNAL_FAILURE)
+            ready, terminal = _consume_worker_message(receiver, ready)
+            if terminal is not None:
+                return terminal
         remaining = deadline - monotonic()
         if remaining <= 0:
             return _failed_observation(ProbeFailureKind.TIMEOUT)
         if not worker.is_alive():
-            return _failed_observation(ProbeFailureKind.INTERNAL_FAILURE)
+            _, terminal = _drain_worker_messages(receiver, ready)
+            return terminal or _failed_observation(ProbeFailureKind.INTERNAL_FAILURE)
         await asyncio.sleep(min(0.005 if ready else 0.001, remaining))
 
 
