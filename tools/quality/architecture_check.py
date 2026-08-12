@@ -315,6 +315,49 @@ def scan(root: Path, config: dict[str, Any], exceptions: list[dict[str, Any]] | 
                         Finding(relative, line, "SWARCH036", f"TTS policy crosses the engine boundary {imported}")
                     )
 
+        if _under(relative, config.get("tts_provider_roots", [])):
+            for imported, line in imports:
+                if _matches_prefix(imported, config.get("tts_provider_forbidden_imports", [])):
+                    findings.append(
+                        Finding(
+                            relative,
+                            line,
+                            "SWARCH037",
+                            f"TTS provider adapter imports controller or publication authority {imported}",
+                        )
+                    )
+
+        if _under(relative, config.get("tts_transport_roots", [])) and not _under(
+            relative, config.get("tts_transport_allowed_roots", [])
+        ):
+            for imported, line in imports:
+                if _matches_prefix(imported, config.get("tts_transport_imports", [])):
+                    findings.append(
+                        Finding(
+                            relative,
+                            line,
+                            "SWARCH038",
+                            f"provider transport dependency escapes the adapter package {imported}",
+                        )
+                    )
+
+        if _under(relative, config.get("tts_caller_roots", [])):
+            source = path.read_text(encoding="utf-8")
+            for term in config.get("tts_provider_wire_terms", []):
+                if term in source:
+                    line = next(
+                        (index for index, value in enumerate(source.splitlines(), start=1) if term in value),
+                        1,
+                    )
+                    findings.append(
+                        Finding(
+                            relative,
+                            line,
+                            "SWARCH039",
+                            f"provider wire detail appears in a TTS caller {term!r}",
+                        )
+                    )
+
         if _under(relative, config.get("configuration_core_roots", [])) and not _under(
             relative,
             config.get("configuration_adapter_roots", []),

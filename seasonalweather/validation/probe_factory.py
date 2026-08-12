@@ -79,6 +79,8 @@ def _tts_probes(tts: object) -> tuple[PreflightProbe, ...]:
     if not isinstance(tts, dict):
         return ()
     backend = tts.get("backend")
+    fallback = tts.get("fallback_backend")
+    remote_probes = _remote_tts_probes(tts, backend, fallback)
     if backend == "local":
         local = tts.get("local")
         if isinstance(local, dict):
@@ -94,7 +96,7 @@ def _tts_probes(tts: object) -> tuple[PreflightProbe, ...]:
     }
     selected = commands.get(backend) if isinstance(backend, str) else None
     if not selected:
-        return ()
+        return tuple(remote_probes)
     probes = [
         local_executable_probe(
             identifier=f"tts.backend.{index}",
@@ -104,7 +106,33 @@ def _tts_probes(tts: object) -> tuple[PreflightProbe, ...]:
         )
         for index, command in enumerate(selected)
     ]
-    return tuple(probes)
+    return tuple((*remote_probes, *probes))
+
+
+def _remote_tts_probes(tts: dict[object, object], backend: object, fallback: object) -> list[PreflightProbe]:
+    probes: list[PreflightProbe] = []
+    definitions = (
+        ("seasonal_ttsd", "client_credential_file", "tts.seasonal_ttsd.credential"),
+        ("openai_compatible", "api_key_file", "tts.openai_compatible.api_key"),
+    )
+    for provider, credential_key, identifier in definitions:
+        if backend != provider and fallback != provider:
+            continue
+        section = tts.get(provider)
+        path = section.get(credential_key) if isinstance(section, dict) else None
+        if isinstance(path, str) and path:
+            probes.append(
+                local_path_probe(
+                    identifier=identifier,
+                    owner="tts",
+                    path=path,
+                    required=backend == provider,
+                    directory=False,
+                    regular_file=True,
+                    fallback_available=backend != provider,
+                )
+            )
+    return probes
 
 
 def _api_probes(api: object) -> tuple[PreflightProbe, ...]:

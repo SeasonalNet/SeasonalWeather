@@ -16,6 +16,7 @@ from seasonalweather.configuration.semantic_rules import (
     job_repository_identity_errors,
     job_repository_timing_errors,
     lifecycle_timeout_error,
+    remote_tts_configuration_errors,
     static_credential_sources_conflict,
 )
 from seasonalweather.configuration.source import RelatedLocation, SourceLocation
@@ -125,7 +126,39 @@ def _tts_issues(compiled: CompiledConfiguration, value: Mapping[str, object]) ->
     tts = _get(value, ("tts",), {})
     if not isinstance(tts, Mapping):
         return ()
-    return _tts_backend_issues(compiled, tts) + _tts_local_issues(compiled, tts) + _tts_regex_issues(compiled, tts)
+    return (
+        _tts_backend_issues(compiled, tts)
+        + _tts_local_issues(compiled, tts)
+        + _tts_regex_issues(compiled, tts)
+        + _tts_remote_issues(compiled, tts)
+    )
+
+
+def _tts_remote_issues(compiled: CompiledConfiguration, tts: Mapping[str, object]) -> tuple[ValidationIssue, ...]:
+    backend = str(tts.get("backend", "")).strip().lower()
+    primary = "local" if backend in _TTS_LOCAL_ALIASES else backend
+    fallback_raw = tts.get("fallback_backend")
+    fallback_value = None if fallback_raw is None else str(fallback_raw).strip().lower()
+    fallback = "local" if fallback_value in _TTS_LOCAL_ALIASES else fallback_value
+    issues: list[ValidationIssue] = []
+    for provider, selected in (
+        ("seasonal_ttsd", primary == "seasonal_ttsd" or fallback == "seasonal_ttsd"),
+        ("openai_compatible", primary == "openai_compatible" or fallback == "openai_compatible"),
+    ):
+        config = _mapping_value(tts, provider)
+        if not isinstance(config, Mapping):
+            config = {}
+        for field, message in remote_tts_configuration_errors(provider, config, selected=selected):
+            issues.append(
+                _tts_issue(
+                    compiled,
+                    ("tts", provider, field),
+                    f"Selected {provider} configuration {message}.",
+                    "Correct the selected provider configuration before admission.",
+                    "semantic.invariant",
+                )
+            )
+    return tuple(issues)
 
 
 def _tts_regex_issues(compiled: CompiledConfiguration, tts: Mapping[str, object]) -> tuple[ValidationIssue, ...]:
@@ -378,14 +411,14 @@ def _tts_fallback_message(
         )
     if canonical_primary == "local" and canonical_fallback is not None:
         return (
-            "P1-16 local synthesis cannot fall back to a deferred remote backend.",
+            "Local synthesis cannot select a remote fallback.",
             "Use no fallback for local or select a remote primary with local fallback.",
             "semantic.invariant",
         )
     if canonical_primary in {"seasonal_ttsd", "openai_compatible"} and canonical_fallback not in {None, "local"}:
         return (
-            "P1-16 only remote-known-primary to local fallback is meaningful.",
-            "Defer remote-to-remote fallback until P1-17.",
+            "The current fallback policy permits only remote primary to local fallback.",
+            "Use no fallback or select local fallback for a remote primary.",
             "semantic.invariant",
         )
     return None

@@ -358,6 +358,7 @@ tts_local_forbidden_imports = [
   "seasonalweather.control",
   "seasonalweather.artifacts",
   "seasonalweather.configuration",
+  "seasonalweather.tts.adapters",
 ]
 tts_policy_roots = ["seasonalweather/tts/policy.py"]
 tts_policy_forbidden_imports = [
@@ -365,3 +366,24 @@ tts_policy_forbidden_imports = [
   "seasonalweather.tts.subprocess",
   "seasonalweather.tts.voicetext_paul_vtml",
 ]
+tts_provider_roots = ["seasonalweather/tts/adapters"]
+tts_provider_forbidden_imports = [
+  "fastapi",
+  "starlette",
+  "uvicorn",
+  "seasonalweather.api",
+  "seasonalweather.artifacts",
+  "seasonalweather.broadcast",
+  "seasonalweather.control",
+  "seasonalweather.configuration_reload",
+  "seasonalweather.liquidsoap_telnet",
+]
+tts_transport_roots = ["seasonalweather/tts"]
+tts_transport_allowed_roots = ["seasonalweather/tts/adapters"]
+tts_transport_imports = ["httpx", "requests", "aiohttp", "urllib3"]
+tts_caller_roots = [
+  "seasonalweather/control.py",
+  "seasonalweather/api",
+  "seasonalweather/broadcast",
+]
+tts_provider_wire_terms = ["/v1/syntheses", "/v1/audio/speech", "seasonalttsd_client_"]

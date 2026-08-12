@@ -185,9 +185,12 @@ for semantic, compatibility, advisory, stamp, policy, and probe contracts.
 TTS execution uses one backend-neutral synthesis boundary. The `local` block
 contains local engine, voice, and rate settings; older flat local settings are
 accepted and normalized deterministically. `local` is the functional backend
-in the current release. `seasonal_ttsd` and `openai_compatible` are recognized
-for configuration and explicit fallback selection, but their adapters are
-deferred to P1-17 and no network request is made by P1-16.
+in the current release. `seasonal_ttsd` and `openai_compatible` are optional
+P1-17 adapters, disabled and unconfigured by default. Selecting either remote
+backend requires its explicit provider configuration and credential file.
+Remote output still passes through the common P1-16 finalization and
+media-validation path; the current fallback policy is remote primary to
+optional local fallback only.
 
 ### seasonalweather.env
 

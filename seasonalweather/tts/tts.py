@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import datetime as dt
 import fcntl
+import hashlib
+import json
 import os
 import time
 from collections.abc import Callable
@@ -14,10 +16,12 @@ from pathlib import Path
 from threading import Event
 from typing import TYPE_CHECKING, Any, cast
 
-from .preprocess import clean_for_tts, normalize_nws_spoken_times, verbalize_url
+from .preprocess import clean_for_tts, normalize_nws_spoken_times, verbalize_url  # noqa: F401
 
 if TYPE_CHECKING:
     from .service import SynthesisService
+
+__all__ = ["TTS", "TTSCompatibilityError", "clean_for_tts", "normalize_nws_spoken_times", "verbalize_url"]
 
 
 class TTSCompatibilityError(RuntimeError):
@@ -45,7 +49,7 @@ def _flock_path(lock_path: Path, timeout_s: float = 90.0, poll_s: float = 0.1):
                 break
             except BlockingIOError:
                 if time.monotonic() - started > timeout_s:
-                    raise RuntimeError(f"Timed out waiting for lock {lock_path}")
+                    raise RuntimeError(f"Timed out waiting for lock {lock_path}") from None
                 time.sleep(poll_s)
         try:
             yield
@@ -78,6 +82,8 @@ class TTS:
     lkg_resolver: Callable[[Any], Any] | None = None
     allow_transitional_qualification: bool = False
     execution_executor: Executor | None = None
+    seasonal_ttsd_config: object | None = None
+    openai_compatible_config: object | None = None
     _synthesis_service: SynthesisService | None = field(default=None, init=False, repr=False)
 
     def _request(self, text: str, *, purpose: str = "routine", deadline_at: dt.datetime | None = None):
@@ -94,6 +100,7 @@ class TTS:
             backend=backend,
             fallback_backend=None if self.fallback_backend is None else BackendId(self.fallback_backend),
             text=text,
+            backend_profile_identity=self._backend_profile_identity(backend),
             configuration_generation=configuration_generation,
             deadline_at=deadline_at or deadline_for(SynthesisPurpose(purpose)),
             local=LocalEngineOptions(
@@ -106,6 +113,25 @@ class TTS:
             output=SynthesisOutputPolicy(sample_rate_hz=self.sample_rate, volume=self.volume),
             text_overrides=self._text_overrides(),
         )
+
+    def _backend_profile_identity(self, backend: object) -> str | None:
+        from .models import BackendId
+
+        if backend is BackendId.LOCAL:
+            return None
+        config = self.seasonal_ttsd_config if backend is BackendId.SEASONAL_TTSD else self.openai_compatible_config
+        if config is None:
+            return None
+        fields = (
+            "voice",
+            "profile",
+            "model",
+            "response_format",
+            "speed",
+        )
+        public = {name: getattr(config, name) for name in fields if hasattr(config, name)}
+        raw = json.dumps(public, sort_keys=True, separators=(",", ":"))
+        return f"sha256:{hashlib.sha256(raw.encode()).hexdigest()[:32]}"
 
     def _voice_options(self):
         from .models import VoiceTextOptions
@@ -149,8 +175,15 @@ class TTS:
         )
 
     def _service(self) -> SynthesisService:
+        from .adapters import (
+            OpenAICompatibleAdapter,
+            OpenAICompatibleConfig,
+            SeasonalTtsdAdapter,
+            SeasonalTtsdConfig,
+        )
+        from .adapters.base import ProviderAdapter
         from .admission import LocalQualification, LocalQualificationDisposition, transitional_local_qualification
-        from .models import SynthesisRequest
+        from .models import BackendId, SynthesisRequest
         from .service import SynthesisService
 
         def qualify(request: SynthesisRequest, capability: str) -> object:
@@ -174,13 +207,44 @@ class TTS:
                     setattr(qualify, name, operation)
 
         if self._synthesis_service is None:
+            providers = cast(
+                dict[BackendId, ProviderAdapter],
+                self._provider_adapters(
+                    BackendId,
+                    OpenAICompatibleAdapter,
+                    OpenAICompatibleConfig,
+                    SeasonalTtsdAdapter,
+                    SeasonalTtsdConfig,
+                ),
+            )
             self._synthesis_service = SynthesisService(
                 activity_context=self.activity_context,
                 current_generation=self.current_generation,
                 capability_check=qualify,
                 lkg_resolver=self.lkg_resolver,  # controller-owned P1-10 evidence port
+                provider_adapters=providers,
             )
         return self._synthesis_service
+
+    def _provider_adapters(
+        self,
+        backend_enum: Any,
+        openai_adapter: Any,
+        openai_config: Any,
+        seasonal_adapter: Any,
+        seasonal_config: Any,
+    ) -> dict[object, Any]:
+        selected = self._selected_backend()
+        providers: dict[object, Any] = {}
+        definitions = (
+            (backend_enum.SEASONAL_TTSD, self.seasonal_ttsd_config, seasonal_adapter, seasonal_config),
+            (backend_enum.OPENAI_COMPATIBLE, self.openai_compatible_config, openai_adapter, openai_config),
+        )
+        for provider, config, adapter_type, config_type in definitions:
+            if config is None or (selected is not provider and self.fallback_backend != provider.value):
+                continue
+            providers[provider] = cast(Any, adapter_type)(cast(Any, config_type)(**_config_values(config)))
+        return providers
 
     def _selected_local_engine(self) -> str:
         from .models import BackendId
@@ -310,3 +374,36 @@ class TTS:
             raise TTSCompatibilityError(result)
         if not Path(out_wav).is_file():
             raise TTSCompatibilityError(result)
+
+    def close(self) -> None:
+        """Close provider resources owned by this prepared TTS instance."""
+
+        if self._synthesis_service is None:
+            return
+        for adapter in self._synthesis_service.provider_adapters:
+            adapter.close()
+
+
+def _config_values(config: object) -> dict[str, Any]:
+    """Copy only provider configuration leaves; never retain mutable config."""
+
+    names = (
+        "base_url",
+        "client_credential_file",
+        "api_key_file",
+        "voice",
+        "profile",
+        "model",
+        "response_format",
+        "speed",
+        "token_ttl_seconds",
+        "refresh_margin_seconds",
+        "connect_timeout_seconds",
+        "token_timeout_seconds",
+        "synthesis_timeout_seconds",
+        "max_input_bytes",
+        "max_response_bytes",
+        "max_error_bytes",
+        "verify_tls",
+    )
+    return {name: getattr(config, name) for name in names if hasattr(config, name)}

@@ -212,6 +212,8 @@ class Orchestrator:
             activity_context=lambda: self.reload_activities.activity(RELOAD_TTS_ACTIVITY),
             capability_check=self.tts_capability_check,
             execution_executor=self.tts_execution_port,
+            seasonal_ttsd_config=cfg.tts.seasonal_ttsd,
+            openai_compatible_config=cfg.tts.openai_compatible,
         )
 
         self.mode = "normal"

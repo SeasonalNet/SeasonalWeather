@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from seasonalweather.configuration.paths import ConfigPath
 from seasonalweather.configuration.origins import ENVIRONMENT_BINDINGS
+from seasonalweather.configuration.paths import ConfigPath
 from seasonalweather.configuration.schema import SCHEMA_V1, SchemaKind, SchemaNode
 from seasonalweather.diagnostics.bindings import RELOAD_CODES
 
@@ -414,6 +414,18 @@ _DECLARED_POLICY: dict[tuple[str, ...], ReloadDisposition] = {
     ("tests", "toneout_cooldown_seconds"): ReloadDisposition.QUIESCENT,
     ("tts", "backend"): ReloadDisposition.QUIESCENT,
     ("tts", "fallback_backend"): ReloadDisposition.QUIESCENT,
+    ("tts", "openai_compatible", "api_key_file"): ReloadDisposition.QUIESCENT,
+    ("tts", "openai_compatible", "base_url"): ReloadDisposition.QUIESCENT,
+    ("tts", "openai_compatible", "connect_timeout_seconds"): ReloadDisposition.QUIESCENT,
+    ("tts", "openai_compatible", "max_error_bytes"): ReloadDisposition.QUIESCENT,
+    ("tts", "openai_compatible", "max_input_bytes"): ReloadDisposition.QUIESCENT,
+    ("tts", "openai_compatible", "max_response_bytes"): ReloadDisposition.QUIESCENT,
+    ("tts", "openai_compatible", "model"): ReloadDisposition.QUIESCENT,
+    ("tts", "openai_compatible", "response_format"): ReloadDisposition.QUIESCENT,
+    ("tts", "openai_compatible", "speed"): ReloadDisposition.QUIESCENT,
+    ("tts", "openai_compatible", "synthesis_timeout_seconds"): ReloadDisposition.QUIESCENT,
+    ("tts", "openai_compatible", "verify_tls"): ReloadDisposition.QUIESCENT,
+    ("tts", "openai_compatible", "voice"): ReloadDisposition.QUIESCENT,
     ("tts", "local", "engine"): ReloadDisposition.QUIESCENT,
     ("tts", "local", "rate_wpm"): ReloadDisposition.QUIESCENT,
     ("tts", "local", "voice"): ReloadDisposition.QUIESCENT,
@@ -431,6 +443,19 @@ _DECLARED_POLICY: dict[tuple[str, ...], ReloadDisposition] = {
     ("tts", "local", "voicetext_paul", "retry_sleep_ms"): ReloadDisposition.QUIESCENT,
     ("tts", "local", "voicetext_paul", "run_as"): ReloadDisposition.QUIESCENT,
     ("tts", "local", "voicetext_paul", "vtml_lexicon"): ReloadDisposition.QUIESCENT,
+    ("tts", "seasonal_ttsd", "base_url"): ReloadDisposition.QUIESCENT,
+    ("tts", "seasonal_ttsd", "client_credential_file"): ReloadDisposition.QUIESCENT,
+    ("tts", "seasonal_ttsd", "connect_timeout_seconds"): ReloadDisposition.QUIESCENT,
+    ("tts", "seasonal_ttsd", "max_error_bytes"): ReloadDisposition.QUIESCENT,
+    ("tts", "seasonal_ttsd", "max_input_bytes"): ReloadDisposition.QUIESCENT,
+    ("tts", "seasonal_ttsd", "max_response_bytes"): ReloadDisposition.QUIESCENT,
+    ("tts", "seasonal_ttsd", "profile"): ReloadDisposition.QUIESCENT,
+    ("tts", "seasonal_ttsd", "refresh_margin_seconds"): ReloadDisposition.QUIESCENT,
+    ("tts", "seasonal_ttsd", "synthesis_timeout_seconds"): ReloadDisposition.QUIESCENT,
+    ("tts", "seasonal_ttsd", "token_timeout_seconds"): ReloadDisposition.QUIESCENT,
+    ("tts", "seasonal_ttsd", "token_ttl_seconds"): ReloadDisposition.QUIESCENT,
+    ("tts", "seasonal_ttsd", "verify_tls"): ReloadDisposition.QUIESCENT,
+    ("tts", "seasonal_ttsd", "voice"): ReloadDisposition.QUIESCENT,
     ("tts", "rate_wpm"): ReloadDisposition.QUIESCENT,
     ("tts", "text_overrides", "*", "ignore_case"): ReloadDisposition.QUIESCENT,
     ("tts", "text_overrides", "*", "match"): ReloadDisposition.QUIESCENT,

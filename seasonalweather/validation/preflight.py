@@ -63,11 +63,14 @@ class ProbeObservation:
 class LocalPathSpecification:
     path: str
     directory: bool
+    regular_file: bool = False
 
     def __post_init__(self) -> None:
         _bounded_local_value(self.path, "local path")
         if type(self.directory) is not bool:
             raise TypeError("local path directory flag must be boolean")
+        if type(self.regular_file) is not bool:
+            raise TypeError("local path regular-file flag must be boolean")
 
 
 @dataclass(frozen=True)
@@ -287,6 +290,8 @@ def _dispatch_framework_probe(specification: ProbeSpecification) -> ProbeObserva
     if isinstance(specification, LocalPathSpecification):
         selected = Path(specification.path)
         exists = selected.is_dir() if specification.directory else selected.is_file()
+        if specification.regular_file:
+            exists = exists and not selected.is_symlink()
         return ProbeObservation(
             ProbeStatus.AVAILABLE if exists else ProbeStatus.UNAVAILABLE,
             "Local path check completed.",
@@ -558,6 +563,7 @@ def local_path_probe(
     path: str,
     required: bool,
     directory: bool,
+    regular_file: bool = False,
     fallback_available: bool = False,
     timeout_seconds: float = 1.0,
 ) -> PreflightProbe:
@@ -569,7 +575,7 @@ def local_path_probe(
         required=required,
         fallback_available=fallback_available,
         redaction=ProbeRedaction.LOCAL_PATH_BASENAME,
-        specification=LocalPathSpecification(path, directory),
+        specification=LocalPathSpecification(path, directory, regular_file),
         display_evidence=(selected.name,),
     )
 

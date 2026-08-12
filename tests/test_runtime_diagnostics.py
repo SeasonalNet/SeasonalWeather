@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import json
 import os
 import subprocess
 import sys
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import httpx
 import pytest
 
 from seasonalweather.database import SeasonalDatabase
@@ -36,6 +40,9 @@ from seasonalweather.runtime_diagnostics.representations import (
     occurrence_summary,
 )
 from seasonalweather.runtime_diagnostics.service import RuntimeDiagnosticService
+from seasonalweather.tts.adapters import OpenAICompatibleAdapter, OpenAICompatibleConfig
+from seasonalweather.tts.failures import ProcessFailure
+from seasonalweather.tts.models import BackendId, SynthesisPurpose, SynthesisRequest
 
 NOW = dt.datetime(2026, 7, 29, 12, tzinfo=dt.UTC)
 
@@ -132,6 +139,156 @@ def test_exception_evidence_preserves_frames_cause_context_notes_and_group() -> 
     group = ExceptionGroup("group", [ValueError("one"), ExceptionGroup("nested", [TypeError("two")])])
     group_evidence = capture_exception(group)
     assert group_evidence["members"][1]["members"][0]["type"].endswith("TypeError")
+
+
+def test_remote_failure_runtime_evidence_excludes_provider_and_secret_sentinels(tmp_path: Path) -> None:
+    sentinels = (
+        "API-KEY-SENTINEL",
+        "SEASONAL-CLIENT-CREDENTIAL",
+        "SEASONAL-ACCESS-TOKEN",
+        "Authorization: Bearer SECRET-AUTH-VALUE",
+        "raw synthesis text sentinel",
+        "arbitrary provider transport detail",
+    )
+    key = tmp_path / "api-key"
+    key.write_text("API-KEY-SENTINEL", encoding="ascii")
+
+    class Transport:
+        async def request(self, method, url, *, headers, json, timeout):
+            del method, url, headers, json, timeout
+            raise httpx.ConnectError("; ".join(sentinels))
+
+        async def close(self):
+            pass
+
+    adapter = OpenAICompatibleAdapter(
+        OpenAICompatibleConfig(
+            base_url="https://api.example.test/v1",
+            api_key_file=str(key),
+            model="model",
+            voice="alloy",
+        ),
+        transport=Transport(),
+    )
+    request = SynthesisRequest(
+        purpose=SynthesisPurpose.ROUTINE,
+        backend=BackendId.OPENAI_COMPATIBLE,
+        text="raw synthesis text sentinel",
+        deadline_at=dt.datetime.now(dt.UTC) + dt.timedelta(seconds=5),
+    )
+    with pytest.raises(ProcessFailure) as raised:
+        adapter.synthesize(
+            request,
+            request.text,
+            output_dir=tmp_path,
+            deadline=time.monotonic() + 1,
+            cancellation=threading.Event(),
+        )
+    evidence = capture_exception(raised.value)
+    encoded = json.dumps(evidence, sort_keys=True)
+    assert all(sentinel not in encoded for sentinel in sentinels)
+
+
+@pytest.mark.parametrize("cleanup_stage", ["response", "transport", "cancel", "deadline"])
+def test_remote_cleanup_failures_are_redacted_in_real_runtime_evidence(tmp_path: Path, cleanup_stage: str) -> None:
+    sentinels = (
+        "API-KEY-CLEANUP-SENTINEL",
+        "SEASONAL-CLIENT-CREDENTIAL-CLEANUP",
+        "SEASONAL-ACCESS-TOKEN-CLEANUP",
+        "Authorization: Bearer CLEANUP-AUTH-VALUE",
+        "raw cleanup synthesis text",
+        "arbitrary cleanup provider detail",
+    )
+    key = tmp_path / "api-key"
+    key.write_text(sentinels[0], encoding="ascii")
+
+    class Response:
+        status_code = 200
+        headers = {"content-type": "audio/wav", "content-length": "4"}
+
+        async def aiter_bytes(self, chunk_size: int = 65_536):
+            del chunk_size
+            yield b"RIFF"
+
+        async def aclose(self):
+            if cleanup_stage == "response":
+                raise RuntimeError("response.close " + " ".join(sentinels))
+
+    class Transport:
+        def __init__(self):
+            self.release = asyncio.Event()
+            self.entered = threading.Event()
+
+        def for_operation(self):
+            return self
+
+        async def request(self, method, url, *, headers, json, timeout):
+            del method, url, headers, json, timeout
+            if cleanup_stage in {"cancel", "deadline"}:
+                self.entered.set()
+                await self.release.wait()
+            return Response()
+
+        async def close(self):
+            if cleanup_stage in {"cancel", "deadline"}:
+                self.release.set()
+            if cleanup_stage == "transport":
+                raise RuntimeError("transport.close " + " ".join(sentinels))
+
+    adapter = OpenAICompatibleAdapter(
+        OpenAICompatibleConfig(
+            base_url="https://api.example.test/v1",
+            api_key_file=str(key),
+            model="model",
+            voice="alloy",
+        ),
+        transport=Transport(),
+    )
+    request = SynthesisRequest(
+        purpose=SynthesisPurpose.ROUTINE,
+        backend=BackendId.OPENAI_COMPATIBLE,
+        text=sentinels[4],
+        deadline_at=dt.datetime.now(dt.UTC) + dt.timedelta(seconds=5),
+    )
+    cancellation = threading.Event()
+    if cleanup_stage == "cancel":
+        failures: list[ProcessFailure] = []
+
+        def run() -> None:
+            try:
+                adapter.synthesize(
+                    request,
+                    request.text,
+                    output_dir=tmp_path,
+                    deadline=time.monotonic() + 1,
+                    cancellation=cancellation,
+                )
+            except ProcessFailure as failure:
+                failures.append(failure)
+
+        worker = threading.Thread(target=run)
+        worker.start()
+        assert adapter._transport is not None
+        assert adapter._transport.entered.wait(1)
+        cancellation.set()
+        worker.join(1)
+        assert not worker.is_alive() and failures
+        evidence = capture_exception(failures[0])
+    else:
+        try:
+            adapter.synthesize(
+                request,
+                request.text,
+                output_dir=tmp_path,
+                deadline=time.monotonic() + (0.05 if cleanup_stage == "deadline" else 1),
+                cancellation=cancellation,
+            )
+        except ProcessFailure as failure:
+            evidence = capture_exception(failure)
+        else:
+            raise AssertionError("cleanup scenario unexpectedly succeeded")
+    encoded = json.dumps(evidence, sort_keys=True)
+    assert all(sentinel not in encoded for sentinel in sentinels)
 
 
 def test_exception_evidence_records_explicit_cycle_and_truncation() -> None:

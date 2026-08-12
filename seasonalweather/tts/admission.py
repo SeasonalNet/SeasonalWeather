@@ -469,7 +469,7 @@ def _validate_tts_fallback(request: SynthesisRequest, fallback_viability: bool |
         return _rejection(
             "unsupported_fallback_direction",
             ("fallback_backend",),
-            "P1-16 local synthesis cannot defer to a remote fallback.",
+            "Local synthesis cannot select a remote fallback.",
         )
     if fallback_viability is False:
         return _rejection(
@@ -479,7 +479,7 @@ def _validate_tts_fallback(request: SynthesisRequest, fallback_viability: bool |
         return _rejection(
             "unsupported_fallback",
             ("fallback_backend",),
-            "Only a known remote primary may select local fallback before P1-17.",
+            "The current fallback policy permits only remote primary to local fallback.",
         )
     return None
 

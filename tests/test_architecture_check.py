@@ -45,21 +45,33 @@ def test_invalid_architecture_fixture_proves_rules_fail_closed():
         "SWARCH034",
         "SWARCH035",
         "SWARCH036",
+        "SWARCH037",
+        "SWARCH038",
+        "SWARCH039",
     }
     assert any("filesystem mutation" in finding.message for finding in findings)
 
 
 def test_tts_architecture_rules_have_independent_matching_negative_fixtures():
     findings = scan(FIXTURES / "invalid", CONFIG)
-    by_rule = {rule: [finding.path for finding in findings if finding.rule == rule] for rule in (
-        "SWARCH034",
-        "SWARCH035",
-        "SWARCH036",
-    )}
+    by_rule = {
+        rule: [finding.path for finding in findings if finding.rule == rule]
+        for rule in (
+            "SWARCH034",
+            "SWARCH035",
+            "SWARCH036",
+            "SWARCH037",
+            "SWARCH038",
+            "SWARCH039",
+        )
+    }
 
     assert by_rule["SWARCH034"] == ["seasonalweather/tts/models.py"]
     assert by_rule["SWARCH035"] == ["seasonalweather/tts/local.py"]
     assert by_rule["SWARCH036"] == ["seasonalweather/tts/policy.py"]
+    assert by_rule["SWARCH037"] == ["seasonalweather/tts/adapters/provider.py"]
+    assert by_rule["SWARCH038"] == ["seasonalweather/tts/transport.py"]
+    assert by_rule["SWARCH039"] == ["seasonalweather/broadcast/remote.py"]
 
 
 def test_control_module_has_no_duplicate_job_repository_or_scheduler_authority():

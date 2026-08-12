@@ -1187,7 +1187,13 @@ def test_controller_local_epoch_publication_rejects_stale_and_conflicting_refres
         total_capacity=1,
         reported_available=1,
         job_restrictions=(JobType.TTS_SYNTHESIZE.value,),
-        parameters={"format": "wav", "profiles": "espeak-ng", "voices": "9", "sample_rates": 48_000, "max_input_bytes": 65_536},
+        parameters={
+            "format": "wav",
+            "profiles": "espeak-ng",
+            "voices": "9",
+            "sample_rates": 48_000,
+            "max_input_bytes": 65_536,
+        },
         validity_seconds=60,
         observed_at=now,
         published_at=now,
@@ -1348,6 +1354,20 @@ def test_real_p109_reservation_is_reused_by_remote_to_local_fallback(monkeypatch
         configuration_generation=4,
     )
     adapter = P109TtsQualificationAdapter(registry, lambda: now, local_source=source)
+    observed_remote_reservations: list[int] = []
+
+    class FailingRemote:
+        backend_id = "seasonal_ttsd"
+
+        def synthesize(self, request, text, *, output_dir, deadline, cancellation):
+            del request, text, output_dir, deadline, cancellation
+            snapshot = registry.snapshot(source.worker_id, now)
+            observed_remote_reservations.append(0 if snapshot is None else snapshot.pending_reservations)
+            raise ProcessFailure("provider_timed_out", "remote fixture failure")
+
+        def close(self):
+            pass
+
     reserve_count = 0
     release_count = 0
     reserve = registry.reserve_controller_local
@@ -1365,7 +1385,10 @@ def test_real_p109_reservation_is_reused_by_remote_to_local_fallback(monkeypatch
 
     monkeypatch.setattr(registry, "reserve_controller_local", counted_reserve)
     monkeypatch.setattr(registry, "release_reservation", counted_release)
-    service = SynthesisService(capability_check=adapter)
+    service = SynthesisService(
+        capability_check=adapter,
+        provider_adapters={BackendId.SEASONAL_TTSD: FailingRemote()},
+    )
     result = service.synthesize(
         request(backend=BackendId.SEASONAL_TTSD, fallback_backend=BackendId.LOCAL),
         tmp_path / "reserved-fallback.wav",
@@ -1375,14 +1398,16 @@ def test_real_p109_reservation_is_reused_by_remote_to_local_fallback(monkeypatch
     assert (tmp_path / "reserved-fallback.wav").is_file()
     assert reserve_count == 1
     assert release_count == 1
+    assert observed_remote_reservations == [0]
     snapshot = registry.snapshot(source.worker_id, now)
     assert snapshot is not None
     assert snapshot.pending_reservations == 0
     assert snapshot.active_assignments == 0
 
 
-def test_real_async_p109_reservation_fences_effective_local_fallback(monkeypatch, tmp_path: Path) -> None:
+def test_real_p109_remote_success_ignores_occupied_local_lane(monkeypatch, tmp_path: Path) -> None:
     from seasonalweather.capabilities.registry import CapabilityRegistry
+    from seasonalweather.tts.adapters.models import ProviderAudio
 
     _install_fake_controller_tts(monkeypatch)
     now = dt.datetime.now(dt.UTC)
@@ -1395,6 +1420,72 @@ def test_real_async_p109_reservation_fences_effective_local_fallback(monkeypatch
         configuration_generation=4,
     )
     adapter = P109TtsQualificationAdapter(registry, lambda: now, local_source=source)
+    held = adapter.reserve(
+        request(job_id="already-running"), "already-running", expires_at=now + dt.timedelta(minutes=1)
+    )
+    assert held is not None
+
+    class SuccessfulRemote:
+        backend_id = "seasonal_ttsd"
+
+        def synthesize(self, request, text, *, output_dir, deadline, cancellation):
+            del request, text, deadline, cancellation
+            output = output_dir / "remote.wav"
+            write_silence_wav(output, 0.1, 48_000)
+            return ProviderAudio(output, "audio/wav", "wav")
+
+        def close(self):
+            pass
+
+    reserve_count = 0
+    reserve = registry.reserve_controller_local
+
+    def counted_reserve(**kwargs):
+        nonlocal reserve_count
+        reserve_count += 1
+        return reserve(**kwargs)
+
+    monkeypatch.setattr(registry, "reserve_controller_local", counted_reserve)
+    service = SynthesisService(
+        capability_check=adapter,
+        provider_adapters={BackendId.SEASONAL_TTSD: SuccessfulRemote()},
+    )
+    result = service.synthesize(
+        request(backend=BackendId.SEASONAL_TTSD),
+        tmp_path / "remote-success.wav",
+    )
+    snapshot = registry.snapshot(source.worker_id, now)
+    assert result.disposition is SynthesisDisposition.SUCCEEDED
+    assert result.backend is BackendId.SEASONAL_TTSD
+    assert reserve_count == 0
+    assert snapshot is not None and snapshot.pending_reservations == 1
+    adapter.release(held)
+
+
+def test_real_async_p109_reservation_fences_effective_local_fallback(monkeypatch, tmp_path: Path) -> None:
+    from seasonalweather.capabilities.registry import CapabilityRegistry
+    from seasonalweather.tts.adapters import SeasonalTtsdAdapter, SeasonalTtsdConfig
+
+    _install_fake_controller_tts(monkeypatch)
+    now = dt.datetime.now(dt.UTC)
+    capability = LocalEngineRegistry.capability_for("espeak-ng")
+    registry = CapabilityRegistry(allowed_capabilities=frozenset({capability}))
+    source = ControllerLocalQualificationSource(
+        registry,
+        lambda: now,
+        configured_options=LocalEngineOptions(engine="espeak-ng", voice="9"),
+        configuration_generation=4,
+    )
+    adapter = P109TtsQualificationAdapter(registry, lambda: now, local_source=source)
+    observed_remote_reservations: list[int] = []
+
+    def fail_remote(self, request, text, *, output_dir, deadline, cancellation):
+        del self, request, text, output_dir, deadline, cancellation
+        snapshot = registry.snapshot(source.worker_id, now)
+        observed_remote_reservations.append(0 if snapshot is None else snapshot.pending_reservations)
+        raise ProcessFailure("rate_limited", "remote async fixture failure")
+
+    monkeypatch.setattr(SeasonalTtsdAdapter, "synthesize", fail_remote)
     reserve_count = 0
     release_count = 0
     reserve = registry.reserve_controller_local
@@ -1424,6 +1515,9 @@ def test_real_async_p109_reservation_fences_effective_local_fallback(monkeypatch
         configuration_generation=4,
         capability_check=adapter,
         execution_executor=executor,
+        seasonal_ttsd_config=SeasonalTtsdConfig(
+            base_url="https://tts.example.test", client_credential_file="/tmp/client"
+        ),
     )
     output = tmp_path / "async-effective-local.wav"
     try:
@@ -1446,6 +1540,7 @@ def test_real_async_p109_reservation_fences_effective_local_fallback(monkeypatch
     assert output.is_file()
     assert reserve_count == 1
     assert release_count == 1
+    assert observed_remote_reservations == [0]
     snapshot = registry.snapshot(source.worker_id, now)
     assert snapshot is not None
     assert snapshot.pending_reservations == 0
@@ -1496,7 +1591,7 @@ def test_remote_only_p109_request_skips_unavailable_local_capacity(monkeypatch, 
     assert adapter(request(), local_capability).disposition.value == "unavailable"
 
     available, reason = service.availability(remote)
-    assert (available, reason) == (False, "backend_unimplemented")
+    assert (available, reason) == (False, "remote_backend_unconfigured")
     result = service.synthesize(remote, tmp_path / "remote-only.wav")
     assert result.failure is SynthesisFailure.BACKEND_UNAVAILABLE
     snapshot = registry.snapshot(source.worker_id, now)
@@ -1555,7 +1650,9 @@ def test_real_async_p109_remote_only_request_does_not_wait_on_consumed_local_cap
     monkeypatch, tmp_path: Path
 ) -> None:
     registry, source, adapter, now = _p109_controller_adapter(monkeypatch, available=True)
-    held = adapter.reserve(request(job_id="held-async-local"), "held-async-local", expires_at=now + dt.timedelta(minutes=1))
+    held = adapter.reserve(
+        request(job_id="held-async-local"), "held-async-local", expires_at=now + dt.timedelta(minutes=1)
+    )
     assert held is not None
     executor = EmbeddedExecutionPort()
     facade = TTS(
@@ -1639,6 +1736,17 @@ def test_fallback_disallowed_purpose_does_not_reserve_local_capacity(monkeypatch
     registry, source, adapter, now = _p109_controller_adapter(monkeypatch, available=True)
     local_capability = LocalEngineRegistry.capability_for("espeak-ng")
     assert adapter(request(), local_capability).disposition.value == "satisfied"
+
+    class ProviderTimeout:
+        backend_id = "seasonal_ttsd"
+
+        def synthesize(self, request, text, *, output_dir, deadline, cancellation):
+            del request, text, output_dir, deadline, cancellation
+            raise ProcessFailure("provider_timed_out", "provider timeout")
+
+        def close(self):
+            pass
+
     reserve_count = 0
     reserve = registry.reserve_controller_local
 
@@ -1648,7 +1756,10 @@ def test_fallback_disallowed_purpose_does_not_reserve_local_capacity(monkeypatch
         return reserve(**kwargs)
 
     monkeypatch.setattr(registry, "reserve_controller_local", counted_reserve)
-    result = SynthesisService(capability_check=adapter).synthesize(
+    result = SynthesisService(
+        capability_check=adapter,
+        provider_adapters={BackendId.SEASONAL_TTSD: ProviderTimeout()},
+    ).synthesize(
         request(
             backend=BackendId.SEASONAL_TTSD,
             fallback_backend=BackendId.LOCAL,
@@ -1657,6 +1768,37 @@ def test_fallback_disallowed_purpose_does_not_reserve_local_capacity(monkeypatch
         tmp_path / "optional-no-fallback.wav",
     )
     assert result.disposition is SynthesisDisposition.SUPPRESSED
+    assert reserve_count == 0
+    snapshot = registry.snapshot(source.worker_id, now)
+    assert snapshot is None or snapshot.pending_reservations == 0
+
+
+@pytest.mark.parametrize("fence", ["deadline", "cancellation"])
+def test_global_timeout_or_cancellation_does_not_reserve_fallback_capacity(
+    monkeypatch, tmp_path: Path, fence: str
+) -> None:
+    registry, source, adapter, now = _p109_controller_adapter(monkeypatch, available=True)
+    reserve_count = 0
+    reserve = registry.reserve_controller_local
+
+    def counted_reserve(**kwargs):
+        nonlocal reserve_count
+        reserve_count += 1
+        return reserve(**kwargs)
+
+    monkeypatch.setattr(registry, "reserve_controller_local", counted_reserve)
+    cancellation = threading.Event()
+    request_kwargs: dict[str, object] = {"backend": BackendId.SEASONAL_TTSD, "fallback_backend": BackendId.LOCAL}
+    if fence == "deadline":
+        request_kwargs["deadline_at"] = dt.datetime.now(dt.UTC) - dt.timedelta(seconds=1)
+    else:
+        cancellation.set()
+    result = SynthesisService(capability_check=adapter).synthesize(
+        request(**request_kwargs),
+        tmp_path / f"no-fallback-reservation-{fence}.wav",
+        cancellation=cancellation,
+    )
+    assert result.disposition in {SynthesisDisposition.TIMED_OUT, SynthesisDisposition.CANCELLED}
     assert reserve_count == 0
     snapshot = registry.snapshot(source.worker_id, now)
     assert snapshot is None or snapshot.pending_reservations == 0

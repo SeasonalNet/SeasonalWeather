@@ -19,25 +19,35 @@ Everything else lives in config.yaml.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
+from urllib.parse import urlsplit
 
-from .auth.policy import KNOWN_API_SCOPES as _KNOWN_API_SCOPES
-from .auth.policy import SCOPE_RE as _AUTH_SCOPE_RE
-from .broadcast.tests import normalize_postpone_policy
-from .configuration.environment import EnvironmentValues
-from .lifecycle import LifecycleTimeouts
 from .alerts.focus import (
-    AlertFocusPolicy,
     DEFAULT_EXCLUDED_SOURCES,
     DEFAULT_HOLD_VTEC_SIGNIFICANCE,
     DEFAULT_MARINE_EVENT_CODES,
     DEFAULT_MARINE_HOLD_EVENT_CODES,
     DEFAULT_TEST_EVENT_CODES,
+    AlertFocusPolicy,
 )
-
+from .auth.policy import KNOWN_API_SCOPES as _KNOWN_API_SCOPES
+from .auth.policy import SCOPE_RE as _AUTH_SCOPE_RE
+from .broadcast.tests import normalize_postpone_policy
+from .configuration.environment import EnvironmentValues
+from .configuration.semantic_rules import (
+    REMOTE_CONNECT_TIMEOUT_MAX,
+    REMOTE_ERROR_BYTES_MAX,
+    REMOTE_INPUT_BYTES_MAX,
+    REMOTE_RESPONSE_BYTES_MAX,
+    REMOTE_SYNTHESIS_TIMEOUT_MAX,
+    REMOTE_TOKEN_TIMEOUT_MAX,
+    remote_tts_configuration_errors,
+)
+from .lifecycle import LifecycleTimeouts
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -53,10 +63,7 @@ def _nwws_credentials_are_default(jid: str, password: str) -> bool:
     """
     jid_norm = (jid or "").strip().lower()
     password_norm = (password or "").strip()
-    return (
-        jid_norm in {"", "changeme", "changeme@nwws-oi.weather.gov"}
-        or password_norm in {"", "CHANGEME", "changeme"}
-    )
+    return jid_norm in {"", "changeme", "changeme@nwws-oi.weather.gov"} or password_norm in {"", "CHANGEME", "changeme"}
 
 
 def _normalize_ern_decoder_backend(value: Any) -> str:
@@ -73,6 +80,7 @@ def _normalize_ern_decoder_backend(value: Any) -> str:
 # ---------------------------------------------------------------------------
 # Dataclasses — one per logical subsystem
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class StationConfig:
@@ -97,6 +105,7 @@ class StreamConfig:
 
 
 # --- cycle sub-sections ---
+
 
 @dataclass(frozen=True)
 class CycleSpcConfig:
@@ -135,6 +144,7 @@ class CycleObsConfig:
 @dataclass(frozen=True)
 class CycleProductConfig:
     """Generic per-product character-limit config (AFD, SYN, etc.)."""
+
     max_chars_normal: int
     max_chars_heightened: int
 
@@ -150,8 +160,8 @@ class CycleHwoConfig:
 class CycleCwfConfig:
     # Coastal Waters Forecast segment configuration.
     enabled: bool
-    offices: List[str]          # WFO offices to pull CWF from, e.g. ["LWX"]
-    max_chars_normal: int       # 0 = unlimited
+    offices: List[str]  # WFO offices to pull CWF from, e.g. ["LWX"]
+    max_chars_normal: int  # 0 = unlimited
     max_chars_heightened: int
 
 
@@ -159,8 +169,8 @@ class CycleCwfConfig:
 class CycleRwrConfig:
     # Regional Weather Roundup (RWR) observations segment configuration.
     enabled: bool
-    office: str                 # WFO to pull RWR from (e.g. 'LWX')
-    staleness_minutes: int      # fall back to ASOS if RWR older than this
+    office: str  # WFO to pull RWR from (e.g. 'LWX')
+    staleness_minutes: int  # fall back to ASOS if RWR older than this
     # Station names matching the raw RWR product (upper-case) that get
     # full-detail treatment (wind, pressure, dew point, humidity).
     # Empty list = auto-derive from first station in first section.
@@ -181,7 +191,7 @@ class CycleMarineObsConfig:
     # Marine observations segment — sourced from the MARINE OBSERVATIONS
     # section already present in the RWR product (no extra API call).
     enabled: bool
-    max_stations: int           # 0 = read all available marine stations
+    max_stations: int  # 0 = read all available marine stations
     # Raw upper-case station names to always list first, e.g. "THOMAS PT LIGHT"
     anchor_stations: List[str]
     # Optional spoken-name overrides: {RAW_UPPER: spoken_name}
@@ -215,6 +225,7 @@ class ObservationsConfig:
 
 # --- nwws ---
 
+
 @dataclass(frozen=True)
 class NWWSResiliencyConfig:
     stall_seconds: int
@@ -241,12 +252,14 @@ class NWWSConfig:
 
 # --- nws (api.weather.gov calls) ---
 
+
 @dataclass(frozen=True)
 class NwsConfig:
     user_agent: str
 
 
 # --- pns ---
+
 
 @dataclass(frozen=True)
 class PnsSubtypeConfig:
@@ -278,6 +291,7 @@ class PnsConfig:
 
 # --- now / short-term forecast ---
 
+
 @dataclass(frozen=True)
 class NowBackfillConfig:
     enabled: bool
@@ -296,6 +310,7 @@ class NowConfig:
 
 
 # --- health state machine ---
+
 
 @dataclass(frozen=True)
 class HealthSourceConfig:
@@ -322,6 +337,7 @@ class HealthConfig:
 
 # --- policy ---
 
+
 @dataclass(frozen=True)
 class PolicyConfig:
     toneout_product_types: List[str]
@@ -329,6 +345,7 @@ class PolicyConfig:
 
 
 # --- same ---
+
 
 @dataclass(frozen=True)
 class SameNativeEncoderConfig:
@@ -348,6 +365,7 @@ class SameConfig:
 
 
 # --- cap ---
+
 
 @dataclass(frozen=True)
 class CapFullConfig:
@@ -379,6 +397,7 @@ class CapConfig:
 
 # --- ipaws ---
 
+
 @dataclass(frozen=True)
 class IpawsConfig:
     enabled: bool
@@ -397,6 +416,7 @@ class IpawsConfig:
 
 
 # --- ern ---
+
 
 @dataclass(frozen=True)
 class ErnRelayConfig:
@@ -424,6 +444,7 @@ class ErnConfig:
 
 # --- samedec subprocess ---
 
+
 @dataclass(frozen=True)
 class SameDecConfig:
     bin: str
@@ -432,6 +453,7 @@ class SameDecConfig:
 
 
 # --- tests (RWT/RMT scheduling) ---
+
 
 @dataclass(frozen=True)
 class TestsGateConfig:
@@ -471,6 +493,7 @@ class TestsRmtConfig:
 @dataclass(frozen=True)
 class TestsPresentationConfig:
     """Presentation overrides for locally-originated test events."""
+
     headline_template: str
     area_text: str
     discord_area_text: str
@@ -494,6 +517,7 @@ class TestsConfig:
 
 # --- zonecounty ---
 
+
 @dataclass(frozen=True)
 class ZoneCountyConfig:
     enabled: bool
@@ -505,6 +529,7 @@ class ZoneCountyConfig:
 
 # --- mareas ---
 
+
 @dataclass(frozen=True)
 class MareasConfig:
     enabled: bool
@@ -513,6 +538,7 @@ class MareasConfig:
 
 
 # --- station_feed ---
+
 
 @dataclass(frozen=True)
 class StationFeedHousekeepingConfig:
@@ -543,6 +569,7 @@ class StationFeedConfig:
 
 
 # --- api ---
+
 
 class AuthMode(str, Enum):
     STATIC = "static"
@@ -605,6 +632,7 @@ class ApiConfig:
 
 # --- dedupe ---
 
+
 @dataclass(frozen=True)
 class DedupeConfig:
     ttl_seconds: int
@@ -613,10 +641,10 @@ class DedupeConfig:
 # --- tts ---
 
 
-
 @dataclass(frozen=True)
 class LogsRuntimeConfig:
     """Runtime/systemd logging policy knobs."""
+
     level: str = "INFO"
     color: str = "never"  # never|auto|always
     httpx_level: str = "WARNING"
@@ -639,6 +667,7 @@ class LogsRuntimeConfig:
 @dataclass(frozen=True)
 class LogsDiscordConfig:
     """Discord webhook logging knobs. URLs come from .env, not config.yaml."""
+
     enabled: bool = False
 
     # Per-channel on/off toggles.  A channel only fires if both `enabled` AND
@@ -660,9 +689,9 @@ class LogsDiscordConfig:
     rate_limit_per_minute: int = 20
 
     # Content knobs
-    post_tests: bool = True           # Post RWT/RMT test originations to alerts channel
-    post_voice_only: bool = True      # Post voice-only cut-ins (SPS, CAP voice, etc.)
-    cycle_rebuild_log: bool = True    # Post cycle rebuild events to ops channel
+    post_tests: bool = True  # Post RWT/RMT test originations to alerts channel
+    post_voice_only: bool = True  # Post voice-only cut-ins (SPS, CAP voice, etc.)
+    cycle_rebuild_log: bool = True  # Post cycle rebuild events to ops channel
     # AlertTracker lifecycle (load/purge on startup) — slightly noisy, off by default
     alerttracker_lifecycle_log: bool = False
     # Detailed ops/audit embeds (targeting, dedupe, audio, station-feed). Noisy, off by default.
@@ -679,6 +708,7 @@ class LogsDiscordConfig:
 class LogsConfig:
     runtime: LogsRuntimeConfig = field(default_factory=LogsRuntimeConfig)
     discord: LogsDiscordConfig = field(default_factory=LogsDiscordConfig)
+
 
 @dataclass(frozen=True)
 class VoiceTextPaulConfig:
@@ -701,12 +731,47 @@ class LocalTTSConfig:
 
 
 @dataclass(frozen=True)
+class SeasonalTtsdTTSConfig:
+    base_url: str = ""
+    client_credential_file: str = ""
+    voice: str = "voicetext-paul"
+    profile: str = "wav-48k-stereo"
+    token_ttl_seconds: int = 900
+    refresh_margin_seconds: int = 120
+    connect_timeout_seconds: float = 5.0
+    token_timeout_seconds: float = 10.0
+    synthesis_timeout_seconds: float = 180.0
+    max_input_bytes: int = 65_536
+    max_response_bytes: int = 67_108_864
+    max_error_bytes: int = 16_384
+    verify_tls: bool = True
+
+
+@dataclass(frozen=True)
+class OpenAICompatibleTTSConfig:
+    base_url: str = ""
+    api_key_file: str = ""
+    model: str = ""
+    voice: str = ""
+    response_format: str = "wav"
+    speed: float = 1.0
+    connect_timeout_seconds: float = 5.0
+    synthesis_timeout_seconds: float = 180.0
+    max_input_bytes: int = 65_536
+    max_response_bytes: int = 67_108_864
+    max_error_bytes: int = 16_384
+    verify_tls: bool = True
+
+
+@dataclass(frozen=True)
 class TTSConfig:
     backend: str
     fallback_backend: str | None
     local: LocalTTSConfig
     volume: float
     text_overrides: List[Dict[str, Any]] = field(default_factory=list)
+    seasonal_ttsd: SeasonalTtsdTTSConfig = field(default_factory=SeasonalTtsdTTSConfig)
+    openai_compatible: OpenAICompatibleTTSConfig = field(default_factory=OpenAICompatibleTTSConfig)
 
     @property
     def voice(self) -> str:
@@ -840,6 +905,7 @@ class ServiceAreaConfig:
 # Secrets — sourced from environment, not yaml
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class SecretsConfig:
     """
@@ -847,13 +913,14 @@ class SecretsConfig:
     Loaded once at startup by load_config() and kept here so no other
     module ever needs to call os.getenv() for credentials.
     """
+
     nwws_jid: str = field(repr=False)
     nwws_password: str = field(repr=False)
     icecast_source_password: str = field(repr=False)
-    icecast_admin_password: str = field(repr=False)    # may be empty
-    icecast_relay_password: str = field(repr=False)    # may be empty
-    api_token: str = field(repr=False)                 # may be empty
-    api_tokens_json: str = field(repr=False)           # may be empty — JSON blob for multi-token
+    icecast_admin_password: str = field(repr=False)  # may be empty
+    icecast_relay_password: str = field(repr=False)  # may be empty
+    api_token: str = field(repr=False)  # may be empty
+    api_tokens_json: str = field(repr=False)  # may be empty — JSON blob for multi-token
     liquidsoap_host: str
     liquidsoap_port: int
 
@@ -861,6 +928,7 @@ class SecretsConfig:
 # ---------------------------------------------------------------------------
 # Top-level AppConfig
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class AppConfig:
@@ -904,6 +972,7 @@ class AppConfig:
 # ---------------------------------------------------------------------------
 # Loader
 # ---------------------------------------------------------------------------
+
 
 def _get(d: Dict[str, Any], *keys: str, default: Any = None) -> Any:
     """Safe nested get with a fallback default."""
@@ -991,12 +1060,7 @@ def _validate_scope(value: Any, *, path: str) -> str:
             "API scopes must be strings.",
             details={"expected": "string"},
         )
-    if (
-        value != value.strip()
-        or not value
-        or not _AUTH_SCOPE_RE.fullmatch(value)
-        or value not in _KNOWN_API_SCOPES
-    ):
+    if value != value.strip() or not value or not _AUTH_SCOPE_RE.fullmatch(value) or value not in _KNOWN_API_SCOPES:
         raise _auth_error(
             "malformed_scope",
             path,
@@ -1056,10 +1120,7 @@ def _parse_scope_list(value: Any, *, path: str) -> frozenset[str]:
             "Multi-token API scopes must be a JSON array.",
             details={"expected": "array"},
         )
-    scopes = [
-        _validate_scope(scope, path=f"{path}[{index}]")
-        for index, scope in enumerate(value)
-    ]
+    scopes = [_validate_scope(scope, path=f"{path}[{index}]") for index, scope in enumerate(value)]
     return _deduplicate_scopes(scopes, path=path)
 
 
@@ -1347,9 +1408,13 @@ def _build_app_config(
         hold_event_codes=tuple(focus_hold_codes),
         excluded_sources=tuple(_upper_list(focus_raw.get("excluded_sources", DEFAULT_EXCLUDED_SOURCES))),
         test_event_codes=tuple(focus_test_codes),
-        hold_vtec_significance=tuple(_upper_list(focus_raw.get("hold_vtec_significance", DEFAULT_HOLD_VTEC_SIGNIFICANCE))),
+        hold_vtec_significance=tuple(
+            _upper_list(focus_raw.get("hold_vtec_significance", DEFAULT_HOLD_VTEC_SIGNIFICANCE))
+        ),
         marine_event_codes=tuple(_upper_list(focus_raw.get("marine_event_codes", DEFAULT_MARINE_EVENT_CODES))),
-        marine_hold_event_codes=tuple(_upper_list(focus_raw.get("marine_hold_event_codes", DEFAULT_MARINE_HOLD_EVENT_CODES))),
+        marine_hold_event_codes=tuple(
+            _upper_list(focus_raw.get("marine_hold_event_codes", DEFAULT_MARINE_HOLD_EVENT_CODES))
+        ),
     )
     spc_raw = cy.get("spc", {})
     fc_raw = cy.get("fc", {})
@@ -1367,10 +1432,7 @@ def _build_app_config(
         min_heightened_seconds=int(cy["min_heightened_seconds"]),
         lead_time_seconds=int(cy.get("lead_time_seconds", 90)),
         alert_focus=alert_focus,
-        reference_points=[
-            (float(a), float(b), str(lbl))
-            for a, b, lbl in cy["reference_points"]
-        ],
+        reference_points=[(float(a), float(b), str(lbl)) for a, b, lbl in cy["reference_points"]],
         last_product_max_chars=int(cy.get("last_product_max_chars", 260)),
         spc=CycleSpcConfig(
             enabled=bool(spc_raw.get("enabled", False)),
@@ -1424,19 +1486,11 @@ def _build_app_config(
             enabled=bool(rwr_raw.get("enabled", False)),
             office=str(rwr_raw.get("office", "LWX")).upper().strip(),
             staleness_minutes=int(rwr_raw.get("staleness_minutes", 75)),
-            anchor_stations=[
-                str(s).upper().strip()
-                for s in (rwr_raw.get("anchor_stations") or [])
-                if str(s).strip()
-            ],
+            anchor_stations=[str(s).upper().strip() for s in (rwr_raw.get("anchor_stations") or []) if str(s).strip()],
             fallback_stations=[
-                str(s).upper().strip()
-                for s in (rwr_raw.get("fallback_stations") or [])
-                if str(s).strip()
+                str(s).upper().strip() for s in (rwr_raw.get("fallback_stations") or []) if str(s).strip()
             ],
-            pressure_trend_threshold_inhg=float(
-                rwr_raw.get("pressure_trend_threshold_inhg", 0.02)
-            ),
+            pressure_trend_threshold_inhg=float(rwr_raw.get("pressure_trend_threshold_inhg", 0.02)),
             pressure_cache_hours=float(rwr_raw.get("pressure_cache_hours", 3.0)),
             max_compact_per_section=int(rwr_raw.get("max_compact_per_section", 8)),
             station_names={
@@ -1449,9 +1503,7 @@ def _build_app_config(
             enabled=bool(marine_obs_raw.get("enabled", False)),
             max_stations=int(marine_obs_raw.get("max_stations", 0)),
             anchor_stations=[
-                str(s).upper().strip()
-                for s in (marine_obs_raw.get("anchor_stations") or [])
-                if str(s).strip()
+                str(s).upper().strip() for s in (marine_obs_raw.get("anchor_stations") or []) if str(s).strip()
             ],
             station_names={
                 str(k).upper().strip(): str(v).strip()
@@ -1562,32 +1614,40 @@ def _build_app_config(
         return []
 
     pns_subtypes = []
-    for item in (pns_raw.get("subtypes") or default_pns_subtypes):
+    for item in pns_raw.get("subtypes") or default_pns_subtypes:
         if not isinstance(item, dict):
             continue
-        pns_subtypes.append(PnsSubtypeConfig(
-            name=str(item.get("name", "pns_subtype") or "pns_subtype"),
-            enabled=bool(item.get("enabled", True)),
-            audio=bool(item.get("audio", True)),
-            event=str(item.get("event", "Public Information Statement") or "Public Information Statement"),
-            code=str(item.get("code", "SPS") or "SPS").strip().upper()[:3] or "SPS",
-            key_prefix=str(item.get("key_prefix", "PNS") or "PNS"),
-            intro=str(item.get("intro", "The National Weather Service has issued the following public information statement.") or ""),
-            headline_contains=_str_list(item.get("headline_contains")),
-            body_contains_all=_str_list(item.get("body_contains_all")),
-            body_contains_any=_str_list(item.get("body_contains_any")),
-            reject_contains=_str_list(item.get("reject_contains")),
-            max_fresh_hours=float(item.get("max_fresh_hours", 18.0)),
-            require_same_day=bool(item.get("require_same_day", False)),
-            max_chars=int(item.get("max_chars", 1800)),
-        ))
+        pns_subtypes.append(
+            PnsSubtypeConfig(
+                name=str(item.get("name", "pns_subtype") or "pns_subtype"),
+                enabled=bool(item.get("enabled", True)),
+                audio=bool(item.get("audio", True)),
+                event=str(item.get("event", "Public Information Statement") or "Public Information Statement"),
+                code=str(item.get("code", "SPS") or "SPS").strip().upper()[:3] or "SPS",
+                key_prefix=str(item.get("key_prefix", "PNS") or "PNS"),
+                intro=str(
+                    item.get(
+                        "intro", "The National Weather Service has issued the following public information statement."
+                    )
+                    or ""
+                ),
+                headline_contains=_str_list(item.get("headline_contains")),
+                body_contains_all=_str_list(item.get("body_contains_all")),
+                body_contains_any=_str_list(item.get("body_contains_any")),
+                reject_contains=_str_list(item.get("reject_contains")),
+                max_fresh_hours=float(item.get("max_fresh_hours", 18.0)),
+                require_same_day=bool(item.get("require_same_day", False)),
+                max_chars=int(item.get("max_chars", 1800)),
+            )
+        )
 
     pns = PnsConfig(
         enabled=bool(pns_raw.get("enabled", True)),
         default_expire_hours=float(pns_raw.get("default_expire_hours", 4.0)),
         hard_stop_delimiter=str(pns_raw.get("hard_stop_delimiter", "&&") or "&&"),
         suppress_unknown_audio=bool(pns_raw.get("suppress_unknown_audio", True)),
-        reject_audio_keywords=_str_list(pns_raw.get("reject_audio_keywords")) or [
+        reject_audio_keywords=_str_list(pns_raw.get("reject_audio_keywords"))
+        or [
             "spotter reports",
             "storm reports",
             "preliminary local storm report",
@@ -1640,39 +1700,81 @@ def _build_app_config(
     # ------------------------------------------------------------------
     health_raw = raw.get("health", {})
     health_sources_raw = health_raw.get("sources") or {
-        "nwws_oi": {"enabled": True, "role": "alert_redundant", "stale_after_seconds": 600, "failure_threshold": 2, "critical": False},
-        "cap_api": {"enabled": True, "role": "alert", "stale_after_seconds": 300, "failure_threshold": 3, "critical": True},
-        "nws_api": {"enabled": True, "role": "forecast", "stale_after_seconds": 900, "failure_threshold": 3, "critical": False},
+        "nwws_oi": {
+            "enabled": True,
+            "role": "alert_redundant",
+            "stale_after_seconds": 600,
+            "failure_threshold": 2,
+            "critical": False,
+        },
+        "cap_api": {
+            "enabled": True,
+            "role": "alert",
+            "stale_after_seconds": 300,
+            "failure_threshold": 3,
+            "critical": True,
+        },
+        "nws_api": {
+            "enabled": True,
+            "role": "forecast",
+            "stale_after_seconds": 900,
+            "failure_threshold": 3,
+            "critical": False,
+        },
     }
     health_sources: List[HealthSourceConfig] = []
     if isinstance(health_sources_raw, dict):
         iter_sources = health_sources_raw.items()
     else:
-        iter_sources = ((str((item or {}).get("name", "")), item) for item in health_sources_raw if isinstance(item, dict))
+        iter_sources = (
+            (str((item or {}).get("name", "")), item) for item in health_sources_raw if isinstance(item, dict)
+        )
     for name, item in iter_sources:
         if not isinstance(item, dict):
             continue
         source_name = str(item.get("name", name) or name).strip()
         if not source_name:
             continue
-        health_sources.append(HealthSourceConfig(
-            name=source_name,
-            enabled=bool(item.get("enabled", True)),
-            role=str(item.get("role", "general") or "general"),
-            stale_after_seconds=int(item.get("stale_after_seconds", 600)),
-            failure_threshold=int(item.get("failure_threshold", 3)),
-            critical=bool(item.get("critical", False)),
-        ))
+        health_sources.append(
+            HealthSourceConfig(
+                name=source_name,
+                enabled=bool(item.get("enabled", True)),
+                role=str(item.get("role", "general") or "general"),
+                stale_after_seconds=int(item.get("stale_after_seconds", 600)),
+                failure_threshold=int(item.get("failure_threshold", 3)),
+                critical=bool(item.get("critical", False)),
+            )
+        )
 
     health = HealthConfig(
         enabled=bool(health_raw.get("enabled", True)),
         check_interval_seconds=int(health_raw.get("check_interval_seconds", 30)),
         min_hold_seconds=int(health_raw.get("min_hold_seconds", 300)),
         detached_loop_only=bool(health_raw.get("detached_loop_only", True)),
-        source_impaired_message=str(health_raw.get("source_impaired_message", "SeasonalWeather is operating with reduced data-feed redundancy. Some information may be delayed.")),
-        degraded_message=str(health_raw.get("degraded_message", "SeasonalWeather is operating in a degraded mode. Some National Weather Service data may be delayed or unavailable.")),
-        critical_message=str(health_raw.get("critical_message", "SeasonalWeather is operating in a degraded mode. Current watches, warnings, and advisories may be delayed or unavailable.")),
-        detached_message=str(health_raw.get("detached_message", "SeasonalWeather is temporarily unable to receive current National Weather Service information. Please use another weather information source or visit weather.gov for the latest information.")),
+        source_impaired_message=str(
+            health_raw.get(
+                "source_impaired_message",
+                "SeasonalWeather is operating with reduced data-feed redundancy. Some information may be delayed.",
+            )
+        ),
+        degraded_message=str(
+            health_raw.get(
+                "degraded_message",
+                "SeasonalWeather is operating in a degraded mode. Some National Weather Service data may be delayed or unavailable.",
+            )
+        ),
+        critical_message=str(
+            health_raw.get(
+                "critical_message",
+                "SeasonalWeather is operating in a degraded mode. Current watches, warnings, and advisories may be delayed or unavailable.",
+            )
+        ),
+        detached_message=str(
+            health_raw.get(
+                "detached_message",
+                "SeasonalWeather is temporarily unable to receive current National Weather Service information. Please use another weather information source or visit weather.gov for the latest information.",
+            )
+        ),
         sources=health_sources,
     )
 
@@ -1798,9 +1900,7 @@ def _build_app_config(
     global_postpone_minutes = int(tst_raw.get("postpone_minutes", 15))
     global_max_postpone_hours = int(tst_raw.get("max_postpone_hours", 6))
     global_max_postpone_days = int(tst_raw.get("max_postpone_days", 2))
-    rwt_default_postpone_policy = (
-        global_postpone_policy if "postpone_policy" in tst_raw else "next_day"
-    )
+    rwt_default_postpone_policy = global_postpone_policy if "postpone_policy" in tst_raw else "next_day"
 
     def _tests_gate_config(section_raw: Dict[str, Any]) -> TestsGateConfig:
         gate_raw = section_raw.get("gate", {})
@@ -1820,9 +1920,7 @@ def _build_app_config(
         max_postpone_hours=global_max_postpone_hours,
         max_postpone_days=global_max_postpone_days,
         jitter_seconds=int(tst_raw.get("jitter_seconds", 60)),
-        toneout_cooldown_seconds=int(
-            tst_raw.get("toneout_cooldown_seconds", cycle.min_heightened_seconds)
-        ),
+        toneout_cooldown_seconds=int(tst_raw.get("toneout_cooldown_seconds", cycle.min_heightened_seconds)),
         cap_block_seconds=int(tst_raw.get("cap_block_seconds", 3600)),
         ern_block_seconds=int(tst_raw.get("ern_block_seconds", 3600)),
         presentation=TestsPresentationConfig(
@@ -1909,9 +2007,7 @@ def _build_app_config(
     if not isinstance(sf_nwws_tz_raw, dict):
         sf_nwws_tz_raw = {}
     sf_nwws_tz = {
-        str(k).strip().upper(): str(v).strip()
-        for k, v in sf_nwws_tz_raw.items()
-        if str(k).strip() and str(v).strip()
+        str(k).strip().upper(): str(v).strip() for k, v in sf_nwws_tz_raw.items() if str(k).strip() and str(v).strip()
     }
 
     station_feed = StationFeedConfig(
@@ -1975,7 +2071,9 @@ def _build_app_config(
     backend = "local" if legacy_local else str(tts_raw["backend"])
     local_engine = local_aliases.get(backend_raw, str(local_raw.get("engine", "espeak-ng")))
     local_voice = tts_raw.get("voice", local_raw.get("voice", "9")) if legacy_local else local_raw.get("voice", "9")
-    local_rate = tts_raw.get("rate_wpm", local_raw.get("rate_wpm", 165)) if legacy_local else local_raw.get("rate_wpm", 165)
+    local_rate = (
+        tts_raw.get("rate_wpm", local_raw.get("rate_wpm", 165)) if legacy_local else local_raw.get("rate_wpm", 165)
+    )
     vtp_raw = (
         tts_raw.get("voicetext_paul", local_raw.get("voicetext_paul", {}))
         if legacy_local
@@ -1986,6 +2084,51 @@ def _build_app_config(
     if fallback_raw is not None:
         fallback_value = str(fallback_raw).strip().lower()
         fallback_backend = "local" if fallback_value in local_aliases else str(fallback_raw)
+    seasonal_raw = tts_raw.get("seasonal_ttsd", {}) or {}
+    openai_raw = tts_raw.get("openai_compatible", {}) or {}
+
+    def remote_url(value: object, label: str, *, required: bool, openai: bool = False) -> str:
+        url = str(value or "").strip()
+        if not url and not required:
+            return ""
+        parsed = urlsplit(url)
+        if (
+            parsed.scheme != "https"
+            or not parsed.netloc
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(f"{label} must be an HTTPS origin without credentials, query, or fragment")
+        path = parsed.path.rstrip("/")
+        if openai and not path.endswith("/v1"):
+            raise ValueError(f"{label} must include the /v1 API path")
+        if not openai and path.endswith("/v1"):
+            raise ValueError(f"{label} must not include /v1; the adapter supplies that route")
+        return url.rstrip("/")
+
+    def bounded_remote_number(
+        value: object, label: str, *, integer: bool = False, maximum: int | float | None = None
+    ) -> int | float:
+        number = int(cast(Any, value)) if integer else float(cast(Any, value))
+        if number <= 0 or (isinstance(number, float) and not math.isfinite(number)):
+            raise ValueError(f"{label} must be positive")
+        if maximum is not None and number > maximum:
+            raise ValueError(f"{label} exceeds its bound")
+        return number
+
+    remote_selected = {backend, fallback_backend}
+    seasonal_required = "seasonal_ttsd" in remote_selected
+    openai_required = "openai_compatible" in remote_selected
+    for provider, provider_raw, selected in (
+        ("seasonal_ttsd", seasonal_raw, seasonal_required),
+        ("openai_compatible", openai_raw, openai_required),
+    ):
+        errors = remote_tts_configuration_errors(provider, provider_raw, selected=selected)
+        if errors:
+            field, message = errors[0]
+            raise ValueError(f"tts.{provider}.{field} {message}")
     tts = TTSConfig(
         backend=backend,
         fallback_backend=fallback_backend,
@@ -2006,7 +2149,130 @@ def _build_app_config(
         ),
         volume=float(tts_raw.get("volume", 1.0)),
         text_overrides=list(tts_raw.get("text_overrides", []) or []),
+        seasonal_ttsd=SeasonalTtsdTTSConfig(
+            base_url=remote_url(seasonal_raw.get("base_url"), "tts.seasonal_ttsd.base_url", required=seasonal_required),
+            client_credential_file=str(seasonal_raw.get("client_credential_file", "") or "").strip(),
+            voice=str(seasonal_raw.get("voice", "voicetext-paul")).strip(),
+            profile=str(seasonal_raw.get("profile", "wav-48k-stereo")).strip(),
+            token_ttl_seconds=int(
+                bounded_remote_number(
+                    seasonal_raw.get("token_ttl_seconds", 900), "tts.seasonal_ttsd.token_ttl_seconds", integer=True
+                )
+            ),
+            refresh_margin_seconds=int(seasonal_raw.get("refresh_margin_seconds", 120)),
+            connect_timeout_seconds=float(
+                bounded_remote_number(
+                    seasonal_raw.get("connect_timeout_seconds", 5.0),
+                    "tts.seasonal_ttsd.connect_timeout_seconds",
+                    maximum=REMOTE_CONNECT_TIMEOUT_MAX,
+                )
+            ),
+            token_timeout_seconds=float(
+                bounded_remote_number(
+                    seasonal_raw.get("token_timeout_seconds", 10.0),
+                    "tts.seasonal_ttsd.token_timeout_seconds",
+                    maximum=REMOTE_TOKEN_TIMEOUT_MAX,
+                )
+            ),
+            synthesis_timeout_seconds=float(
+                bounded_remote_number(
+                    seasonal_raw.get("synthesis_timeout_seconds", 180.0),
+                    "tts.seasonal_ttsd.synthesis_timeout_seconds",
+                    maximum=REMOTE_SYNTHESIS_TIMEOUT_MAX,
+                )
+            ),
+            max_input_bytes=int(
+                bounded_remote_number(
+                    seasonal_raw.get("max_input_bytes", 65_536),
+                    "tts.seasonal_ttsd.max_input_bytes",
+                    integer=True,
+                    maximum=REMOTE_INPUT_BYTES_MAX,
+                )
+            ),
+            max_response_bytes=int(
+                bounded_remote_number(
+                    seasonal_raw.get("max_response_bytes", 67_108_864),
+                    "tts.seasonal_ttsd.max_response_bytes",
+                    integer=True,
+                    maximum=REMOTE_RESPONSE_BYTES_MAX,
+                )
+            ),
+            max_error_bytes=int(
+                bounded_remote_number(
+                    seasonal_raw.get("max_error_bytes", 16_384),
+                    "tts.seasonal_ttsd.max_error_bytes",
+                    integer=True,
+                    maximum=REMOTE_ERROR_BYTES_MAX,
+                )
+            ),
+            verify_tls=bool(seasonal_raw.get("verify_tls", True)),
+        ),
+        openai_compatible=OpenAICompatibleTTSConfig(
+            base_url=remote_url(
+                openai_raw.get("base_url"), "tts.openai_compatible.base_url", required=openai_required, openai=True
+            ),
+            api_key_file=str(openai_raw.get("api_key_file", "") or "").strip(),
+            model=str(openai_raw.get("model", "")).strip(),
+            voice=str(openai_raw.get("voice", "")).strip(),
+            response_format=str(openai_raw.get("response_format", "wav")).strip().lower(),
+            speed=float(openai_raw.get("speed", 1.0)),
+            connect_timeout_seconds=float(
+                bounded_remote_number(
+                    openai_raw.get("connect_timeout_seconds", 5.0),
+                    "tts.openai_compatible.connect_timeout_seconds",
+                    maximum=REMOTE_CONNECT_TIMEOUT_MAX,
+                )
+            ),
+            synthesis_timeout_seconds=float(
+                bounded_remote_number(
+                    openai_raw.get("synthesis_timeout_seconds", 180.0),
+                    "tts.openai_compatible.synthesis_timeout_seconds",
+                    maximum=REMOTE_SYNTHESIS_TIMEOUT_MAX,
+                )
+            ),
+            max_input_bytes=int(
+                bounded_remote_number(
+                    openai_raw.get("max_input_bytes", 65_536),
+                    "tts.openai_compatible.max_input_bytes",
+                    integer=True,
+                    maximum=REMOTE_INPUT_BYTES_MAX,
+                )
+            ),
+            max_response_bytes=int(
+                bounded_remote_number(
+                    openai_raw.get("max_response_bytes", 67_108_864),
+                    "tts.openai_compatible.max_response_bytes",
+                    integer=True,
+                    maximum=REMOTE_RESPONSE_BYTES_MAX,
+                )
+            ),
+            max_error_bytes=int(
+                bounded_remote_number(
+                    openai_raw.get("max_error_bytes", 16_384),
+                    "tts.openai_compatible.max_error_bytes",
+                    integer=True,
+                    maximum=REMOTE_ERROR_BYTES_MAX,
+                )
+            ),
+            verify_tls=bool(openai_raw.get("verify_tls", True)),
+        ),
     )
+    if seasonal_required and (
+        not tts.seasonal_ttsd.client_credential_file or not tts.seasonal_ttsd.voice or not tts.seasonal_ttsd.profile
+    ):
+        raise ValueError("selected seasonal_ttsd requires credential file, voice, and profile")
+    if seasonal_required and tts.seasonal_ttsd.refresh_margin_seconds < 0:
+        raise ValueError("tts.seasonal_ttsd.refresh_margin_seconds must not be negative")
+    if seasonal_required and tts.seasonal_ttsd.refresh_margin_seconds >= tts.seasonal_ttsd.token_ttl_seconds:
+        raise ValueError("tts.seasonal_ttsd.refresh_margin_seconds must be less than token TTL")
+    if openai_required and (
+        not tts.openai_compatible.api_key_file or not tts.openai_compatible.model or not tts.openai_compatible.voice
+    ):
+        raise ValueError("selected openai_compatible requires API key file, model, and voice")
+    if openai_required and (not math.isfinite(tts.openai_compatible.speed) or not 0 < tts.openai_compatible.speed <= 4):
+        raise ValueError("tts.openai_compatible.speed must be finite and in (0, 4]")
+    if openai_required and tts.openai_compatible.response_format not in {"wav", "mp3", "flac", "opus", "aac"}:
+        raise ValueError("tts.openai_compatible.response_format is unsupported")
 
     # ------------------------------------------------------------------
     # audio
@@ -2024,22 +2290,12 @@ def _build_app_config(
     lifecycle_raw = raw.get("lifecycle", {}) or {}
     lifecycle = LifecycleTimeouts(
         total_seconds=float(lifecycle_raw.get("total_seconds", 30.0)),
-        active_request_seconds=float(
-            lifecycle_raw.get("active_request_seconds", 10.0)
-        ),
-        publication_seconds=float(
-            lifecycle_raw.get("publication_seconds", 8.0)
-        ),
-        source_stop_seconds=float(
-            lifecycle_raw.get("source_stop_seconds", 8.0)
-        ),
+        active_request_seconds=float(lifecycle_raw.get("active_request_seconds", 10.0)),
+        publication_seconds=float(lifecycle_raw.get("publication_seconds", 8.0)),
+        source_stop_seconds=float(lifecycle_raw.get("source_stop_seconds", 8.0)),
         tts_stop_seconds=float(lifecycle_raw.get("tts_stop_seconds", 8.0)),
-        task_cancel_seconds=float(
-            lifecycle_raw.get("task_cancel_seconds", 5.0)
-        ),
-        resource_close_seconds=float(
-            lifecycle_raw.get("resource_close_seconds", 5.0)
-        ),
+        task_cancel_seconds=float(lifecycle_raw.get("task_cancel_seconds", 5.0)),
+        resource_close_seconds=float(lifecycle_raw.get("resource_close_seconds", 5.0)),
     )
     lifecycle.validate()
 
@@ -2079,9 +2335,7 @@ def _build_app_config(
         reconciliation_batch_size=int(jobs_raw.get("reconciliation_batch_size", 100)),
         payload_max_bytes=int(jobs_raw.get("payload_max_bytes", 65536)),
         result_max_bytes=int(jobs_raw.get("result_max_bytes", 65536)),
-        shutdown_reconciliation_seconds=float(
-            jobs_raw.get("shutdown_reconciliation_seconds", 5.0)
-        ),
+        shutdown_reconciliation_seconds=float(jobs_raw.get("shutdown_reconciliation_seconds", 5.0)),
     )
     jobs.validate(operational_database_path=database.path)
 
@@ -2108,12 +2362,9 @@ def _build_app_config(
         icecast_relay_password=environment.optional("ICECAST_RELAY_PASSWORD"),
         api_token=environment.raw_optional("SEASONAL_API_TOKEN"),
         api_tokens_json=environment.raw_optional("SEASONAL_API_TOKENS_JSON"),
-        liquidsoap_host=environment.optional(
-            "LIQUIDSOAP_TELNET_HOST", "127.0.0.1"
-        ),
+        liquidsoap_host=environment.optional("LIQUIDSOAP_TELNET_HOST", "127.0.0.1"),
         liquidsoap_port=environment.integer("LIQUIDSOAP_TELNET_PORT", 1234),
     )
-
 
     # ------------------------------------------------------------------
     # logs — runtime policy from config.yaml; Discord webhook URLs from .env
@@ -2128,7 +2379,9 @@ def _build_app_config(
         uvicorn_error_level=str(_get(_lr, "uvicorn_error_level", default="INFO") or "INFO").strip().upper(),
         asyncio_level=str(_get(_lr, "asyncio_level", default="WARNING") or "WARNING").strip().upper(),
         slixmpp_level=str(_get(_lr, "slixmpp_level", default="WARNING") or "WARNING").strip().upper(),
-        slixmpp_xmlstream_level=str(_get(_lr, "slixmpp_xmlstream_level", default="WARNING") or "WARNING").strip().upper(),
+        slixmpp_xmlstream_level=str(_get(_lr, "slixmpp_xmlstream_level", default="WARNING") or "WARNING")
+        .strip()
+        .upper(),
         logger_levels={
             str(k).strip(): str(v).strip().upper()
             for k, v in (_get(_lr, "logger_levels", default={}) or {}).items()
@@ -2158,9 +2411,7 @@ def _build_app_config(
         post_tests=bool(_get(_ld, "post_tests", default=True)),
         post_voice_only=bool(_get(_ld, "post_voice_only", default=True)),
         cycle_rebuild_log=bool(_get(_ld, "cycle_rebuild_log", default=True)),
-        alerttracker_lifecycle_log=bool(
-            _get(_ld, "alerttracker_lifecycle_log", default=False)
-        ),
+        alerttracker_lifecycle_log=bool(_get(_ld, "alerttracker_lifecycle_log", default=False)),
         ops_detail_log=bool(_get(_ld, "ops_detail_log", default=False)),
         source_health_log=bool(_get(_ld, "source_health_log", default=True)),
         icon_cdn_url=str(_get(_ld, "icon_cdn_url", default="") or "").strip(),

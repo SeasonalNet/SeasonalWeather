@@ -36,7 +36,7 @@ published engine/voice/profile/output snapshot; it never advertises a profile
 because the request asked for it. An unbound or stale port fails closed, and a
 healthy worker with the same capability cannot authorize embedded execution.
 Generic `tts.synthesis.v1` evidence cannot qualify a selected local engine or
-a deferred remote backend.
+the separately owned remote adapters implemented in P1-17.
 
 ## Historical/pre-modernization caller inventory and purpose policy
 
@@ -210,7 +210,7 @@ opaque values.
 
 The historical `cli/inject_tool.py` is outside this modern control path and
 retains its documented privileged debug bypass status. HTTP/TLS/provider clients, remote synthesis adapters, remote credential
-handling, deferred remote execution, and Phase-2 scheduling/queue design are
-explicitly deferred to P1-17 or the later phase. P1-16 does not restart
+handling and deferred remote execution were implemented separately in P1-17;
+Phase-2 scheduling/queue design remains deferred to a later phase. P1-16 does not restart
 services, mutate live configuration, perform production synthesis, or create
 another audio cache/publication store.

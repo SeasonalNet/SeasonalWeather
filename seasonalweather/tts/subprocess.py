@@ -13,12 +13,7 @@ from pathlib import Path
 from shutil import which
 
 from .cancellation import deadline_expired, explicit_cancellation
-
-
-class ProcessFailure(RuntimeError):
-    def __init__(self, classification: str, message: str) -> None:
-        self.classification = classification
-        super().__init__(message)
+from .failures import ProcessFailure
 
 
 @dataclass(frozen=True)

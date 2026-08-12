@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -22,17 +23,18 @@ from typing import cast
 from ..artifacts.hashing import ContentIdentity
 from ..artifacts.media import WavPolicy, inspect_wav
 from ..artifacts.models import MediaMetadata
+from .adapters.base import ProviderAdapter
+from .adapters.models import ProviderAudio
 from .admission import LocalQualification, LocalQualificationDisposition, validate_synthesis_request
 from .cancellation import deadline_expired, explicit_cancellation
 from .local import LocalEngineRegistry, VoiceTextPaulHandler, _InvocationCounter
 from .models import (
+    AcceptedArtifactReference,
     ArtifactEvidence,
     BackendId,
     FallbackMetadata,
-    LastKnownGoodCandidate,
-    AcceptedArtifactReference,
     FinalizationContext,
-    content_identity_for,
+    LastKnownGoodCandidate,
     SynthesisDisposition,
     SynthesisFailure,
     SynthesisRequest,
@@ -94,7 +96,7 @@ def _voicetext_resources_available(request: SynthesisRequest) -> bool:
 
 
 class SynthesisService:
-    """One controller-facing boundary for local and deferred remote backends."""
+    """One controller-facing boundary for local and configured remote backends."""
 
     def __init__(
         self,
@@ -104,6 +106,7 @@ class SynthesisService:
         capability_check: CapabilityCheck | None = None,
         current_generation: GenerationCheck | None = None,
         lkg_resolver: LkgResolver | None = None,
+        provider_adapters: dict[BackendId, ProviderAdapter] | None = None,
     ) -> None:
         self._admission_check = admission_check
         self._activity_context = activity_context
@@ -114,11 +117,23 @@ class SynthesisService:
         self._current_generation = current_generation
         self._lkg_resolver = lkg_resolver
         self._voicetext_counters: dict[int | None, _InvocationCounter] = {}
+        self._provider_adapters = dict(provider_adapters or {})
 
     def availability(self, request: SynthesisRequest) -> tuple[bool, str]:
+        if request.backend is not BackendId.LOCAL:
+            return self._remote_availability(request)
+        return self._local_availability(request)
+
+    def _remote_availability(self, request: SynthesisRequest) -> tuple[bool, str]:
+        adapter = self._provider_adapters.get(request.backend)
+        if adapter is None or not self._remote_adapter_configured(adapter):
+            return False, "remote_backend_unconfigured"
+        return True, "tts_available"
+
+    def _local_availability(self, request: SynthesisRequest) -> tuple[bool, str]:
         local_request = self._local_capacity_request(request)
         if local_request is None:
-            return False, "backend_unimplemented"
+            return False, "backend_unavailable"
         request = local_request
         if not shutil.which("ffmpeg"):
             return False, "ffmpeg_unavailable"
@@ -139,13 +154,39 @@ class SynthesisService:
             return False, f"capability_{exc.classification}"
         return True, "tts_available"
 
+    @property
+    def provider_adapters(self) -> tuple[ProviderAdapter, ...]:
+        return tuple(self._provider_adapters.values())
+
     @staticmethod
     def _local_capacity_request(request: SynthesisRequest) -> SynthesisRequest | None:
         if request.backend is BackendId.LOCAL:
             return request
-        if request.fallback_backend is BackendId.LOCAL and policy_for(request.purpose).fallback_allowed:
-            return request.model_copy(update={"backend": BackendId.LOCAL, "fallback_backend": None})
         return None
+
+    @staticmethod
+    def _local_fallback_request(request: SynthesisRequest) -> SynthesisRequest | None:
+        if (
+            request.backend is not BackendId.LOCAL
+            and request.fallback_backend is BackendId.LOCAL
+            and policy_for(request.purpose).fallback_allowed
+        ):
+            return request.model_copy(
+                update={"backend": BackendId.LOCAL, "fallback_backend": None, "backend_profile_identity": None}
+            )
+        return None
+
+    @staticmethod
+    def _remote_adapter_configured(adapter: ProviderAdapter) -> bool:
+        config = getattr(adapter, "config", None)
+        if config is None or not getattr(config, "base_url", ""):
+            return False
+        required = (
+            ("client_credential_file", "voice", "profile")
+            if hasattr(config, "client_credential_file")
+            else ("api_key_file", "model", "voice")
+        )
+        return all(bool(getattr(config, name, "")) for name in required)
 
     def capacity_is_relevant(self, request: SynthesisRequest) -> bool:
         """Return whether the selected policy can execute a local path."""
@@ -171,28 +212,11 @@ class SynthesisService:
         static_admission = validate_synthesis_request(request)
         if static_admission is not None and static_admission.reason_code != "invalid_deadline":
             return self._failed(request, SynthesisFailure.INVALID_INPUT, started)
-        reservation = capacity_reservation
-        owns_reservation = False
+        reservation_box: list[object] = [capacity_reservation, False]
         try:
-            capacity_request = self._local_capacity_request(request)
-            if reservation is None:
-                try:
-                    reservation = self._reserve_local_capacity(capacity_request, cancellation)
-                except ProcessFailure as error:
-                    disposition = (
-                        SynthesisDisposition.CANCELLED
-                        if error.classification == "cancelled"
-                        else SynthesisDisposition.TIMED_OUT
-                        if error.classification == "timed_out"
-                        else SynthesisDisposition.FAILED
-                    )
-                    return self._failed(
-                        request,
-                        self._failure_class(error),
-                        started,
-                        disposition=disposition,
-                    )
-                owns_reservation = reservation is not None
+            initial_failure = self._reserve_initial_capacity(request, cancellation, reservation_box, started)
+            if initial_failure is not None:
+                return initial_failure
             return self._run_with_activity(
                 request,
                 output_path,
@@ -200,15 +224,30 @@ class SynthesisService:
                 last_known_good,
                 started,
                 finalize,
-                reservation,
+                reservation_box,
             )
         finally:
-            if owns_reservation:
-                self._release_capacity(reservation)
+            if reservation_box[1] and reservation_box[0] is not None:
+                self._release_capacity(reservation_box[0])
 
-    def _reserve_local_capacity(
-        self, request: SynthesisRequest | None, cancellation: object
-    ) -> object | None:
+    def _reserve_initial_capacity(
+        self, request: SynthesisRequest, cancellation: Event, reservation_box: list[object], started: float
+    ) -> SynthesisResult | None:
+        capacity_request = self._local_capacity_request(request)
+        if reservation_box[0] is not None or capacity_request is None:
+            return None
+        try:
+            reservation_box[0] = self._reserve_local_capacity(capacity_request, cancellation)
+        except ProcessFailure as error:
+            disposition = {
+                "cancelled": SynthesisDisposition.CANCELLED,
+                "timed_out": SynthesisDisposition.TIMED_OUT,
+            }.get(error.classification, SynthesisDisposition.FAILED)
+            return self._failed(request, self._failure_class(error), started, disposition=disposition)
+        reservation_box[1] = reservation_box[0] is not None
+        return None
+
+    def _reserve_local_capacity(self, request: SynthesisRequest | None, cancellation: object) -> object | None:
         if request is None:
             return None
         return self._reserve_capacity(request, cancellation)
@@ -221,15 +260,15 @@ class SynthesisService:
         last_known_good: LastKnownGoodCandidate | None,
         started: float,
         finalize: Callable[[Path, object, Callable[[], None]], None] | None,
-        reservation: object | None,
+        reservation_box: list[object],
     ) -> SynthesisResult:
         if self._activity_context is not None:
             with self._activity_context():
                 return self._synthesize_and_finalize(
-                    request, output_path, cancellation, last_known_good, started, finalize, reservation
+                    request, output_path, cancellation, last_known_good, started, finalize, reservation_box
                 )
         return self._synthesize_and_finalize(
-            request, output_path, cancellation, last_known_good, started, finalize, reservation
+            request, output_path, cancellation, last_known_good, started, finalize, reservation_box
         )
 
     def _synthesize_and_finalize(
@@ -240,20 +279,19 @@ class SynthesisService:
         last_known_good: LastKnownGoodCandidate | None,
         started: float,
         finalize: Callable[[Path, object, Callable[[], None]], None] | None,
-        capacity_reservation: object | None,
+        reservation_box: list[object],
     ) -> SynthesisResult:
         result = self._synthesize(
-            request, output_path, cancellation, last_known_good, started, capacity_reservation
+            request, output_path, cancellation, last_known_good, started, reservation_box[0], reservation_box
         )
+        capacity_reservation = reservation_box[0]
         if finalize is not None and result.disposition in {
             SynthesisDisposition.SUCCEEDED,
             SynthesisDisposition.LKG_REUSED,
         }:
             effective_request = request
             if result.fallback is not None and result.fallback.succeeded:
-                effective_request = request.model_copy(
-                    update={"backend": result.backend, "fallback_backend": None}
-                )
+                effective_request = request.model_copy(update={"backend": result.backend, "fallback_backend": None})
             finalization_context = FinalizationContext(
                 request=effective_request,
                 cancellation=cancellation,
@@ -263,8 +301,9 @@ class SynthesisService:
                 finalize(
                     output_path,
                     finalization_context,
-                    lambda: self.finalization_fence(
-                        effective_request, cancellation, capacity_reservation
+                    cast(
+                        Callable[[], None],
+                        lambda: self.finalization_fence(effective_request, cancellation, capacity_reservation),
                     ),
                 )
             except TimeoutError:
@@ -336,7 +375,11 @@ class SynthesisService:
             else request.backend.value
         )
         return self._final_acceptance_fence(
-            request, engine, deadline, cancellation, capacity_reservation  # type: ignore[arg-type]
+            request,
+            engine,
+            deadline,
+            cast(Event, cancellation),
+            capacity_reservation,
         )
 
     def _synthesize(
@@ -347,12 +390,14 @@ class SynthesisService:
         last_known_good: LastKnownGoodCandidate | None,
         started: float,
         capacity_reservation: object | None = None,
+        reservation_box: list[object] | None = None,
     ) -> SynthesisResult:
         policy = policy_for(request.purpose)
         deadline, early_result = self._deadline_and_early_result(request, cancellation, started)
         if early_result is not None:
             return early_result
 
+        prepared_text: str | None = None
         try:
             primary_engine = (
                 LocalEngineRegistry.normalize(request.local.engine) if request.backend is BackendId.LOCAL else None
@@ -377,12 +422,20 @@ class SynthesisService:
             )
             if reused is not None:
                 return reused
-            if request.backend is not BackendId.LOCAL:
-                raise ProcessFailure("backend_unavailable", "selected TTS backend is deferred to a later packet")
-            evidence = self._run_local(
-                request, output_path, primary_engine or "", deadline, cancellation, capacity_reservation
-            )
-            return self._success(request, evidence, BackendId.LOCAL, primary_engine, started)
+            prepared_text = self._prepare_text(request, deadline, cancellation)
+            if request.backend is BackendId.LOCAL:
+                evidence = self._call_local(
+                    request,
+                    output_path,
+                    primary_engine or "",
+                    deadline,
+                    cancellation,
+                    capacity_reservation,
+                    prepared_text=prepared_text,
+                )
+                return self._success(request, evidence, BackendId.LOCAL, primary_engine, started)
+            evidence = self._run_remote(request, prepared_text, output_path, deadline, cancellation)
+            return self._success(request, evidence, request.backend, request.backend.value, started)
         except ProcessFailure as primary_error:
             return self._handle_failure(
                 request,
@@ -393,6 +446,8 @@ class SynthesisService:
                 cancellation,
                 policy,
                 capacity_reservation,
+                prepared_text,
+                reservation_box,
             )
         except (ValueError, OSError):
             return self._failed(request, SynthesisFailure.INVALID_INPUT, started)
@@ -440,9 +495,7 @@ class SynthesisService:
     ) -> SynthesisResult | None:
         if candidate is None or not allowed or not self._lkg_matches(request, candidate):
             return None
-        evidence = self._copy_lkg(
-            candidate, request, output_path, deadline, cancellation, capacity_reservation
-        )
+        evidence = self._copy_lkg(candidate, request, output_path, deadline, cancellation, capacity_reservation)
         return SynthesisResult(
             disposition=SynthesisDisposition.LKG_REUSED,
             purpose=request.purpose,
@@ -496,9 +549,20 @@ class SynthesisService:
         cancellation: Event,
         policy: SynthesisPurposePolicy,
         capacity_reservation: object | None = None,
+        prepared_text: str | None = None,
+        reservation_box: list[object] | None = None,
     ) -> SynthesisResult:
         fallback_result, fallback_metadata = self._try_fallback(
-            request, primary_error, started, deadline, output_path, cancellation, policy, capacity_reservation
+            request,
+            primary_error,
+            started,
+            deadline,
+            output_path,
+            cancellation,
+            policy,
+            capacity_reservation,
+            prepared_text,
+            reservation_box,
         )
         if fallback_result is not None:
             return fallback_result
@@ -523,32 +587,34 @@ class SynthesisService:
         cancellation: Event,
         policy: SynthesisPurposePolicy,
         capacity_reservation: object | None = None,
+        prepared_text: str | None = None,
+        reservation_box: list[object] | None = None,
     ) -> tuple[SynthesisResult | None, FallbackMetadata | None]:
-        if not (
-            request.fallback_backend is BackendId.LOCAL
-            and request.backend is not BackendId.LOCAL
-            and policy.fallback_allowed
-            and primary_error.classification not in {"cancelled", "timed_out"}
-            and not explicit_cancellation(cancellation)
-            and time.monotonic() < deadline
-        ):
+        if not self._fallback_permitted(request, primary_error, policy, cancellation, deadline):
             return None, None
         try:
             engine = LocalEngineRegistry.normalize(request.local.engine)
-            fallback_request = request.model_copy(update={"backend": BackendId.LOCAL, "fallback_backend": None})
+            fallback_request = self._local_fallback_request(request)
+            if fallback_request is None:
+                return None, None
             capability = LocalEngineRegistry.capability_for(engine)
-            self._admit_capability(fallback_request, capability, capacity_reservation)
             if capacity_reservation is None:
-                evidence = self._run_local(fallback_request, output_path, engine, deadline, cancellation)
-            else:
-                evidence = self._run_local(
-                    fallback_request,
-                    output_path,
-                    engine,
-                    deadline,
-                    cancellation,
-                    capacity_reservation,
-                )
+                capacity_reservation = self._reserve_capacity(fallback_request, cancellation)
+                if reservation_box is not None:
+                    reservation_box[0] = capacity_reservation
+                    reservation_box[1] = capacity_reservation is not None
+            if capacity_reservation is None and getattr(self._capability_check, "reserve", None) is not None:
+                raise ProcessFailure("capability_rejected", "local fallback capacity is unavailable")
+            self._admit_capability(fallback_request, capability, capacity_reservation)
+            evidence = self._call_local(
+                fallback_request,
+                output_path,
+                engine,
+                deadline,
+                cancellation,
+                capacity_reservation,
+                prepared_text=prepared_text,
+            )
             metadata = self._fallback_metadata(request, primary_error, True, "explicit_local_fallback", deadline)
             result = self._success(fallback_request, evidence, BackendId.LOCAL, engine, started)
             return result.model_copy(update={"fallback": metadata}), None
@@ -556,6 +622,23 @@ class SynthesisService:
             return None, self._fallback_metadata(
                 request, primary_error, False, self._fallback_evidence(fallback_error), deadline
             )
+
+    @staticmethod
+    def _fallback_permitted(
+        request: SynthesisRequest,
+        primary_error: ProcessFailure,
+        policy: SynthesisPurposePolicy,
+        cancellation: Event,
+        deadline: float,
+    ) -> bool:
+        return (
+            request.fallback_backend is BackendId.LOCAL
+            and request.backend is not BackendId.LOCAL
+            and policy.fallback_allowed
+            and primary_error.classification not in {"cancelled", "timed_out"}
+            and not explicit_cancellation(cancellation)
+            and time.monotonic() < deadline
+        )
 
     @staticmethod
     def _fallback_metadata(
@@ -583,21 +666,13 @@ class SynthesisService:
         deadline: float,
         cancellation: Event,
         capacity_reservation: object | None = None,
+        *,
+        prepared_text: str | None = None,
     ) -> ArtifactEvidence:
         self._fence(request, deadline, cancellation, "local synthesis admission")
         if self._current_generation is not None and not self._current_generation(request.configuration_generation):
             raise ProcessFailure("stale_result", "configuration generation changed before synthesis")
-        try:
-            text = preprocess_text(
-                request.text,
-                request.text_overrides,
-                deadline=deadline,
-                cancellation=cancellation,
-            )
-        except ProcessFailure:
-            raise
-        except (ValueError, re.error) as exc:
-            raise ProcessFailure("invalid_input", "common preprocessing rejected the synthesis input") from exc
+        text = prepared_text if prepared_text is not None else self._prepare_text(request, deadline, cancellation)
         output_path = Path(output_path)
         if output_path.is_symlink():
             raise ProcessFailure("output_invalid", "TTS output target must not be a symlink")
@@ -619,6 +694,115 @@ class SynthesisService:
                 cancellation,
                 capacity_reservation,
             )
+
+    def _call_local(
+        self,
+        request: SynthesisRequest,
+        output_path: Path,
+        engine: str,
+        deadline: float,
+        cancellation: Event,
+        capacity_reservation: object | None,
+        *,
+        prepared_text: str | None,
+    ) -> ArtifactEvidence:
+        """Call the handler boundary while retaining the P1-16 test facade."""
+
+        parameters = inspect.signature(self._run_local).parameters
+        kwargs: dict[str, object] = {}
+        if "capacity_reservation" in parameters:
+            kwargs["capacity_reservation"] = capacity_reservation
+        if "prepared_text" in parameters:
+            kwargs["prepared_text"] = prepared_text
+        runner = cast(object, self._run_local)
+        return cast(Callable[..., ArtifactEvidence], runner)(
+            request, output_path, engine, deadline, cancellation, **kwargs
+        )
+
+    @staticmethod
+    def _prepare_text(request: SynthesisRequest, deadline: float, cancellation: Event) -> str:
+        try:
+            return preprocess_text(
+                request.text,
+                request.text_overrides,
+                deadline=deadline,
+                cancellation=cancellation,
+            )
+        except ProcessFailure:
+            raise
+        except (ValueError, re.error) as exc:
+            raise ProcessFailure("invalid_input", "common preprocessing rejected the synthesis input") from exc
+
+    def _run_remote(
+        self,
+        request: SynthesisRequest,
+        text: str,
+        output_path: Path,
+        deadline: float,
+        cancellation: Event,
+    ) -> ArtifactEvidence:
+        self._fence(request, deadline, cancellation, "remote synthesis admission")
+        if self._current_generation is not None and not self._current_generation(request.configuration_generation):
+            raise ProcessFailure("stale_result", "configuration generation changed before remote synthesis")
+        adapter = self._provider_adapters.get(request.backend)
+        if adapter is None:
+            raise ProcessFailure("backend_unavailable", "selected remote TTS backend is not configured")
+        output_path = Path(output_path)
+        if output_path.is_symlink():
+            raise ProcessFailure("output_invalid", "TTS output target must not be a symlink")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".tts-", dir=str(output_path.parent)) as raw_root:
+            raw_dir = Path(raw_root)
+            remote = adapter.synthesize(
+                request,
+                text,
+                output_dir=raw_dir,
+                deadline=deadline,
+                cancellation=cancellation,
+            )
+            self._validate_remote_audio(request, remote)
+            normalized, media = self._normalize_local_audio(Path(remote.path), request, raw_dir, deadline, cancellation)
+            return self._accept_local_audio(
+                request,
+                request.backend.value,
+                output_path,
+                normalized,
+                media,
+                raw_dir,
+                deadline,
+                cancellation,
+                None,
+            )
+
+    @staticmethod
+    def _validate_remote_audio(request: SynthesisRequest, remote: ProviderAudio) -> None:
+        """Apply common media authority before any remote result is normalized."""
+
+        if request.backend is not BackendId.SEASONAL_TTSD:
+            return
+        if remote.format != "wav" or remote.media_type != "audio/wav":
+            raise ProcessFailure("unsupported_audio_format", "seasonal_ttsd returned unsupported audio")
+        try:
+            media = inspect_wav(
+                remote.path,
+                policy=WavPolicy(
+                    maximum_duration_seconds=request.output.maximum_duration_seconds,
+                    allowed_sample_widths=(2,),
+                    allowed_channels=(2,),
+                ),
+            )
+        except (OSError, ValueError) as error:
+            raise ProcessFailure(
+                "unsupported_audio_format", "seasonal_ttsd returned nonconforming WAV audio"
+            ) from error
+        if (
+            media.sample_rate_hz != 48_000
+            or media.channels != 2
+            or media.sample_width_bytes != 2
+            or media.frame_count is None
+            or media.frame_count < 1
+        ):
+            raise ProcessFailure("unsupported_audio_format", "seasonal_ttsd returned nonconforming WAV audio")
 
     def _invoke_local_handler(
         self,
@@ -902,6 +1086,8 @@ class SynthesisService:
             "preprocessing_version": request.preprocessing_version,
             "voicetext": request.local.voicetext_paul.model_dump(mode="json"),
         }
+        if request.backend is not BackendId.LOCAL:
+            profile["backend_profile_identity"] = request.backend_profile_identity or "unconfigured"
         raw = json.dumps(profile, sort_keys=True, separators=(",", ":"))
         return f"sha256:{hashlib.sha256(raw.encode()).hexdigest()[:32]}"
 
@@ -921,13 +1107,14 @@ class SynthesisService:
         capability = (
             LocalEngineRegistry.capability_for(engine) if request.backend is BackendId.LOCAL else request.backend.value
         )
-        reserved_check = getattr(self._capability_check, "for_reservation", None)
-        decision = (
-            reserved_check(request, capability, capacity_reservation)
-            if capacity_reservation is not None and reserved_check is not None
-            else self._capability_check(request, capability)
-        )
-        self._require_capability(decision)
+        if request.backend is BackendId.LOCAL:
+            reserved_check = getattr(self._capability_check, "for_reservation", None)
+            decision = (
+                reserved_check(request, capability, capacity_reservation)
+                if capacity_reservation is not None and reserved_check is not None
+                else self._capability_check(request, capability)
+            )
+            self._require_capability(decision)
         if request.content_identity is None:
             raise ProcessFailure("stale_result", "synthesis request content identity is missing")
         return FinalizationAuthorityEvidence(
@@ -1005,15 +1192,28 @@ class SynthesisService:
         return {
             "cancelled": SynthesisFailure.CANCELLED,
             "timed_out": SynthesisFailure.DEADLINE_EXPIRED,
+            "provider_timed_out": SynthesisFailure.PROVIDER_TIMEOUT,
             "stale_result": SynthesisFailure.STALE_RESULT,
             "unsupported_engine": SynthesisFailure.UNSUPPORTED_ENGINE,
             "unsupported_backend": SynthesisFailure.UNSUPPORTED_BACKEND,
             "backend_unavailable": SynthesisFailure.BACKEND_UNAVAILABLE,
             "capability_rejected": SynthesisFailure.CAPABILITY_REJECTED,
             "input_limit": SynthesisFailure.INVALID_INPUT,
+            "invalid_input": SynthesisFailure.INVALID_INPUT,
+            "request_rejected": SynthesisFailure.REQUEST_REJECTED,
             "output_limit": SynthesisFailure.PROCESS_OUTPUT_LIMIT,
             "output_invalid": SynthesisFailure.OUTPUT_INVALID,
             "lkg_rejected": SynthesisFailure.LKG_REJECTED,
+            "authentication_failed": SynthesisFailure.AUTHENTICATION_FAILED,
+            "authorization_failed": SynthesisFailure.AUTHORIZATION_FAILED,
+            "rate_limited": SynthesisFailure.RATE_LIMITED,
+            "tls_failed": SynthesisFailure.TLS_FAILED,
+            "transport_failed": SynthesisFailure.TRANSPORT_FAILED,
+            "malformed_response": SynthesisFailure.RESPONSE_MALFORMED,
+            "response_too_large": SynthesisFailure.RESPONSE_TOO_LARGE,
+            "unsupported_audio_format": SynthesisFailure.UNSUPPORTED_AUDIO_FORMAT,
+            "provider_failed": SynthesisFailure.PROVIDER_FAILED,
+            "redirect_rejected": SynthesisFailure.REDIRECT_REJECTED,
         }.get(error.classification, SynthesisFailure.PROCESS_FAILED)
 
     @staticmethod

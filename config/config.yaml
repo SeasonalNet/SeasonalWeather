@@ -502,7 +502,7 @@ dedupe:
 tts:
   backend: "local"           # canonical P1-16 backend identity
                               # Legacy backend: <engine> spelling remains compatibility-only.
-  fallback_backend: null      # local | seasonal_ttsd | openai_compatible; remote adapters deferred to P1-17
+  fallback_backend: null      # local | seasonal_ttsd | openai_compatible
   local:
     engine: "espeak-ng"       # espeak-ng | piper | festival | dectalk | voicetext_paul
     voice: "9"
@@ -532,6 +532,35 @@ tts:
       #     ph: "TH AH1 N D ER0 S T AO2 R M"
       #     regex: true
       #     ignore_case: true
+  # Optional remote adapters are intentionally unconfigured and disabled
+  # unless selected as backend or fallback_backend.
+  seasonal_ttsd:
+    base_url: ""
+    client_credential_file: ""
+    voice: "voicetext-paul"
+    profile: "wav-48k-stereo"
+    token_ttl_seconds: 900
+    refresh_margin_seconds: 120
+    connect_timeout_seconds: 5.0
+    token_timeout_seconds: 10.0
+    synthesis_timeout_seconds: 180.0
+    max_input_bytes: 65536
+    max_response_bytes: 67108864
+    max_error_bytes: 16384
+    verify_tls: true
+  openai_compatible:
+    base_url: ""
+    api_key_file: ""
+    model: ""
+    voice: ""
+    response_format: "wav"
+    speed: 1.0
+    connect_timeout_seconds: 5.0
+    synthesis_timeout_seconds: 180.0
+    max_input_bytes: 65536
+    max_response_bytes: 67108864
+    max_error_bytes: 16384
+    verify_tls: true
   volume: 1.0
 
   # Generic text replacements applied to ALL TTS backends after clean_for_tts().

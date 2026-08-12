@@ -48,6 +48,7 @@ class SynthesisDisposition(StrEnum):
 
 class SynthesisFailure(StrEnum):
     INVALID_INPUT = "invalid_input"
+    REQUEST_REJECTED = "request_rejected"
     UNSUPPORTED_BACKEND = "unsupported_backend"
     UNSUPPORTED_ENGINE = "unsupported_engine"
     CAPABILITY_REJECTED = "capability_rejected"
@@ -56,10 +57,21 @@ class SynthesisFailure(StrEnum):
     PROCESS_FAILED = "process_failed"
     PROCESS_OUTPUT_LIMIT = "process_output_limit"
     DEADLINE_EXPIRED = "deadline_expired"
+    PROVIDER_TIMEOUT = "provider_timeout"
     CANCELLED = "cancelled"
     STALE_RESULT = "stale_result"
     FALLBACK_UNAVAILABLE = "fallback_unavailable"
     LKG_REJECTED = "lkg_rejected"
+    AUTHENTICATION_FAILED = "authentication_failed"
+    AUTHORIZATION_FAILED = "authorization_failed"
+    RATE_LIMITED = "rate_limited"
+    TLS_FAILED = "tls_failed"
+    TRANSPORT_FAILED = "transport_failed"
+    RESPONSE_MALFORMED = "malformed_response"
+    RESPONSE_TOO_LARGE = "response_too_large"
+    UNSUPPORTED_AUDIO_FORMAT = "unsupported_audio_format"
+    PROVIDER_FAILED = "provider_failed"
+    REDIRECT_REJECTED = "redirect_rejected"
 
 
 class TtsModel(BaseModel):
@@ -141,6 +153,7 @@ class SynthesisRequest(TtsModel):
     fallback_backend: BackendId | None = None
     text: str = Field(min_length=1, max_length=MAX_SYNTHESIS_TEXT)
     content_identity: str | None = None
+    backend_profile_identity: str | None = None
     source_identity: str | None = None
     event_identity: str | None = None
     segment_identity: str | None = None
@@ -169,6 +182,7 @@ class SynthesisRequest(TtsModel):
 
     @field_validator(
         "content_identity",
+        "backend_profile_identity",
         "source_identity",
         "event_identity",
         "segment_identity",

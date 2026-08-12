@@ -1,3 +1,3 @@
-from seasonalweather.artifacts import promotion
+from seasonalweather.tts.adapters import SeasonalTtsdAdapter
 
-del promotion
+del SeasonalTtsdAdapter

@@ -14,12 +14,12 @@ from seasonalweather.config import AppConfig
 from seasonalweather.lifecycle import WorkClass
 from seasonalweather.same.locations import normalize_same_allow_set
 from seasonalweather.same.targeting import SameTargetResolver
-from seasonalweather.tts.tts import TTS
 from seasonalweather.tts.admission import (
     ControllerLocalQualificationSource,
     P109TtsQualificationAdapter,
     local_options_from_configuration,
 )
+from seasonalweather.tts.tts import TTS
 
 from .models import ReloadDiff, ReloadDisposition
 from .safe_point import TTS as TTS_ACTIVITY
@@ -210,6 +210,16 @@ class OrchestratorPreparedResources:
         client = getattr(old_targeting, "_zone_client", None)
         if client is not None:
             await client.aclose()
+        self._close_retired_tts()
+
+    def _close_retired_tts(self) -> None:
+        old_tts = next(
+            (value for owner, name, value in self._snapshot if owner is self.orch and name == "tts"),
+            None,
+        )
+        close_tts = getattr(old_tts, "close", None)
+        if close_tts is not None:
+            close_tts()
 
     def retirement_descriptor(self) -> dict[str, object]:
         return {
@@ -375,6 +385,8 @@ class OrchestratorResourcePreparer:
                 activity_context=lambda: self.activities.activity(TTS_ACTIVITY),
                 capability_check=tts_capability_check or getattr(self.orch, "tts_capability_check", None),
                 execution_executor=getattr(self.orch, "tts_execution_port", None),
+                seasonal_ttsd_config=configuration.tts.seasonal_ttsd,
+                openai_compatible_config=configuration.tts.openai_compatible,
             )
             if resource_plan.replace_tts
             else None

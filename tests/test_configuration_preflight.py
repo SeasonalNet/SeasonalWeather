@@ -474,3 +474,35 @@ def test_production_executable_probe_is_framework_owned_and_read_only() -> None:
 
     assert result.status is ProbeStatus.AVAILABLE
     assert not result.evidence
+
+
+def test_remote_credential_probe_requires_a_regular_non_symlink_file(tmp_path: Path) -> None:
+    target = tmp_path / "credential"
+    target.write_text("fixture", encoding="ascii")
+    link = tmp_path / "credential-link"
+    link.symlink_to(target)
+    fifo = tmp_path / "credential-fifo"
+    os.mkfifo(fifo)
+    results = asyncio.run(
+        run_preflight(
+            (
+                local_path_probe(
+                    identifier="credential-link",
+                    owner="tts",
+                    path=str(link),
+                    required=True,
+                    directory=False,
+                    regular_file=True,
+                ),
+                local_path_probe(
+                    identifier="credential-fifo",
+                    owner="tts",
+                    path=str(fifo),
+                    required=True,
+                    directory=False,
+                    regular_file=True,
+                ),
+            )
+        )
+    )
+    assert all(result.status is ProbeStatus.UNAVAILABLE for result in results)

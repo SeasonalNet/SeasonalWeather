@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import json
+import re
 from collections import Counter
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
@@ -164,6 +165,102 @@ def test_tts_backend_and_fallback_semantics_are_admitted_before_runtime(
         for issue in stage.issues
     }
     assert rule in semantic_rules
+
+
+@pytest.mark.parametrize(
+    ("provider", "field", "replacement"),
+    [
+        ("seasonal_ttsd", "base_url", 'base_url: "https://user:secret@tts.example.test"'),
+        ("seasonal_ttsd", "base_url", 'base_url: "https://[bad"'),
+        ("seasonal_ttsd", "base_url", 'base_url: "https://tts.example.test:abc"'),
+        ("seasonal_ttsd", "base_url", 'base_url: "https://tts.example.test:99999"'),
+        ("seasonal_ttsd", "base_url", 'base_url: "https://tts.example.test:0"'),
+        ("seasonal_ttsd", "client_credential_file", 'client_credential_file: ""'),
+        ("seasonal_ttsd", "voice", 'voice: "other-voice"'),
+        ("seasonal_ttsd", "profile", 'profile: "other-profile"'),
+        ("seasonal_ttsd", "token_ttl_seconds", "token_ttl_seconds: -1"),
+        ("seasonal_ttsd", "refresh_margin_seconds", "refresh_margin_seconds: 900"),
+        ("seasonal_ttsd", "connect_timeout_seconds", "connect_timeout_seconds: 31.0"),
+        ("seasonal_ttsd", "token_timeout_seconds", "token_timeout_seconds: 61.0"),
+        ("seasonal_ttsd", "synthesis_timeout_seconds", "synthesis_timeout_seconds: 601.0"),
+        ("seasonal_ttsd", "max_input_bytes", "max_input_bytes: 1048577"),
+        ("seasonal_ttsd", "max_response_bytes", "max_response_bytes: 134217729"),
+        ("seasonal_ttsd", "max_error_bytes", "max_error_bytes: 1048577"),
+        ("seasonal_ttsd", "verify_tls", "verify_tls: false"),
+        ("openai_compatible", "base_url", 'base_url: "https://api.example.test"'),
+        ("openai_compatible", "api_key_file", 'api_key_file: ""'),
+        ("openai_compatible", "model", 'model: ""'),
+        ("openai_compatible", "voice", 'voice: ""'),
+        ("openai_compatible", "response_format", 'response_format: "pcm"'),
+        ("openai_compatible", "speed", "speed: 5.0"),
+        ("openai_compatible", "connect_timeout_seconds", "connect_timeout_seconds: 31.0"),
+        ("openai_compatible", "synthesis_timeout_seconds", "synthesis_timeout_seconds: 601.0"),
+        ("openai_compatible", "max_input_bytes", "max_input_bytes: 1048577"),
+        ("openai_compatible", "max_response_bytes", "max_response_bytes: 134217729"),
+        ("openai_compatible", "max_error_bytes", "max_error_bytes: 1048577"),
+        ("openai_compatible", "verify_tls", "verify_tls: false"),
+    ],
+)
+def test_selected_remote_provider_fields_are_source_mapped(provider: str, field: str, replacement: str) -> None:
+    text = EXAMPLE.read_text(encoding="utf-8")
+    text = text.replace('  backend: "local"', f'  backend: "{provider}"', 1)
+    if provider == "seasonal_ttsd":
+        text = text.replace(
+            '  seasonal_ttsd:\n    base_url: ""', '  seasonal_ttsd:\n    base_url: "https://tts.example.test"', 1
+        )
+        text = text.replace(
+            '    client_credential_file: ""', '    client_credential_file: "/run/credentials/client"', 1
+        )
+    else:
+        text = text.replace(
+            '  openai_compatible:\n    base_url: ""',
+            '  openai_compatible:\n    base_url: "https://api.example.test/v1"',
+            1,
+        )
+        text = text.replace('    api_key_file: ""', '    api_key_file: "/run/credentials/api-key"', 1)
+        text = text.replace('    model: ""', '    model: "tts-model"', 1)
+        text = text.replace('    voice: ""', '    voice: "alloy"', 1)
+    value = replacement.removeprefix(f"{field}: ")
+    block_end = "  openai_compatible:" if provider == "seasonal_ttsd" else "  volume:"
+    pattern = rf"(?ms)(  {provider}:.*?)(?=\n{block_end})"
+    block = re.search(pattern, text)
+    assert block is not None
+    updated = re.sub(rf"(?m)^    {field}: .*?$", f"    {field}: {value}", block.group(1), count=1)
+    text = text[: block.start(1)] + updated + text[block.end(1) :]
+    report = _report(text)
+    assert not report.decision.valid
+    assert any(
+        issue.path is not None and issue.path.to_pointer() == f"/tts/{provider}/{field}"
+        for issue in report.issues
+        if issue.phase is ValidationStage.SEMANTIC
+    )
+
+
+@pytest.mark.parametrize(
+    ("provider", "base_url"),
+    [
+        ("seasonal_ttsd", "https://tts.example.test"),
+        ("seasonal_ttsd", "https://tts.example.test:8443"),
+        ("openai_compatible", "https://api.example.test/v1"),
+        ("openai_compatible", "https://api.example.test:9443/v1"),
+    ],
+)
+def test_selected_remote_valid_https_origins_are_accepted(provider: str, base_url: str) -> None:
+    text = EXAMPLE.read_text(encoding="utf-8").replace('  backend: "local"', f'  backend: "{provider}"', 1)
+    if provider == "seasonal_ttsd":
+        text = text.replace('  seasonal_ttsd:\n    base_url: ""', f'  seasonal_ttsd:\n    base_url: "{base_url}"', 1)
+        text = text.replace(
+            '    client_credential_file: ""', '    client_credential_file: "/run/credentials/client"', 1
+        )
+    else:
+        text = text.replace(
+            '  openai_compatible:\n    base_url: ""', f'  openai_compatible:\n    base_url: "{base_url}"', 1
+        )
+        text = text.replace('    api_key_file: ""', '    api_key_file: "/run/credentials/api-key"', 1)
+        text = text.replace('    model: ""', '    model: "tts-model"', 1)
+        text = text.replace('    voice: ""', '    voice: "alloy"', 1)
+    report = _report(text)
+    assert report.decision.valid
 
 
 @pytest.mark.parametrize(
