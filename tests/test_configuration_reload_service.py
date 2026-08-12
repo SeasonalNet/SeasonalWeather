@@ -1385,7 +1385,11 @@ def test_rollback_failure_retains_timeout_cancellation_stale_fence_and_swap_fail
 ) -> None:
     async def safe_point_case(service, commands, preparer, candidate, *, cancel: bool):
         preparer.fail_rollback = True
-        request = ReloadRequest(actor="operator", source_path=str(candidate), safe_point_timeout_seconds=0.1)
+        request = ReloadRequest(
+            actor="operator",
+            source_path=str(candidate),
+            safe_point_timeout_seconds=1.0 if cancel else 0.1,
+        )
         command, _, admitted = await service._admit_durable(
             request,
             idempotency_key="cancel-rollback" if cancel else "timeout-rollback",
@@ -1398,7 +1402,12 @@ def test_rollback_failure_retains_timeout_cancellation_stale_fence_and_swap_fail
                     if row is not None and row["phase"] == "awaiting_safe_point":
                         break
                     await asyncio.sleep(0.001)
-                await commands.request_cancellation(command.command_id)
+                else:
+                    raise AssertionError("reload did not reach safe-point wait")
+                cancellation = await commands.request_cancellation(command.command_id)
+                assert cancellation.cancel_requested_at is not None
+                durable_command = await commands.get(command.command_id)
+                assert durable_command.cancel_requested_at == cancellation.cancel_requested_at
             result = await task
         return result
 
