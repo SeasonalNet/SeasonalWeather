@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime as dt
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
@@ -13,6 +15,11 @@ from seasonalweather.lifecycle import WorkClass
 from seasonalweather.same.locations import normalize_same_allow_set
 from seasonalweather.same.targeting import SameTargetResolver
 from seasonalweather.tts.tts import TTS
+from seasonalweather.tts.admission import (
+    ControllerLocalQualificationSource,
+    P109TtsQualificationAdapter,
+    local_options_from_configuration,
+)
 
 from .models import ReloadDiff, ReloadDisposition
 from .safe_point import TTS as TTS_ACTIVITY
@@ -99,6 +106,8 @@ class OrchestratorPreparedResources:
     configuration: AppConfig
     timezone: ZoneInfo | None
     tts: TTS | None
+    tts_capability_source: ControllerLocalQualificationSource | None
+    tts_capability_check: P109TtsQualificationAdapter | None
     cycle_builder: CycleBuilder | None
     same_allow_set: set[str] | None
     targeting: SameTargetResolver | None
@@ -144,11 +153,14 @@ class OrchestratorPreparedResources:
         assignments = self._assignments()
         self._snapshot = [(owner, name, getattr(owner, name)) for owner, name, _value in assignments]
         self._activation_started = True
+        publication_fence = getattr(self.orch, "tts_publication_fence", None)
+        guard = publication_fence.hold() if publication_fence is not None else nullcontext()
         try:
-            for owner, name, value in assignments:
-                setattr(owner, name, value)
-            if self.required_disposition is not ReloadDisposition.LIVE:
-                set_station_feed_config(self.configuration)
+            with guard:
+                for owner, name, value in assignments:
+                    setattr(owner, name, value)
+                if self.required_disposition is not ReloadDisposition.LIVE:
+                    set_station_feed_config(self.configuration)
         except BaseException:
             # Preserve the native activation failure. The service owns rollback
             # and must be able to retry every restoration independently.
@@ -160,16 +172,19 @@ class OrchestratorPreparedResources:
         if self._rolled_back or not self._activation_started:
             return
         failures: list[BaseException] = []
-        for owner, name, value in reversed(self._snapshot):
-            try:
-                setattr(owner, name, value)
-            except BaseException as exc:
-                failures.append(exc)
-        if self.required_disposition is not ReloadDisposition.LIVE:
-            try:
-                set_station_feed_config(self._snapshot_configuration())
-            except BaseException as exc:
-                failures.append(exc)
+        publication_fence = getattr(self.orch, "tts_publication_fence", None)
+        guard = publication_fence.hold() if publication_fence is not None else nullcontext()
+        with guard:
+            for owner, name, value in reversed(self._snapshot):
+                try:
+                    setattr(owner, name, value)
+                except BaseException as exc:
+                    failures.append(exc)
+            if self.required_disposition is not ReloadDisposition.LIVE:
+                try:
+                    set_station_feed_config(self._snapshot_configuration())
+                except BaseException as exc:
+                    failures.append(exc)
         if failures:
             primary = failures[0]
             for secondary in failures[1:]:
@@ -219,12 +234,22 @@ class OrchestratorPreparedResources:
     def _orchestrator_assignments(self) -> tuple[tuple[Any, str, object], ...]:
         cfg = self.configuration
         items: list[tuple[Any, str, object]] = []
+        retained_source = getattr(self.orch, "tts_capability_source", None)
+        if not self.plan.replace_tts and retained_source is not None:
+            items.append((retained_source, "configuration_generation", self.target_generation))
         if self.plan.update_dedupe:
             items.append((self.orch, "_dedupe_ttl_seconds", cfg.dedupe.ttl_seconds))
         if self.plan.replace_timezone:
             items.extend(((self.orch, "_tz", self.timezone), (self.orch, "local_tz", self.timezone)))
         if self.plan.replace_tts:
             items.append((self.orch, "tts", self.tts))
+            if self.tts_capability_source is not None:
+                items.extend(
+                    (
+                        (self.orch, "tts_capability_source", self.tts_capability_source),
+                        (self.orch, "tts_capability_check", self.tts_capability_check),
+                    )
+                )
         if self.plan.replace_cycle_builder:
             items.append((self.orch, "cycle_builder", self.cycle_builder))
         if self.plan.replace_targeting:
@@ -310,25 +335,62 @@ class OrchestratorResourcePreparer:
     ) -> PreparedResources:
         resource_plan = resource_plan_for_diff(diff)
         timezone = ZoneInfo(configuration.station.timezone) if resource_plan.replace_timezone else None
-        tts = TTS(
-            backend=configuration.tts.backend,
-            voice=configuration.tts.voice,
-            rate_wpm=configuration.tts.rate_wpm,
-            volume=configuration.tts.volume,
-            sample_rate=configuration.audio.sample_rate,
-            text_overrides=configuration.tts.text_overrides,
-            vtp_cfg=configuration.tts.voicetext_paul,
-            admission_check=lambda: self.orch.lifecycle.require(WorkClass.TTS),
-            activity_context=lambda: self.activities.activity(TTS_ACTIVITY),
-        ) if resource_plan.replace_tts else None
-        builder = CycleBuilder(
-            api=self.orch.api,
-            tz_name=configuration.station.timezone,
-            obs_stations=configuration.observations.stations,
-            reference_points=configuration.cycle.reference_points,
-            same_fips_all=configuration.service_area.same_fips_all,
-            cycle_cfg=configuration.cycle,
-        ) if resource_plan.replace_cycle_builder else None
+        capability_registry = getattr(self.orch, "capability_registry", None)
+        tts_capability_source = (
+            ControllerLocalQualificationSource(
+                capability_registry,
+                lambda: dt.datetime.now(dt.UTC),
+                configured_options=local_options_from_configuration(configuration),
+                configuration_generation=target_generation,
+                current_generation=lambda: self.orch.configuration_generation,
+                publication_fence=getattr(self.orch, "tts_publication_fence", None),
+            )
+            if resource_plan.replace_tts and capability_registry is not None
+            else None
+        )
+        tts_capability_check = (
+            P109TtsQualificationAdapter(
+                capability_registry,
+                lambda: dt.datetime.now(dt.UTC),
+                local_source=tts_capability_source,
+            )
+            if tts_capability_source is not None
+            else None
+        )
+        tts = (
+            TTS(
+                backend=configuration.tts.backend,
+                local_engine=configuration.tts.local.engine,
+                voice=configuration.tts.voice,
+                rate_wpm=configuration.tts.rate_wpm,
+                volume=configuration.tts.volume,
+                sample_rate=configuration.audio.sample_rate,
+                text_overrides=configuration.tts.text_overrides,
+                vtp_cfg=configuration.tts.voicetext_paul,
+                fallback_backend=configuration.tts.fallback_backend,
+                configuration_generation=target_generation,
+                generation_provider=lambda: self.orch.configuration_generation,
+                current_generation=lambda expected: expected is None or expected == self.orch.configuration_generation,
+                admission_check=lambda: self.orch.lifecycle.require(WorkClass.TTS),
+                activity_context=lambda: self.activities.activity(TTS_ACTIVITY),
+                capability_check=tts_capability_check or getattr(self.orch, "tts_capability_check", None),
+                execution_executor=getattr(self.orch, "tts_execution_port", None),
+            )
+            if resource_plan.replace_tts
+            else None
+        )
+        builder = (
+            CycleBuilder(
+                api=self.orch.api,
+                tz_name=configuration.station.timezone,
+                obs_stations=configuration.observations.stations,
+                reference_points=configuration.cycle.reference_points,
+                same_fips_all=configuration.service_area.same_fips_all,
+                cycle_cfg=configuration.cycle,
+            )
+            if resource_plan.replace_cycle_builder
+            else None
+        )
         allow_set = (
             normalize_same_allow_set(configuration.service_area.same_fips_all)
             if resource_plan.replace_targeting
@@ -349,13 +411,13 @@ class OrchestratorResourcePreparer:
             configuration=configuration,
             timezone=timezone,
             tts=tts,
+            tts_capability_source=tts_capability_source,
+            tts_capability_check=tts_capability_check,
             cycle_builder=builder,
             same_allow_set=allow_set,
             targeting=targeting,
             allowed_wfos=(
-                self.orch._norm_wfo_set(configuration.nwws.allowed_wfos)
-                if resource_plan.replace_allowed_wfos
-                else None
+                self.orch._norm_wfo_set(configuration.nwws.allowed_wfos) if resource_plan.replace_allowed_wfos else None
             ),
             expected_generation=expected_generation,
             target_generation=target_generation,
@@ -367,4 +429,10 @@ class OrchestratorResourcePreparer:
     def synchronize_generation(self, generation: int) -> None:
         if generation < 0:
             raise ValueError("configuration generation cannot be negative")
-        self.orch.configuration_generation = generation
+        publication_fence = getattr(self.orch, "tts_publication_fence", None)
+        guard = publication_fence.hold() if publication_fence is not None else nullcontext()
+        with guard:
+            self.orch.configuration_generation = generation
+            source = getattr(self.orch, "tts_capability_source", None)
+            if source is not None:
+                source.configuration_generation = generation

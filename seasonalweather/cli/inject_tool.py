@@ -68,7 +68,9 @@ def _write_silence_wav(path: pathlib.Path, seconds: float, sample_rate: int) -> 
     _write_stereo_pcm16_wav(path, pcm, sample_rate)
 
 
-def _write_sine_wav(path: pathlib.Path, freq_hz: float, seconds: float, sample_rate: int, amplitude: float = 0.22) -> None:
+def _write_sine_wav(
+    path: pathlib.Path, freq_hz: float, seconds: float, sample_rate: int, amplitude: float = 0.22
+) -> None:
     sr = int(sample_rate)
     secs = max(0.0, float(seconds))
     amp = max(0.0, min(1.0, float(amplitude)))
@@ -153,19 +155,17 @@ def _safety_check_text(text: str, *, max_chars: int, allow_unsafe: bool, force_l
 
     if not force_long and len(t) > max_chars:
         raise SystemExit(
-            f"Refusing: message is {len(t)} chars (cap {max_chars}). "
-            f"Use --force-long if you REALLY mean it."
+            f"Refusing: message is {len(t)} chars (cap {max_chars}). Use --force-long if you REALLY mean it."
         )
 
     # crude “I pasted a curse-loop” detector
     words = re.findall(r"[A-Za-z0-9']+", t.lower())
     if not force_long and len(words) >= 120:
         uniq = len(set(words))
-        ratio = (uniq / max(1, len(words)))
+        ratio = uniq / max(1, len(words))
         if ratio < 0.22:
             raise SystemExit(
-                f"Refusing: looks like heavy repetition (unique/total={ratio:.2f}). "
-                f"Use --force-long to override."
+                f"Refusing: looks like heavy repetition (unique/total={ratio:.2f}). Use --force-long to override."
             )
 
     if not allow_unsafe:
@@ -283,14 +283,16 @@ def _render_alert_block_wav(
 
     tts = TTS(
         backend=cfg.tts.backend,
+        local_engine=cfg.tts.local.engine,
         voice=cfg.tts.voice,
         rate_wpm=cfg.tts.rate_wpm,
         volume=cfg.tts.volume,
         sample_rate=sr,
         text_overrides=cfg.tts.text_overrides,
         vtp_cfg=cfg.tts.voicetext_paul,
+        fallback_backend=cfg.tts.fallback_backend,
     )
-    tts.synth_to_wav(spoken_text, voice)
+    tts.synth_to_wav(spoken_text, voice, purpose="administrative")
 
     # Normalize everything to PCM16 stereo at sr
     parts = [
@@ -331,7 +333,13 @@ def cmd_test_alert(args: argparse.Namespace) -> int:
     )
 
     if not args.dry_run:
-        _push_alert(out, host=args.telnet_host, port=args.telnet_port, flush_alert=args.flush_alert, flush_cycle=args.flush_cycle)
+        _push_alert(
+            out,
+            host=args.telnet_host,
+            port=args.telnet_port,
+            flush_alert=args.flush_alert,
+            flush_cycle=args.flush_cycle,
+        )
 
     print(f"OK: built {out}")
     return 0
@@ -373,14 +381,22 @@ def cmd_inject_raw(args: argparse.Namespace) -> int:
     )
 
     if not args.dry_run:
-        _push_alert(out, host=args.telnet_host, port=args.telnet_port, flush_alert=args.flush_alert, flush_cycle=args.flush_cycle)
+        _push_alert(
+            out,
+            host=args.telnet_host,
+            port=args.telnet_port,
+            flush_alert=args.flush_alert,
+            flush_cycle=args.flush_cycle,
+        )
 
     print(f"OK: built {out}")
     return 0
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    ap = argparse.ArgumentParser(prog="seasonalweather-inject", description="Inject SAME+1050Hz+audio into Liquidsoap alert queue")
+    ap = argparse.ArgumentParser(
+        prog="seasonalweather-inject", description="Inject SAME+1050Hz+audio into Liquidsoap alert queue"
+    )
     ap.add_argument("--config", default=DEFAULT_CONFIG, help="Path to SeasonalWeather config.yaml")
     ap.add_argument("--telnet-host", default=DEFAULT_TELNET_HOST)
     ap.add_argument("--telnet-port", default=DEFAULT_TELNET_PORT, type=int)

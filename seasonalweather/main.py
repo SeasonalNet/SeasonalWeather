@@ -87,6 +87,8 @@ from .database.bootstrap import bootstrap_database_from_config
 from .database.housekeeping import DatabaseHousekeeper
 from .database.inserts import CycleInsertRepository
 from .database.station_feed import StationFeedRepository
+from .capabilities.registry import CapabilityRegistry
+from .capabilities.service import declared_capability_names
 from .discord_log import DiscordLogger
 from .health_state import HealthStateMachine
 from .liquidsoap_telnet import LiquidsoapTelnet
@@ -94,6 +96,14 @@ from .same.locations import normalize_same_allow_set as _normalize_same_allow_se
 from .same.targeting import SameTargetResolver
 from .tts.audio import wav_duration_seconds
 from .tts.tts import TTS
+from .tts.async_bridge import EmbeddedExecutionPort
+from .tts.admission import (
+    ControllerLocalPublicationFence,
+    ControllerLocalQualificationSource,
+    P109TtsQualificationAdapter,
+    local_options_from_configuration,
+)
+from .tts.local import LocalEngineRegistry
 
 log = logging.getLogger("seasonalweather")
 
@@ -128,6 +138,7 @@ class Orchestrator:
         *,
         lifecycle: Lifecycle | None = None,
         supervisor: TaskSupervisor | None = None,
+        capability_registry: CapabilityRegistry | None = None,
     ) -> None:
         global _APP_CFG
         _APP_CFG = cfg
@@ -140,6 +151,24 @@ class Orchestrator:
         self.artifact_service: object | None = None
         self.artifact_results: object | None = None
         self.configuration_generation = 0
+        self.tts_execution_port = EmbeddedExecutionPort()
+        self.tts_publication_fence = ControllerLocalPublicationFence()
+        self.capability_registry = capability_registry or CapabilityRegistry(
+            allowed_capabilities=declared_capability_names() | LocalEngineRegistry.capability_names()
+        )
+        self.tts_capability_source = ControllerLocalQualificationSource(
+            self.capability_registry,
+            lambda: dt.datetime.now(dt.UTC),
+            configured_options=local_options_from_configuration(cfg),
+            configuration_generation=self.configuration_generation,
+            current_generation=lambda: self.configuration_generation,
+            publication_fence=self.tts_publication_fence,
+        )
+        self.tts_capability_check = P109TtsQualificationAdapter(
+            self.capability_registry,
+            lambda: dt.datetime.now(dt.UTC),
+            local_source=self.tts_capability_source,
+        )
         self.api = NWSApi()
         self.telnet = LiquidsoapTelnet(
             host=cfg.secrets.liquidsoap_host,
@@ -168,14 +197,21 @@ class Orchestrator:
         # TTS
         self.tts = TTS(
             backend=cfg.tts.backend,
+            local_engine=cfg.tts.local.engine,
             voice=cfg.tts.voice,
             rate_wpm=cfg.tts.rate_wpm,
             volume=cfg.tts.volume,
             sample_rate=cfg.audio.sample_rate,
             text_overrides=cfg.tts.text_overrides,
             vtp_cfg=cfg.tts.voicetext_paul,
+            fallback_backend=cfg.tts.fallback_backend,
+            configuration_generation=self.configuration_generation,
+            generation_provider=lambda: self.configuration_generation,
+            current_generation=lambda expected: expected is None or expected == self.configuration_generation,
             admission_check=lambda: self.lifecycle.require(WorkClass.TTS),
             activity_context=lambda: self.reload_activities.activity(RELOAD_TTS_ACTIVITY),
+            capability_check=self.tts_capability_check,
+            execution_executor=self.tts_execution_port,
         )
 
         self.mode = "normal"
@@ -889,9 +925,12 @@ class Orchestrator:
 
     async def run(self) -> None:
         """Run the SeasonalWeather service runtime."""
-        await self.service_runtime.run()
-        if self.lifecycle.state is LifecycleState.FAILED:
-            raise await self.supervisor.wait_for_fatal()
+        try:
+            await self.service_runtime.run()
+            if self.lifecycle.state is LifecycleState.FAILED:
+                raise await self.supervisor.wait_for_fatal()
+        finally:
+            self.tts_execution_port.shutdown(wait=True)
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -1,4 +1,5 @@
 """Runtime handling for NWWS Short-Term Forecast (NOW) products."""
+
 from __future__ import annotations
 
 import asyncio
@@ -12,7 +13,26 @@ from typing import Any, Iterable
 from ..alerts.product import ParsedProduct, parse_product_text
 from .now import build_now_script
 from .pns import parse_nws_header_issued_dt
-from .segment_store import render_segment_wav
+from .segment_store import render_segment_wav as _legacy_render_segment_wav
+from .segment_store import render_segment_wav_async
+
+# Retain the historical module-level seam for deterministic runtime tests and
+# downstream callers. Production execution uses the joined async bridge below.
+render_segment_wav = _legacy_render_segment_wav
+
+
+async def _render_now_segment(tts, text: str, output_path: Path, *, sample_rate: int) -> float:
+    if render_segment_wav is not _legacy_render_segment_wav:
+        return float(render_segment_wav(tts, text, output_path, sample_rate=sample_rate))
+    return float(
+        await render_segment_wav_async(
+            tts,
+            text,
+            output_path,
+            sample_rate=sample_rate,
+        )
+    )
+
 
 log = logging.getLogger("seasonalweather.broadcast.now_runtime")
 
@@ -55,8 +75,7 @@ class NowRuntime:
         """
         normalized_product_id = str(product_id or "").strip() or None
         if normalized_product_id and (
-            normalized_product_id in self._queued_api_product_ids
-            or normalized_product_id in self._seen_api_product_ids
+            normalized_product_id in self._queued_api_product_ids or normalized_product_id in self._seen_api_product_ids
         ):
             return False
 
@@ -91,9 +110,7 @@ class NowRuntime:
                     product_id=item.product_id,
                 )
                 if item.product_id:
-                    self._seen_api_product_ids[item.product_id] = dt.datetime.now(
-                        dt.timezone.utc
-                    )
+                    self._seen_api_product_ids[item.product_id] = dt.datetime.now(dt.timezone.utc)
             except Exception:
                 log.exception(
                     "NOW worker failed source=%s wfo=%s awips=%s product_id=%s",
@@ -126,9 +143,7 @@ class NowRuntime:
         )
         cutoff = now_utc - dt.timedelta(minutes=retention_minutes)
         self._seen_api_product_ids = {
-            product_id: seen_at
-            for product_id, seen_at in self._seen_api_product_ids.items()
-            if seen_at >= cutoff
+            product_id: seen_at for product_id, seen_at in self._seen_api_product_ids.items() if seen_at >= cutoff
         }
 
     async def backfill_recent_once(self) -> int:
@@ -169,10 +184,7 @@ class NowRuntime:
                 product_id = str(ref.product_id or "").strip()
                 if not product_id:
                     continue
-                if (
-                    product_id in self._seen_api_product_ids
-                    or product_id in self._queued_api_product_ids
-                ):
+                if product_id in self._seen_api_product_ids or product_id in self._queued_api_product_ids:
                     continue
 
                 reference_issued = self._parse_utc_iso(ref.issuance_time)
@@ -186,8 +198,7 @@ class NowRuntime:
                     parsed = parse_product_text(product.product_text)
                     if parsed is None or (parsed.product_type or "").strip().upper() != "NOW":
                         log.warning(
-                            "NOW API backfill rejected mismatched product: "
-                            "office=%s product_id=%s parsed_type=%s",
+                            "NOW API backfill rejected mismatched product: office=%s product_id=%s parsed_type=%s",
                             office,
                             product_id,
                             getattr(parsed, "product_type", "") or "",
@@ -198,8 +209,7 @@ class NowRuntime:
                     expected_wfo = f"K{office}"
                     if (parsed.wfo or "").strip().upper() != expected_wfo:
                         log.warning(
-                            "NOW API backfill rejected mismatched office: "
-                            "expected=%s parsed=%s product_id=%s",
+                            "NOW API backfill rejected mismatched office: expected=%s parsed=%s product_id=%s",
                             expected_wfo,
                             parsed.wfo,
                             product_id,
@@ -254,9 +264,9 @@ class NowRuntime:
     @staticmethod
     def _scope_insert_id(*, wfo: str, awips_id: str, zones: Iterable[str]) -> str:
         scope = ",".join(sorted({str(z).strip().upper() for z in zones if str(z).strip()}))
-        digest = hashlib.sha1(
-            f"{wfo.strip().upper()}|{awips_id.strip().upper()}|{scope}".encode("utf-8")
-        ).hexdigest()[:16]
+        digest = hashlib.sha1(f"{wfo.strip().upper()}|{awips_id.strip().upper()}|{scope}".encode("utf-8")).hexdigest()[
+            :16
+        ]
         return f"nwws_now_{digest}"
 
     def _cancel_overlapping(self, *, wfo: str, zones: Iterable[str], keep_id: str | None = None) -> int:
@@ -279,11 +289,7 @@ class NowRuntime:
                 continue
             if str(meta.get("wfo") or "").strip().upper() != wfo.strip().upper():
                 continue
-            prior_zones = {
-                str(z).strip().upper()
-                for z in (meta.get("ugc_zones") or [])
-                if str(z).strip()
-            }
+            prior_zones = {str(z).strip().upper() for z in (meta.get("ugc_zones") or []) if str(z).strip()}
             if not (wanted & prior_zones):
                 continue
             repo.cancel_insert(insert_id=insert_id, updated_at=now_iso)
@@ -312,11 +318,7 @@ class NowRuntime:
                 continue
             if str(meta.get("wfo") or "").strip().upper() != wfo.strip().upper():
                 continue
-            prior_zones = {
-                str(z).strip().upper()
-                for z in (meta.get("ugc_zones") or [])
-                if str(z).strip()
-            }
+            prior_zones = {str(z).strip().upper() for z in (meta.get("ugc_zones") or []) if str(z).strip()}
             if not (wanted & prior_zones):
                 continue
             prior_issued = self._parse_utc_iso(meta.get("issued_at"))
@@ -348,19 +350,20 @@ class NowRuntime:
         repo = getattr(self.host, "cycle_insert_repo", None)
         if repo is None:
             if not self._warned_no_repository:
-                log.warning(
-                    "NOW cycle audio unavailable because the SQLite "
-                    "cycle-insert repository is disabled"
-                )
+                log.warning("NOW cycle audio unavailable because the SQLite cycle-insert repository is disabled")
                 self._warned_no_repository = True
             return False
 
         raw_text = parsed.raw_text or ""
         now_utc = dt.datetime.now(dt.timezone.utc)
         issued_utc = parse_nws_header_issued_dt(raw_text) or now_utc
-        zones, in_area_same, ugc_source, mapped_ok, ugc_expires_utc = (
-            await self.host.target_resolver._nwws_same_targets_from_texts(raw_text, raw_text)
-        )
+        (
+            zones,
+            in_area_same,
+            ugc_source,
+            mapped_ok,
+            ugc_expires_utc,
+        ) = await self.host.target_resolver._nwws_same_targets_from_texts(raw_text, raw_text)
 
         if not zones:
             log.warning(
@@ -413,9 +416,7 @@ class NowRuntime:
             )
             return False
 
-        expires_utc = ugc_expires_utc or (
-            issued_utc + dt.timedelta(minutes=cfg.default_expire_minutes)
-        )
+        expires_utc = ugc_expires_utc or (issued_utc + dt.timedelta(minutes=cfg.default_expire_minutes))
         expires_utc = expires_utc.astimezone(dt.timezone.utc).replace(microsecond=0)
         if expires_utc <= now_utc:
             cancelled = self._cancel_overlapping(wfo=parsed.wfo, zones=zones)
@@ -459,34 +460,20 @@ class NowRuntime:
             duration = float(existing.get("duration_seconds") or 0.0)
         else:
             audio_path = Path(self.host.cfg.paths.audio_dir) / f"insert_{insert_id}.wav"
-            loop = asyncio.get_running_loop()
-            duration = float(
-                await loop.run_in_executor(
-                    None,
-                    lambda: render_segment_wav(
-                        self.host.tts,
-                        script,
-                        audio_path,
-                        sample_rate=int(self.host.cfg.audio.sample_rate),
-                    ),
-                )
+            duration = await _render_now_segment(
+                self.host.tts,
+                script,
+                audio_path,
+                sample_rate=int(self.host.cfg.audio.sample_rate),
             )
 
         now_iso = self._utc_iso(now_utc)
         issued_iso = self._utc_iso(issued_utc)
         expires_iso = self._utc_iso(expires_utc)
-        incoming_source = (
-            "api.weather.gov" if source == "api-backfill" else "NWWS-OI"
-        )
+        incoming_source = "api.weather.gov" if source == "api-backfill" else "NWWS-OI"
         retained_source = str(existing_meta.get("source") or "")
-        record_source = (
-            retained_source
-            if same_content and retained_source == "NWWS-OI"
-            else incoming_source
-        )
-        record_product_id = str(
-            product_id or existing_meta.get("api_product_id") or ""
-        )
+        record_source = retained_source if same_content and retained_source == "NWWS-OI" else incoming_source
+        record_product_id = str(product_id or existing_meta.get("api_product_id") or "")
         record_actor = (
             str((existing or {}).get("actor") or f"nwws:{parsed.wfo}")
             if same_content and retained_source == "NWWS-OI"

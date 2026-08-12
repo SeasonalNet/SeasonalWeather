@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import datetime as dt
 import logging
 import wave
@@ -11,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from ..config import AppConfig
 from ..tts.audio import write_sine_wav, write_silence_wav, concat_wavs
+from ..tts.async_bridge import FinalizationEvidence, synthesize_completed_wav_async
 from ..tts.tts import TTS
 
 try:
@@ -79,19 +79,28 @@ class AudioOriginator:
         ts = dt.datetime.now(tz=self.local_tz).strftime("%Y%m%d-%H%M%S")
         safe_prefix = "".join(ch for ch in prefix if ch.isalnum() or ch in {"_", "-"}).strip() or "voice"
 
-        tts_wav = audio_dir / f"{safe_prefix}_{ts}_tts.wav"
-        pre = audio_dir / f"{safe_prefix}_{ts}_pre.wav"
-        post = audio_dir / f"{safe_prefix}_{ts}_post.wav"
         out = audio_dir / f"{safe_prefix}_{ts}.wav"
 
-        write_silence_wav(pre, 0.35, self.cfg.audio.sample_rate)
-        await asyncio.to_thread(
-            self.tts.synth_to_wav,
+        def finalize(tts_path, cancellation, fence) -> FinalizationEvidence:
+            del fence
+            staging = tts_path.parent
+            pre = staging / "voice-pre.wav"
+            post = staging / "voice-post.wav"
+            staged = staging / "voice-completed.wav"
+            write_silence_wav(post, 1.2, self.cfg.audio.sample_rate)
+            write_silence_wav(pre, 0.35, self.cfg.audio.sample_rate)
+            if cancellation.is_set():
+                raise RuntimeError("voice finalization cancelled")
+            concat_wavs(staged, [pre, tts_path, post])
+            return FinalizationEvidence(staged)
+
+        await synthesize_completed_wav_async(
+            self.tts,
             script_text,
-            tts_wav,
+            out,
+            purpose="administrative",
+            finalize=finalize,
         )
-        write_silence_wav(post, 1.2, self.cfg.audio.sample_rate)
-        concat_wavs(out, [pre, tts_wav, post])
         return out
 
     async def render_alert_audio(
@@ -104,47 +113,64 @@ class AudioOriginator:
         _, audio_dir, _, _ = self._paths()
         ts = dt.datetime.now(tz=self.local_tz).strftime("%Y%m%d-%H%M%S")
 
-        tone = audio_dir / f"alert_{ts}_tone.wav"
-        tts_wav = audio_dir / f"alert_{ts}_tts.wav"
-        gap = audio_dir / f"alert_{ts}_gap.wav"
-        eom = audio_dir / f"alert_{ts}_eom.wav"
-        post = audio_dir / f"alert_{ts}_post.wav"
         out = audio_dir / f"alert_{ts}.wav"
 
-        same_hdr_all, same_eom_wav = self._render_same_assets(
-            audio_dir=audio_dir,
-            ts=ts,
-            event_code=safe_event_code(getattr(parsed, "product_type", None)),
-            same_locations=same_locations,
-            log_disabled_message="SAME targeting disabled for this alert (no locations computed)",
-            log_success=True,
-            failure_context={
-                "alert_type": getattr(parsed, "product_type", None),
-                "wfo": getattr(parsed, "wfo", None),
-            },
-        )
+        def finalize(tts_path, cancellation, fence) -> FinalizationEvidence:
+            del fence
+            staging = tts_path.parent
+            tone = staging / "alert-tone.wav"
+            gap = staging / "alert-gap.wav"
+            eom = staging / "alert-eom.wav"
+            post = staging / "alert-post.wav"
+            staged = staging / "alert-completed.wav"
+            same_hdr_all, same_eom_wav = self._render_same_assets(
+                audio_dir=staging,
+                ts=ts,
+                event_code=safe_event_code(getattr(parsed, "product_type", None)),
+                same_locations=same_locations,
+                log_disabled_message="SAME targeting disabled for this alert (no locations computed)",
+                log_success=True,
+                failure_context={
+                    "alert_type": getattr(parsed, "product_type", None),
+                    "wfo": getattr(parsed, "wfo", None),
+                },
+            )
+            write_sine_wav(
+                tone,
+                self.cfg.audio.attention_tone_hz,
+                self.cfg.audio.attention_tone_seconds,
+                self.cfg.audio.sample_rate,
+            )
+            write_silence_wav(gap, self.cfg.audio.inter_segment_silence_seconds, self.cfg.audio.sample_rate)
+            write_silence_wav(post, self.cfg.audio.post_alert_silence_seconds, self.cfg.audio.sample_rate)
+            parts: list[Path] = []
+            if same_hdr_all:
+                parts.extend([same_hdr_all, gap])
+            parts.extend([tone, gap, tts_path])
+            if same_eom_wav:
+                parts.extend([gap, same_eom_wav])
+            else:
+                write_sine_wav(
+                    eom,
+                    self.cfg.audio.eom_beep_hz,
+                    self.cfg.audio.eom_beep_seconds,
+                    self.cfg.audio.sample_rate,
+                    amplitude=0.18,
+                )
+                parts.extend([gap, eom])
+            parts.append(post)
+            if cancellation.is_set():
+                raise RuntimeError("alert finalization cancelled")
+            concat_wavs(staged, parts)
+            return FinalizationEvidence(staged)
 
-        write_sine_wav(tone, self.cfg.audio.attention_tone_hz, self.cfg.audio.attention_tone_seconds, self.cfg.audio.sample_rate)
-        await asyncio.to_thread(
-            self.tts.synth_to_wav,
+        await synthesize_completed_wav_async(
+            self.tts,
             script_text,
-            tts_wav,
+            out,
+            purpose="alert",
+            finalize=finalize,
         )
-        write_silence_wav(gap, self.cfg.audio.inter_segment_silence_seconds, self.cfg.audio.sample_rate)
-        write_silence_wav(post, self.cfg.audio.post_alert_silence_seconds, self.cfg.audio.sample_rate)
-
-        parts: list[Path] = []
-        if same_hdr_all:
-            parts.extend([same_hdr_all, gap])
-        parts.extend([tone, gap, tts_wav])
-        if same_eom_wav:
-            parts.extend([gap, same_eom_wav])
-        else:
-            write_sine_wav(eom, self.cfg.audio.eom_beep_hz, self.cfg.audio.eom_beep_seconds, self.cfg.audio.sample_rate, amplitude=0.18)
-            parts.extend([gap, eom])
-        parts.append(post)
-
-        concat_wavs(out, parts)
         return out
 
     async def render_pre_recorded_alert_audio(
@@ -174,7 +200,9 @@ class AudioOriginator:
             failure_log_message="SAME generation failed; continuing without SAME for prerecorded manual alert",
         )
 
-        write_sine_wav(tone, self.cfg.audio.attention_tone_hz, self.cfg.audio.attention_tone_seconds, self.cfg.audio.sample_rate)
+        write_sine_wav(
+            tone, self.cfg.audio.attention_tone_hz, self.cfg.audio.attention_tone_seconds, self.cfg.audio.sample_rate
+        )
         write_silence_wav(gap, self.cfg.audio.inter_segment_silence_seconds, self.cfg.audio.sample_rate)
         write_silence_wav(post, self.cfg.audio.post_alert_silence_seconds, self.cfg.audio.sample_rate)
 
@@ -185,7 +213,13 @@ class AudioOriginator:
         if same_eom_wav:
             parts.extend([gap, same_eom_wav])
         else:
-            write_sine_wav(eom, self.cfg.audio.eom_beep_hz, self.cfg.audio.eom_beep_seconds, self.cfg.audio.sample_rate, amplitude=0.18)
+            write_sine_wav(
+                eom,
+                self.cfg.audio.eom_beep_hz,
+                self.cfg.audio.eom_beep_seconds,
+                self.cfg.audio.sample_rate,
+                amplitude=0.18,
+            )
             parts.extend([gap, eom])
         parts.append(post)
 

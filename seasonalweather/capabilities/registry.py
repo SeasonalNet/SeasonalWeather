@@ -6,7 +6,7 @@ import datetime as dt
 import threading
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import cast
 
@@ -275,6 +275,117 @@ class CapabilityRegistry:
                 state.active = dict(cast(_WorkerState, prior).active)
             self._workers[worker_id] = state
             return self._snapshot(state, now)
+
+    def publish_controller_local(
+        self,
+        *,
+        worker_id: str,
+        manifest: CapabilityManifest,
+        authorized_capabilities: frozenset[str],
+        authorized_job_types: frozenset[JobType],
+        payload_versions: dict[JobType, int],
+        result_versions: dict[JobType, int],
+        now: dt.datetime,
+    ) -> WorkerCapabilitySnapshot:
+        """Publish monotonic controller-local state without erasing use."""
+
+        now = _utc(now)
+        if not _manifest_names_allowed(manifest, self._allowed):
+            raise PermissionError("controller-local manifest contains undeclared capability name")
+        permitted = authorized_capabilities.intersection(self._allowed)
+        effective = tuple(record for record in manifest.records if record.name in permitted)
+        with self._lock:
+            prior = self._workers.get(worker_id)
+            if prior is not None:
+                disposition = compare_epoch(prior.manifest, epoch=manifest.epoch, digest=manifest.digest)
+                if disposition is EpochDisposition.STALE:
+                    raise ValueError("controller-local capability epoch is stale")
+                if disposition is EpochDisposition.CONFLICT:
+                    raise ValueError("controller-local capability digest conflicts at the same epoch")
+                if disposition is EpochDisposition.GAP:
+                    raise ValueError("controller-local capability epoch has a gap")
+                if disposition is EpochDisposition.IDEMPOTENT:
+                    return self._snapshot(prior, now)
+            state = self._new_worker_state(
+                worker_id,
+                "controller-local",
+                "controller-local",
+                manifest,
+                effective,
+                permitted,
+                authorized_job_types,
+                payload_versions,
+                result_versions,
+                now,
+                reconnect=False,
+            )
+            if prior is not None:
+                # A health/profile refresh is not allowed to erase accounting
+                # for already admitted embedded work.
+                state.reservations = dict(prior.reservations)
+                state.active = dict(prior.active)
+            self._workers[worker_id] = state
+            return self._snapshot(state, now)
+
+    def reserve_controller_local(
+        self,
+        *,
+        worker_id: str,
+        reservation_id: str,
+        job_id: str,
+        capability_names: tuple[str, ...],
+        now: dt.datetime,
+        expires_at: dt.datetime,
+    ) -> CapacityReservation:
+        """Reserve embedded controller capacity under the P1-09 lock."""
+
+        now, expires_at = _utc(now), _utc(expires_at)
+        with self._lock:
+            state = self._workers.get(worker_id)
+            if state is None:
+                raise RuntimeError("controller-local capability is unavailable")
+            snapshot = self._snapshot(state, now)
+            return self.reserve(
+                worker_id=worker_id,
+                worker_instance_id=state.worker_instance_id,
+                reservation_id=reservation_id,
+                job_id=job_id,
+                capability_names=capability_names,
+                snapshot_token=f"embedded:{snapshot.epoch}:{snapshot.digest}",
+                expected_epoch=snapshot.epoch,
+                expected_digest=snapshot.digest,
+                now=now,
+                expires_at=expires_at,
+            )
+
+    def controller_local_reservation_snapshot(
+        self,
+        *,
+        worker_id: str,
+        reservation_id: str,
+        capability: str,
+        now: dt.datetime,
+    ) -> WorkerCapabilitySnapshot:
+        """Return a qualification view that credits one owned reservation.
+
+        Capacity remains accounted as occupied in ordinary snapshots.  This
+        narrow P1-09 view is only for the owner of a pending/Bound embedded
+        reservation to re-fence its own request without treating its token as
+        a second capacity claim.
+        """
+
+        now = _utc(now)
+        with self._lock:
+            state = self._workers.get(worker_id)
+            reservation = state.reservations.get(reservation_id) if state is not None else None
+            if state is None or reservation is None or reservation.state is ReservationState.ACTIVE:
+                raise RuntimeError("controller-local reservation is unavailable")
+            if reservation.expires_at <= now or capability not in reservation.capability_names:
+                raise RuntimeError("controller-local reservation is stale")
+            snapshot = self._snapshot(state, now)
+            capacities = dict(snapshot.effective_capacity)
+            capacities[capability] = max(1, capacities.get(capability, 0))
+            return replace(snapshot, effective_capacity=capacities)
 
     def _new_worker_state(
         self,

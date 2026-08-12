@@ -142,6 +142,106 @@ def test_parse_and_schema_failures_skip_later_stages_without_relabeling() -> Non
     assert all(stage.state.value == "skipped" for stage in schema.stages[2:])
 
 
+@pytest.mark.parametrize(
+    ("needle", "replacement", "rule"),
+    [
+        ('backend: "local"', 'backend: "not-a-backend"', "semantic.invariant"),
+        ("fallback_backend: null", 'fallback_backend: "not-a-backend"', "semantic.invariant"),
+        ("fallback_backend: null", 'fallback_backend: "espeak-ng"', "semantic.invariant"),
+        ("fallback_backend: null", 'fallback_backend: "seasonal_ttsd"', "semantic.invariant"),
+    ],
+)
+def test_tts_backend_and_fallback_semantics_are_admitted_before_runtime(
+    needle: str, replacement: str, rule: str
+) -> None:
+    text = EXAMPLE.read_text(encoding="utf-8")
+    text = text.replace(needle, replacement, 1)
+    report = _report(text)
+    semantic_rules = {
+        issue.validator_rule_id
+        for stage in report.stages
+        if stage.stage is ValidationStage.SEMANTIC
+        for issue in stage.issues
+    }
+    assert rule in semantic_rules
+
+
+@pytest.mark.parametrize(
+    ("needle", "replacement", "pointer"),
+    (
+        (
+            "  text_overrides: []",
+            '  text_overrides:\n    - match: "(a+)+$"\n      replace: "x"\n      regex: true',
+            "/tts/text_overrides/0/match",
+        ),
+        (
+            "      alias_overrides: []",
+            '      alias_overrides:\n        - match: "a*?"\n          alias: "unsafe"\n          regex: true',
+            "/tts/local/voicetext_paul/alias_overrides/0/match",
+        ),
+    ),
+)
+def test_tts_configured_regexes_fail_during_semantic_validation_with_source_paths(
+    needle: str, replacement: str, pointer: str
+) -> None:
+    report = _report(EXAMPLE.read_text(encoding="utf-8").replace(needle, replacement, 1))
+    issues = [
+        issue
+        for stage in report.stages
+        if stage.stage is ValidationStage.SEMANTIC
+        for issue in stage.issues
+        if issue.path is not None
+    ]
+    assert any(issue.path.to_pointer() == pointer for issue in issues)
+
+
+def test_legacy_voicetext_configuration_location_is_validated() -> None:
+    text = EXAMPLE.read_text(encoding="utf-8").replace(
+        "  volume: 1.0",
+        '  voicetext_paul:\n    alias_overrides:\n      - match: "a{1,256}a+"\n        alias: "unsafe"\n        regex: true\n  volume: 1.0',
+        1,
+    )
+    report = _report(text)
+    assert any(
+        issue.path is not None and issue.path.to_pointer() == "/tts/voicetext_paul/alias_overrides/0/match"
+        for stage in report.stages
+        if stage.stage is ValidationStage.SEMANTIC
+        for issue in stage.issues
+    )
+
+
+def test_ignore_case_regex_overlap_is_rejected_during_semantic_configuration_validation() -> None:
+    text = EXAMPLE.read_text(encoding="utf-8").replace(
+        "  text_overrides: []",
+        '  text_overrides:\n    - match: "a{1,256}A{1,256}b"\n      replace: "x"\n      regex: true\n      ignore_case: true',
+        1,
+    )
+    report = _report(text)
+    assert any(
+        issue.path is not None
+        and issue.path.to_pointer() == "/tts/text_overrides/0/match"
+        and stage.stage is ValidationStage.SEMANTIC
+        for stage in report.stages
+        for issue in stage.issues
+    )
+
+
+def test_replacement_backreference_is_rejected_during_semantic_validation() -> None:
+    text = EXAMPLE.read_text(encoding="utf-8").replace(
+        "  text_overrides: []",
+        '  text_overrides:\n    - match: "NWS"\n      replace: "\\\\1"',
+        1,
+    )
+    report = _report(text)
+    assert any(
+        issue.path is not None
+        and issue.path.to_pointer() == "/tts/text_overrides/0/replace"
+        and stage.stage is ValidationStage.SEMANTIC
+        for stage in report.stages
+        for issue in stage.issues
+    )
+
+
 def test_preflight_readiness_requires_a_completed_evaluation_in_typed_and_external_policy() -> None:
     semantic_text = EXAMPLE.read_text(encoding="utf-8").replace("  total_seconds: 30.0", "  total_seconds: 4.0", 1)
     incompatible = CompatibilityIdentity(
@@ -320,7 +420,7 @@ def test_default_and_generated_origins_do_not_fabricate_semantic_spans() -> None
 
 
 def test_deprecation_and_suggestion_are_separate_nonblocking_phases() -> None:
-    text = EXAMPLE.read_text(encoding="utf-8").replace('  backend: "espeak-ng"', '  backend: "espeak_ng"', 1)
+    text = EXAMPLE.read_text(encoding="utf-8").replace('  backend: "local"', '  backend: "espeak_ng"', 1)
     report = _report(text)
 
     deprecation = next(item for item in report.issues if item.phase is ValidationStage.DEPRECATION)
@@ -913,7 +1013,7 @@ def test_independent_complete_report_binding_rejects_coordinated_semantic_tamper
 
 
 def test_independent_complete_report_binding_rejects_coordinated_advisory_and_issue_tampering() -> None:
-    report = _report(EXAMPLE.read_text(encoding="utf-8").replace('  backend: "espeak-ng"', '  backend: "espeak_ng"', 1))
+    report = _report(EXAMPLE.read_text(encoding="utf-8").replace('  backend: "local"', '  backend: "espeak_ng"', 1))
     payloads: list[dict[str, Any]] = []
 
     remove_deprecation = json.loads(report.to_json())

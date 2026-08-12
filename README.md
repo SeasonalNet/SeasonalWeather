@@ -182,6 +182,13 @@ for semantic, compatibility, advisory, stamp, policy, and probe contracts.
 | `paths` | Working directories |
 | `service_area` | Transmitter SAME/FIPS lists (the most important section) |
 
+TTS execution uses one backend-neutral synthesis boundary. The `local` block
+contains local engine, voice, and rate settings; older flat local settings are
+accepted and normalized deterministically. `local` is the functional backend
+in the current release. `seasonal_ttsd` and `openai_compatible` are recognized
+for configuration and explicit fallback selection, but their adapters are
+deferred to P1-17 and no network request is made by P1-16.
+
 ### seasonalweather.env
 
 Only the following belong in this file:
@@ -485,7 +492,15 @@ http://<your-ip>:8000/seasonalweather.mp3
 
 ---
 
-## Debug / test tool: inject
+## Legacy debug / test tool: inject
+
+`inject` is a retained legacy privileged debug/test bypass. It predates the
+modern API, job, capability, and artifact/origination architecture; it builds
+SAME/tone/TTS audio itself, can call Liquidsoap's telnet `push_alert()`, and
+may best-effort flush legacy alert/cycle queues. It intentionally bypasses the
+normal modern origination lifecycle and is retained temporarily for controlled
+break-glass debugging. It is not a normative SeasonalWeather control-plane
+client; a later cleanup may replace, explicitly retain, or remove it.
 
 Generate a test alert WAV and optionally push it into the Liquidsoap queue:
 

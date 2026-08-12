@@ -19,7 +19,7 @@ from .api.models import (
     OriginateTextRequest,
     VoiceMode,
 )
-from .broadcast.segment_store import render_segment_wav
+from .broadcast.segment_store import render_segment_wav_async
 from .database.assets import AudioAssetRepository
 from .database.inserts import CycleInsertRepository
 from .database.station_feed import StationFeedRepository
@@ -406,6 +406,7 @@ class OrchestratorControl:
             },
             "tts": {
                 "backend": cfg.tts.backend,
+                "engine": cfg.tts.local.engine,
                 "voice": cfg.tts.voice,
                 "rate_wpm": cfg.tts.rate_wpm,
                 "volume": cfg.tts.volume,
@@ -883,15 +884,11 @@ class OrchestratorControl:
 
     async def _render_text_insert_audio(self, *, insert_id: str, text: str) -> tuple[Path, float]:
         out_path = self._insert_audio_path(insert_id)
-        loop = asyncio.get_event_loop()
-        duration = await loop.run_in_executor(
-            None,
-            lambda: render_segment_wav(
-                self.orch.tts,
-                text,
-                out_path,
-                sample_rate=self._station_sample_rate(),
-            ),
+        duration = await render_segment_wav_async(
+            self.orch.tts,
+            text,
+            out_path,
+            sample_rate=self._station_sample_rate(),
         )
         return out_path, float(duration)
 

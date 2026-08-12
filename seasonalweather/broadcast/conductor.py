@@ -29,9 +29,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
-import os
 import time
-import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, AsyncContextManager
@@ -41,6 +39,7 @@ from ..alerts.active import AlertTracker
 from ..alerts.focus import AlertFocusPolicy, alert_holds_focus
 from ..liquidsoap_telnet import LiquidsoapTelnet
 from ..tts.audio import concat_wavs, wav_duration_seconds, write_silence_wav
+from ..tts.async_bridge import FinalizationEvidence, synthesize_completed_wav_async
 from ..tts.tts import TTS
 from .segment_store import SegmentStore
 
@@ -746,25 +745,31 @@ class CycleConductor:
         wav = self._time_bufs[self._time_buf_idx]
         self._time_buf_idx = (self._time_buf_idx + 1) % _TIME_BUF_COUNT
 
-        # All intermediate work uses uniquely-named temp files
-        tag = uuid.uuid4().hex[:6]
-        tts_tmp = self._audio_dir / f"cycle_time_{tag}_tts.tmp.wav"
-        gap_tmp = self._audio_dir / f"cycle_time_{tag}_gap.tmp.wav"
-        out_tmp = self._audio_dir / f"cycle_time_{tag}_out.tmp.wav"
-
         try:
-            # TTS is blocking — run in thread executor
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(
-                None,
-                self._tts.synth_to_wav,
+            duration: list[float] = []
+
+            def finalize(tts_path, cancellation, fence) -> FinalizationEvidence:
+                del fence
+                staging = tts_path.parent
+                gap_tmp = staging / "cycle-time-gap.wav"
+                out_tmp = staging / "cycle-time-completed.wav"
+                write_silence_wav(gap_tmp, self._seg_gap_s, self._sample_rate)
+                concat_wavs(out_tmp, [gap_tmp, tts_path, gap_tmp])
+                duration.append(wav_duration_seconds(out_tmp))
+                if cancellation.is_set():
+                    raise RuntimeError("live time finalization cancelled")
+                return FinalizationEvidence(out_tmp)
+
+            await synthesize_completed_wav_async(
+                self._tts,
                 text,
-                tts_tmp,
+                wav,
+                purpose="routine",
+                finalize=finalize,
             )
-            write_silence_wav(gap_tmp, self._seg_gap_s, self._sample_rate)
-            concat_wavs(out_tmp, [gap_tmp, tts_tmp, gap_tmp])
-            dur = wav_duration_seconds(out_tmp)
-            os.replace(str(out_tmp), str(wav))
+            if not duration:
+                raise RuntimeError("live time synthesis completed without finalization")
+            dur = duration[0]
 
             # TTS runs in an executor.  An alert may have been admitted while it
             # was rendering; do not append this now-stale time request behind the
@@ -787,10 +792,3 @@ class CycleConductor:
         except Exception:
             log.exception("CycleConductor: failed to synth/push live time segment")
             return 0.0
-
-        finally:
-            for p in (tts_tmp, gap_tmp, out_tmp):
-                try:
-                    Path(p).unlink(missing_ok=True)
-                except Exception:
-                    pass

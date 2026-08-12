@@ -693,13 +693,32 @@ class VoiceTextPaulConfig:
 
 
 @dataclass(frozen=True)
-class TTSConfig:
-    backend: str
+class LocalTTSConfig:
+    engine: str
     voice: str
     rate_wpm: int
-    volume: float
     voicetext_paul: VoiceTextPaulConfig
+
+
+@dataclass(frozen=True)
+class TTSConfig:
+    backend: str
+    fallback_backend: str | None
+    local: LocalTTSConfig
+    volume: float
     text_overrides: List[Dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def voice(self) -> str:
+        return self.local.voice
+
+    @property
+    def rate_wpm(self) -> int:
+        return self.local.rate_wpm
+
+    @property
+    def voicetext_paul(self) -> VoiceTextPaulConfig:
+        return self.local.voicetext_paul
 
 
 @dataclass(frozen=True)
@@ -1941,23 +1960,52 @@ def _build_app_config(
     # tts
     # ------------------------------------------------------------------
     tts_raw = raw["tts"]
-    vtp_raw = tts_raw.get("voicetext_paul", {})
+    local_raw = tts_raw.get("local", {}) or {}
+    backend_raw = str(tts_raw["backend"]).strip().lower()
+    local_aliases = {
+        "espeak-ng": "espeak-ng",
+        "espeak_ng": "espeak-ng",
+        "espeak": "espeak-ng",
+        "piper": "piper",
+        "festival": "festival",
+        "dectalk": "dectalk",
+        "voicetext_paul": "voicetext_paul",
+    }
+    legacy_local = backend_raw in local_aliases
+    backend = "local" if legacy_local else str(tts_raw["backend"])
+    local_engine = local_aliases.get(backend_raw, str(local_raw.get("engine", "espeak-ng")))
+    local_voice = tts_raw.get("voice", local_raw.get("voice", "9")) if legacy_local else local_raw.get("voice", "9")
+    local_rate = tts_raw.get("rate_wpm", local_raw.get("rate_wpm", 165)) if legacy_local else local_raw.get("rate_wpm", 165)
+    vtp_raw = (
+        tts_raw.get("voicetext_paul", local_raw.get("voicetext_paul", {}))
+        if legacy_local
+        else local_raw.get("voicetext_paul", tts_raw.get("voicetext_paul", {}))
+    ) or {}
+    fallback_raw = tts_raw.get("fallback_backend")
+    fallback_backend = None
+    if fallback_raw is not None:
+        fallback_value = str(fallback_raw).strip().lower()
+        fallback_backend = "local" if fallback_value in local_aliases else str(fallback_raw)
     tts = TTSConfig(
-        backend=str(tts_raw["backend"]),
-        voice=str(tts_raw.get("voice", "9")),
-        rate_wpm=int(tts_raw.get("rate_wpm", 165)),
+        backend=backend,
+        fallback_backend=fallback_backend,
+        local=LocalTTSConfig(
+            engine=local_engine,
+            voice=str(local_voice),
+            rate_wpm=int(local_rate),
+            voicetext_paul=VoiceTextPaulConfig(
+                run_as=str(vtp_raw.get("run_as", "voicetext")),
+                retries=int(vtp_raw.get("retries", 1)),
+                retry_sleep_ms=int(vtp_raw.get("retry_sleep_ms", 150)),
+                reset_every=int(vtp_raw.get("reset_every", 0)),
+                kill_before=bool(vtp_raw.get("kill_before", False)),
+                vtml_lexicon=bool(vtp_raw.get("vtml_lexicon", True)),
+                alias_overrides=list(vtp_raw.get("alias_overrides", []) or []),
+                phoneme_overrides_x_cmu=list(vtp_raw.get("phoneme_overrides_x_cmu", []) or []),
+            ),
+        ),
         volume=float(tts_raw.get("volume", 1.0)),
         text_overrides=list(tts_raw.get("text_overrides", []) or []),
-        voicetext_paul=VoiceTextPaulConfig(
-            run_as=str(vtp_raw.get("run_as", "voicetext")),
-            retries=int(vtp_raw.get("retries", 1)),
-            retry_sleep_ms=int(vtp_raw.get("retry_sleep_ms", 150)),
-            reset_every=int(vtp_raw.get("reset_every", 0)),
-            kill_before=bool(vtp_raw.get("kill_before", False)),
-            vtml_lexicon=bool(vtp_raw.get("vtml_lexicon", True)),
-            alias_overrides=list(vtp_raw.get("alias_overrides", []) or []),
-            phoneme_overrides_x_cmu=list(vtp_raw.get("phoneme_overrides_x_cmu", []) or []),
-        ),
     )
 
     # ------------------------------------------------------------------

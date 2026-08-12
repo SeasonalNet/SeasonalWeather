@@ -79,27 +79,32 @@ def _tts_probes(tts: object) -> tuple[PreflightProbe, ...]:
     if not isinstance(tts, dict):
         return ()
     backend = tts.get("backend")
-    command = (
-        {
-            "espeak": "espeak-ng",
-            "espeak-ng": "espeak-ng",
-            "espeak_ng": "espeak-ng",
-            "festival": "text2wave",
-            "piper": "piper",
-        }.get(backend)
-        if isinstance(backend, str)
-        else None
-    )
-    if not command:
+    if backend == "local":
+        local = tts.get("local")
+        if isinstance(local, dict):
+            backend = local.get("engine", "espeak-ng")
+    commands = {
+        "espeak": ("espeak-ng",),
+        "espeak-ng": ("espeak-ng",),
+        "espeak_ng": ("espeak-ng",),
+        "festival": ("text2wave",),
+        "piper": ("piper",),
+        "dectalk": ("dectalk-env", "/opt/dectalk/dectalk/dist/say"),
+        "voicetext_paul": ("sudo",),
+    }
+    selected = commands.get(backend) if isinstance(backend, str) else None
+    if not selected:
         return ()
-    return (
+    probes = [
         local_executable_probe(
-            identifier="tts.backend",
+            identifier=f"tts.backend.{index}",
             owner="tts",
             command=command,
             required=True,
-        ),
-    )
+        )
+        for index, command in enumerate(selected)
+    ]
+    return tuple(probes)
 
 
 def _api_probes(api: object) -> tuple[PreflightProbe, ...]:

@@ -24,6 +24,11 @@ def validate_wav(path: Path, claimed: MediaMetadata, *, policy: WavPolicy | None
     return computed
 
 
+def inspect_wav(path: Path, *, policy: WavPolicy | None = None) -> MediaMetadata:
+    """Inspect WAV bytes using the same authoritative P1-10 parser."""
+    return _read_wav(path, policy or WavPolicy())
+
+
 def _read_wav(path: Path, policy: WavPolicy) -> MediaMetadata:
     try:
         with wave.open(str(path), "rb") as reader:

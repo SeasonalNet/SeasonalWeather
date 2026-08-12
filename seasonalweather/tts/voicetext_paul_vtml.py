@@ -5,43 +5,75 @@ import re
 from dataclasses import dataclass
 from typing import Callable, Pattern
 
+from .regex_safety import (
+    MAX_CONFIGURED_REGEX_PATTERN,
+    MAX_CONFIGURED_REGEX_REPLACEMENT,
+    MAX_CONFIGURED_REGEX_REPLACEMENTS,
+    MAX_CONFIGURED_REGEX_RULES,
+    compile_safe_regex,
+    validate_replacement,
+)
+
 # Split text vs tags so we never “rewrite inside markup”.
 _TAG_SPLIT_RE = re.compile(r"(<[^>]+>)")
 
 # _env_enabled() removed — vtml_lexicon is now passed as a function argument.
 
+
 @dataclass(frozen=True)
 class Rule:
     rx: Pattern[str]
     repl: Callable[[re.Match[str]], str]
+    user_configured: bool = False
+
 
 def _sub_alias(alias: str) -> Callable[[re.Match[str]], str]:
     # Keep the original surface form (case/punct) inside the tag.
     def _r(m: re.Match[str]) -> str:
         return f'<vtml_sub alias="{alias}">{m.group(0)}</vtml_sub>'
+
     return _r
+
 
 def _word_with_trailing_pause(ms: int) -> Callable[[re.Match[str]], str]:
     """Return the matched word as-is, followed by a VTML pause of <ms> milliseconds.
     Used to insert a hard word-boundary hint so Paul doesn't garble the following token.
     ms=0 is the conventional NWR trick for words like 'fog' that otherwise bleed."""
+
     def _r(m: re.Match[str]) -> str:
         return f'{m.group(0)}<vtml_pause time="{ms}"/>'
+
     return _r
+
 
 def _phoneme_x_cmu(ph: str) -> Callable[[re.Match[str]], str]:
     def _r(m: re.Match[str]) -> str:
         # x-cmu uses CMU dict phonemes with stress numbers (ASCII-friendly).
         return f'<vtml_phoneme alphabet="x-cmu" ph="{ph}">{m.group(0)}</vtml_phoneme>'
+
     return _r
+
 
 # Direction abbreviations -> full words, but ONLY when used as wind direction.
 _DIR_MAP = {
-    "N": "north", "S": "south", "E": "east", "W": "west",
-    "NE": "northeast", "NW": "northwest", "SE": "southeast", "SW": "southwest",
-    "NNE": "north-northeast", "ENE": "east-northeast", "ESE": "east-southeast", "SSE": "south-southeast",
-    "SSW": "south-southwest", "WSW": "west-southwest", "WNW": "west-northwest", "NNW": "north-northwest",
+    "N": "north",
+    "S": "south",
+    "E": "east",
+    "W": "west",
+    "NE": "northeast",
+    "NW": "northwest",
+    "SE": "southeast",
+    "SW": "southwest",
+    "NNE": "north-northeast",
+    "ENE": "east-northeast",
+    "ESE": "east-southeast",
+    "SSE": "south-southeast",
+    "SSW": "south-southwest",
+    "WSW": "west-southwest",
+    "WNW": "west-northwest",
+    "NNW": "north-northwest",
 }
+
 
 def _wind_dir_repl(m: re.Match[str]) -> str:
     tok = m.group("dir")
@@ -49,6 +81,7 @@ def _wind_dir_repl(m: re.Match[str]) -> str:
     if not alias:
         return tok
     return f'<vtml_sub alias="{alias}">{tok}</vtml_sub>'
+
 
 # State/territory abbreviations -> spoken names, but only in place-name contexts
 # like "Baltimore MD", "Smith Point VA", "Washington DC", etc.
@@ -116,22 +149,62 @@ _AMBIGUOUS_STATE_CODES = {"IN", "OR", "ME", "HI", "OK"}
 # If one of the ambiguous state codes appears after one of these words,
 # it's probably normal sentence text, not a place name.
 _PLACE_STOPWORDS = {
-    "A", "AN", "AND", "ARE", "AS", "AT", "BE", "BECOME", "BECOMING", "BEEN", "BEING",
-    "BY", "CAN", "COULD", "EXPECTED", "FOR", "FROM", "HAS", "HAVE", "IN", "INTO",
-    "IS", "IT", "ITS", "LIKELY", "MAY", "MOVING", "NEAR", "OF", "ON", "OR",
-    "POSSIBLE", "REMAIN", "REMAINS", "REMAINING", "SHOULD", "THE", "THAT", "THESE",
-    "THIS", "THOSE", "TO", "WAS", "WERE", "WILL", "WITH",
+    "A",
+    "AN",
+    "AND",
+    "ARE",
+    "AS",
+    "AT",
+    "BE",
+    "BECOME",
+    "BECOMING",
+    "BEEN",
+    "BEING",
+    "BY",
+    "CAN",
+    "COULD",
+    "EXPECTED",
+    "FOR",
+    "FROM",
+    "HAS",
+    "HAVE",
+    "IN",
+    "INTO",
+    "IS",
+    "IT",
+    "ITS",
+    "LIKELY",
+    "MAY",
+    "MOVING",
+    "NEAR",
+    "OF",
+    "ON",
+    "OR",
+    "POSSIBLE",
+    "REMAIN",
+    "REMAINS",
+    "REMAINING",
+    "SHOULD",
+    "THE",
+    "THAT",
+    "THESE",
+    "THIS",
+    "THOSE",
+    "TO",
+    "WAS",
+    "WERE",
+    "WILL",
+    "WITH",
 }
 
 _PLACE_STATE_RE = re.compile(
     r"(?P<prefix>\b(?:[A-Z][A-Za-z.'’\-]*)(?:[ ,]+[A-Z][A-Za-z.'’\-]*){0,5}[ ,]+)"
-    r"(?P<st>"
-    + "|".join(sorted(_STATE_MAP, key=len, reverse=True))
-    + r")"
+    r"(?P<st>" + "|".join(sorted(_STATE_MAP, key=len, reverse=True)) + r")"
     r"(?=(?:\s+(?:to|and)\b)|(?:\s*(?:/|,|\.{1,3}|;|:|\)|$)))"
 )
 
 _PLACE_WORD_RE = re.compile(r"[A-Z][A-Za-z.'’\-]*")
+
 
 def _place_state_repl(m: re.Match[str]) -> str:
     prefix = m.group("prefix")
@@ -148,7 +221,7 @@ def _place_state_repl(m: re.Match[str]) -> str:
     last_upper = last_word.upper()
 
     # Peek at following text so we can be stricter for ambiguous codes.
-    tail = m.string[m.end():m.end() + 16]
+    tail = m.string[m.end() : m.end() + 16]
 
     # Extra guardrail for ambiguous state codes.
     if st.upper() in _AMBIGUOUS_STATE_CODES:
@@ -162,6 +235,7 @@ def _place_state_repl(m: re.Match[str]) -> str:
 
     return f'{prefix}<vtml_sub alias="{alias}">{st}</vtml_sub>'
 
+
 _RULES: list[Rule] = [
     # --- Common wind-direction abbreviations, only in "NW winds ..." contexts ---
     Rule(
@@ -171,7 +245,6 @@ _RULES: list[Rule] = [
         ),
         _wind_dir_repl,
     ),
-
     # --- The big one: "winds / wind's" homograph (verb vs weather noun) ---
     # Force weather-noun "winds" and "wind's" => /wɪndz/
     # Avoid common verb cases like "winds up ..." (except "up to ...") and "winds down" / "winds its ...".
@@ -185,9 +258,8 @@ _RULES: list[Rule] = [
         ),
         _phoneme_x_cmu("W IH1 N D Z"),
     ),
-
-   # Bare singular "wind" (noun) => /wɪnd/
-   # Mirror the same exclusions as the winds/wind's rule below.
+    # Bare singular "wind" (noun) => /wɪnd/
+    # Mirror the same exclusions as the winds/wind's rule below.
     Rule(
         re.compile(
             r"\bwind\b"
@@ -198,19 +270,15 @@ _RULES: list[Rule] = [
         ),
         _phoneme_x_cmu("W IH1 N D"),
     ),
-
     # --- Units (spoken nicely) ---
     Rule(re.compile(r"\bmph\b", re.IGNORECASE), _sub_alias("miles per hour")),
     Rule(re.compile(r"\bkts\b", re.IGNORECASE), _sub_alias("knots")),
-    Rule(re.compile(r"\bkt\b",  re.IGNORECASE), _sub_alias("knots")),
-
+    Rule(re.compile(r"\bkt\b", re.IGNORECASE), _sub_alias("knots")),
     Rule(re.compile(r"\bhpa\b", re.IGNORECASE), _sub_alias("hecto pascals")),
-    Rule(re.compile(r"\bmb\b",  re.IGNORECASE), _sub_alias("millibars")),
-
+    Rule(re.compile(r"\bmb\b", re.IGNORECASE), _sub_alias("millibars")),
     # Degree symbol forms
     Rule(re.compile(r"°\s*F\b"), _sub_alias("degrees Fahrenheit")),
     Rule(re.compile(r"°\s*C\b"), _sub_alias("degrees Celsius")),
-
     # Measurements only when they look like units after a number.
     #
     # The negative lookahead (?![ \t]+(?-i:[A-Z])) blocks the rule when the abbreviation
@@ -225,14 +293,24 @@ _RULES: list[Rule] = [
     #   "Interstate 270 in Maryland" → "Interstate 270 inches Maryland"
     # The positive lookahead (?=\s|$|[,:;!?]) is kept as the word-boundary guard so
     # we never match mid-word (e.g. "inches" itself isn't double-converted).
-    Rule(re.compile(r"(\d+(?:\.\d+)?)\s*((?:in)\.?)(?![ \t]+(?-i:[A-Z]))(?=\s|$|[,:;!?])", re.IGNORECASE), lambda m: f'{m.group(1)} <vtml_sub alias="inches">{m.group(2)}</vtml_sub>'),
-    Rule(re.compile(r"(\d+(?:\.\d+)?)\s*((?:ft)\.?)(?![ \t]+(?-i:[A-Z]))(?=\s|$|[,:;!?])", re.IGNORECASE), lambda m: f'{m.group(1)} <vtml_sub alias="feet">{m.group(2)}</vtml_sub>'),
-    Rule(re.compile(r"(\d+(?:\.\d+)?)\s*((?:mi)\.?)(?![ \t]+(?-i:[A-Z]))(?=\s|$|[,:;!?])", re.IGNORECASE), lambda m: f'{m.group(1)} <vtml_sub alias="miles">{m.group(2)}</vtml_sub>'),
-    Rule(re.compile(r"(\d+(?:\.\d+)?)\s*((?:nm)\.?)(?![ \t]+(?-i:[A-Z]))(?=\s|$|[,:;!?])", re.IGNORECASE), lambda m: f'{m.group(1)} <vtml_sub alias="nautical miles">{m.group(2)}</vtml_sub>'),
-
+    Rule(
+        re.compile(r"(\d+(?:\.\d+)?)\s*((?:in)\.?)(?![ \t]+(?-i:[A-Z]))(?=\s|$|[,:;!?])", re.IGNORECASE),
+        lambda m: f'{m.group(1)} <vtml_sub alias="inches">{m.group(2)}</vtml_sub>',
+    ),
+    Rule(
+        re.compile(r"(\d+(?:\.\d+)?)\s*((?:ft)\.?)(?![ \t]+(?-i:[A-Z]))(?=\s|$|[,:;!?])", re.IGNORECASE),
+        lambda m: f'{m.group(1)} <vtml_sub alias="feet">{m.group(2)}</vtml_sub>',
+    ),
+    Rule(
+        re.compile(r"(\d+(?:\.\d+)?)\s*((?:mi)\.?)(?![ \t]+(?-i:[A-Z]))(?=\s|$|[,:;!?])", re.IGNORECASE),
+        lambda m: f'{m.group(1)} <vtml_sub alias="miles">{m.group(2)}</vtml_sub>',
+    ),
+    Rule(
+        re.compile(r"(\d+(?:\.\d+)?)\s*((?:nm)\.?)(?![ \t]+(?-i:[A-Z]))(?=\s|$|[,:;!?])", re.IGNORECASE),
+        lambda m: f'{m.group(1)} <vtml_sub alias="nautical miles">{m.group(2)}</vtml_sub>',
+    ),
     # State abbreviations only when they look like place-name suffixes.
     Rule(_PLACE_STATE_RE, _place_state_repl),
-
     # --- A few NWS-ish abbreviations that show up in headers/closures ---
     # NOAA: VoiceText Paul reads it as "N-O-A-A" letters without this rule.
     Rule(re.compile(r"\bNOAA\b"), _sub_alias("noah")),
@@ -242,41 +320,34 @@ _RULES: list[Rule] = [
     Rule(re.compile(r"\bthunderstorm\b", re.IGNORECASE), _phoneme_x_cmu("TH AH1 N D ER0 S T OW0 R M")),
     Rule(re.compile(r"\bTSTMS\b", re.IGNORECASE), _phoneme_x_cmu("TH AH1 N D ER0 S T OW0 R M Z")),
     Rule(re.compile(r"\bTSTM\b", re.IGNORECASE), _phoneme_x_cmu("TH AH1 N D ER0 S T OW0 R M")),
-
     # Time zone abbreviations that may still appear in headers or time announcements
     Rule(re.compile(r"\bEST\b", re.IGNORECASE), _sub_alias("Eastern Standard Time")),
     Rule(re.compile(r"\bEDT\b", re.IGNORECASE), _sub_alias("Eastern Daylight Time")),
-
     # Aviation categories sometimes appear in AFD/TAF-style text
-    Rule(re.compile(r"\bVFR\b"),  _sub_alias("V F R")),
+    Rule(re.compile(r"\bVFR\b"), _sub_alias("V F R")),
     Rule(re.compile(r"\bMVFR\b"), _sub_alias("M V F R")),
-    Rule(re.compile(r"\bIFR\b"),  _sub_alias("I F R")),
+    Rule(re.compile(r"\bIFR\b"), _sub_alias("I F R")),
     Rule(re.compile(r"\bLIFR\b"), _sub_alias("L I F R")),
-
     # --- Impact / Impacts ---
     # Paul mispronounces the meteorological header "Impact:" (he stresses the wrong
     # syllable as a verb).  The "impakt" / "impakts" alias spelling forces correct
     # noun stress.  Source: VoiceText Paul Phoneme Guide + LWX TTS doc.
     Rule(re.compile(r"\bimpacts\b", re.IGNORECASE), _sub_alias("impakts")),
-    Rule(re.compile(r"\bimpact\b",  re.IGNORECASE), _sub_alias("impakt")),
-
+    Rule(re.compile(r"\bimpact\b", re.IGNORECASE), _sub_alias("impakt")),
     # --- Tornadic ---
     # Paul defaults to an odd schwa-heavy reading.  Phoneme: "tor-NAY-dik".
     # Variant 1 (generic / no office-specific quirks).
     # Source: VoiceText Paul Phoneme Guide.
     Rule(re.compile(r"\btornadic\b", re.IGNORECASE), _phoneme_x_cmu("T AO R N AE1 D IH K")),
-
     # --- Projectiles ---
     # Without this Paul places no stress on "-tiles", making it nearly
     # unintelligible.  LWX-confirmed phoneme from VoiceText Paul Phoneme Guide.
     Rule(re.compile(r"\bprojectiles\b", re.IGNORECASE), _phoneme_x_cmu("P R UH0 JH EH0 K T AY2 L Z")),
-
     # --- Objects ---
     # Paul reads "objects" with a weak initial vowel unless forced.
     # Phoneme leads with AA (the "AH" in "father") for the NWR-correct "AHbjects" onset.
     # Source: LWX TTS doc (x-CMU).
     Rule(re.compile(r"\bobjects\b", re.IGNORECASE), _phoneme_x_cmu("AA AH0 B JH EH0 K T S")),
-
     # --- Fog ---
     # Paul tends to blend "fog" into the following word without a hard boundary.
     # A zero-duration pause acts as a word-boundary separator without audible gap.
@@ -284,49 +355,57 @@ _RULES: list[Rule] = [
     Rule(re.compile(r"\bfog\b", re.IGNORECASE), _word_with_trailing_pause(0)),
 ]
 
+
 def _user_rule_flags(spec: dict) -> int:
     return re.IGNORECASE if bool(spec.get("ignore_case", False)) else 0
+
 
 def _compile_user_rule_rx(spec: dict) -> Pattern[str]:
     match = str(spec.get("match", "") or "")
     if not match:
         raise ValueError("override is missing 'match'")
+    if len(match) > MAX_CONFIGURED_REGEX_PATTERN:
+        raise ValueError("override pattern is overlong")
     if bool(spec.get("regex", False)):
-        return re.compile(match, _user_rule_flags(spec))
-    return re.compile(re.escape(match), _user_rule_flags(spec))
+        return compile_safe_regex(match, flags=_user_rule_flags(spec))
+    return compile_safe_regex(re.escape(match), flags=_user_rule_flags(spec))
+
 
 def _build_user_rules(
     alias_overrides: list[dict] | None = None,
     phoneme_overrides_x_cmu: list[dict] | None = None,
 ) -> list[Rule]:
-    rules: list[Rule] = []
-
+    if len(alias_overrides or []) > MAX_CONFIGURED_REGEX_RULES:
+        raise ValueError("too many VoiceText alias overrides")
+    if len(phoneme_overrides_x_cmu or []) > MAX_CONFIGURED_REGEX_RULES:
+        raise ValueError("too many VoiceText phoneme overrides")
     # Phonemes first, then aliases, so a manual phoneme can win cleanly.
-    for spec in phoneme_overrides_x_cmu or []:
-        if not isinstance(spec, dict):
-            continue
-        ph = str(spec.get("ph", "") or "").strip()
-        if not ph:
-            continue
-        try:
-            rx = _compile_user_rule_rx(spec)
-        except Exception:
-            continue
-        rules.append(Rule(rx, _phoneme_x_cmu(ph)))
+    return [
+        *_build_user_rule_group(phoneme_overrides_x_cmu, "ph", "phoneme", _phoneme_x_cmu),
+        *_build_user_rule_group(alias_overrides, "alias", "alias", _sub_alias),
+    ]
 
-    for spec in alias_overrides or []:
-        if not isinstance(spec, dict):
-            continue
-        alias = str(spec.get("alias", "") or "").strip()
-        if not alias:
-            continue
-        try:
-            rx = _compile_user_rule_rx(spec)
-        except Exception:
-            continue
-        rules.append(Rule(rx, _sub_alias(alias)))
 
+def _build_user_rule_group(
+    specs: list[dict] | None,
+    replacement_key: str,
+    label: str,
+    replacement_factory: Callable[[str], Callable[[re.Match[str]], str]],
+) -> list[Rule]:
+    rules: list[Rule] = []
+    for spec in specs or []:
+        if not isinstance(spec, dict):
+            raise ValueError(f"VoiceText {label} override must be an object")
+        replacement = str(spec.get(replacement_key, "") or "").strip()
+        if not replacement:
+            raise ValueError(f"VoiceText {label} override is missing '{replacement_key}'")
+        if len(replacement) > MAX_CONFIGURED_REGEX_REPLACEMENT:
+            raise ValueError(f"VoiceText {label} replacement is overlong")
+        validate_replacement(replacement)
+        rx = _compile_user_rule_rx(spec)
+        rules.append(Rule(rx, replacement_factory(replacement), True))
     return rules
+
 
 def apply_voicetext_paul_vtml(
     text: str,
@@ -358,7 +437,9 @@ def apply_voicetext_paul_vtml(
     for i in range(0, len(parts), 2):  # even indexes = plain text between tags
         s = parts[i]
         for r in rules:
-            s = r.rx.sub(r.repl, s)
+            s, count = r.rx.subn(r.repl, s, count=MAX_CONFIGURED_REGEX_REPLACEMENTS + 1)
+            if r.user_configured and count > MAX_CONFIGURED_REGEX_REPLACEMENTS:
+                raise ValueError("VoiceText override replacement work exceeded its bound")
         parts[i] = s
 
     return "".join(parts)

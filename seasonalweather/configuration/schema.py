@@ -141,6 +141,20 @@ _PHONEME_OVERRIDE = _o(
         "ignore_case": _b(default=False),
     }
 )
+
+_VOICE_TEXT_PAUL = _o(
+    {
+        "run_as": _s(default="voicetext"),
+        "retries": _i(default=1),
+        "retry_sleep_ms": _i(default=150),
+        "reset_every": _i(default=0),
+        "kill_before": _b(default=False),
+        "vtml_lexicon": _b(default=True),
+        "alias_overrides": _l(_ALIAS_OVERRIDE, default=[]),
+        "phoneme_overrides_x_cmu": _l(_PHONEME_OVERRIDE, default=[]),
+    },
+    default={},
+)
 _PNS_SUBTYPE = _o(
     {
         "name": _s(required=True),
@@ -619,23 +633,23 @@ SCHEMA_V1 = _o(
         "tts": _o(
             {
                 "backend": _s(required=True),
+                "fallback_backend": _s(nullable=True, default=None),
                 "voice": _s(default="9"),
                 "rate_wpm": _i(default=165),
                 "volume": _n(default=1.0),
                 "text_overrides": _l(_TEXT_OVERRIDE, default=[]),
-                "voicetext_paul": _o(
+                "local": _o(
                     {
-                        "run_as": _s(default="voicetext"),
-                        "retries": _i(default=1),
-                        "retry_sleep_ms": _i(default=150),
-                        "reset_every": _i(default=0),
-                        "kill_before": _b(default=False),
-                        "vtml_lexicon": _b(default=True),
-                        "alias_overrides": _l(_ALIAS_OVERRIDE, default=[]),
-                        "phoneme_overrides_x_cmu": _l(_PHONEME_OVERRIDE, default=[]),
+                        "engine": _s(default="espeak-ng"),
+                        "voice": _s(default="9"),
+                        "rate_wpm": _i(default=165),
+                        "voicetext_paul": _VOICE_TEXT_PAUL,
                     },
                     default={},
                 ),
+                # Legacy flat local configuration remains accepted and is
+                # normalized deterministically by config.py.
+                "voicetext_paul": _VOICE_TEXT_PAUL,
             },
             required=True,
         ),

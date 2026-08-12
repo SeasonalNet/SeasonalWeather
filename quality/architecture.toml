@@ -324,3 +324,44 @@ cli_reload_authority_imports = [
   "seasonalweather.configuration_reload.validation_job",
   "seasonalweather.database.configuration_reload",
 ]
+
+# P1-16 backend-neutral TTS ownership. Contracts and purpose policy remain
+# import-clean; local handlers own engine command construction; service code
+# may consume P1-10 media inspection but never owns promotion.
+tts_contract_roots = [
+  "seasonalweather/tts/models.py",
+  "seasonalweather/tts/policy.py",
+  "seasonalweather/tts/preprocess.py",
+]
+tts_contract_forbidden_imports = [
+  "fastapi",
+  "starlette",
+  "uvicorn",
+  "seasonalweather.api",
+  "seasonalweather.database",
+  "seasonalweather.liquidsoap_telnet",
+  "seasonalweather.configuration_reload",
+]
+tts_local_roots = [
+  "seasonalweather/tts/local.py",
+  "seasonalweather/tts/subprocess.py",
+  "seasonalweather/tts/voicetext_paul_vtml.py",
+]
+tts_local_forbidden_imports = [
+  "fastapi",
+  "starlette",
+  "uvicorn",
+  "seasonalweather.api",
+  "seasonalweather.database",
+  "seasonalweather.liquidsoap_telnet",
+  "seasonalweather.configuration_reload",
+  "seasonalweather.control",
+  "seasonalweather.artifacts",
+  "seasonalweather.configuration",
+]
+tts_policy_roots = ["seasonalweather/tts/policy.py"]
+tts_policy_forbidden_imports = [
+  "seasonalweather.tts.local",
+  "seasonalweather.tts.subprocess",
+  "seasonalweather.tts.voicetext_paul_vtml",
+]

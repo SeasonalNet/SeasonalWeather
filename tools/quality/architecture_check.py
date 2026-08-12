@@ -292,6 +292,29 @@ def scan(root: Path, config: dict[str, Any], exceptions: list[dict[str, Any]] | 
                         )
                     )
 
+        if _under(relative, config.get("tts_contract_roots", [])):
+            for imported, line in imports:
+                if _matches_prefix(imported, config.get("tts_contract_forbidden_imports", [])):
+                    findings.append(
+                        Finding(
+                            relative, line, "SWARCH034", f"TTS contract imports API or mutation authority {imported}"
+                        )
+                    )
+
+        if _under(relative, config.get("tts_local_roots", [])):
+            for imported, line in imports:
+                if _matches_prefix(imported, config.get("tts_local_forbidden_imports", [])):
+                    findings.append(
+                        Finding(relative, line, "SWARCH035", f"local TTS owner imports forbidden authority {imported}")
+                    )
+
+        if _under(relative, config.get("tts_policy_roots", [])):
+            for imported, line in imports:
+                if _matches_prefix(imported, config.get("tts_policy_forbidden_imports", [])):
+                    findings.append(
+                        Finding(relative, line, "SWARCH036", f"TTS policy crosses the engine boundary {imported}")
+                    )
+
         if _under(relative, config.get("configuration_core_roots", [])) and not _under(
             relative,
             config.get("configuration_adapter_roots", []),
