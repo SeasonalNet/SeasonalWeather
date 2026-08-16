@@ -9,6 +9,7 @@ from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
 from seasonalweather.broadcast.cycle import CycleBuilder
+from seasonalweather.broadcast.segment_registry import DEFAULT_SEGMENT_REGISTRY, ResolvedSegmentRegistry
 from seasonalweather.broadcast.station_feed_runtime import set_app_config as set_station_feed_config
 from seasonalweather.config import AppConfig
 from seasonalweather.lifecycle import WorkClass
@@ -70,6 +71,7 @@ class ResourcePlan:
     replace_timezone: bool = False
     replace_tts: bool = False
     replace_cycle_builder: bool = False
+    replace_segment_registry: bool = False
     replace_targeting: bool = False
     replace_allowed_wfos: bool = False
     update_dedupe: bool = False
@@ -93,6 +95,7 @@ def resource_plan_for_diff(diff: ReloadDiff) -> ResourcePlan:
         replace_timezone=timezone,
         replace_tts=tts,
         replace_cycle_builder=cycle_builder,
+        replace_segment_registry=under(("cycle",)),
         replace_targeting=targeting,
         replace_allowed_wfos=under(("nwws", "allowed_wfos")),
         update_dedupe=under(("dedupe", "ttl_seconds")),
@@ -109,6 +112,7 @@ class OrchestratorPreparedResources:
     tts_capability_source: ControllerLocalQualificationSource | None
     tts_capability_check: P109TtsQualificationAdapter | None
     cycle_builder: CycleBuilder | None
+    segment_registry: ResolvedSegmentRegistry | None
     same_allow_set: set[str] | None
     targeting: SameTargetResolver | None
     allowed_wfos: set[str] | None
@@ -138,6 +142,7 @@ class OrchestratorPreparedResources:
                 self.plan.replace_timezone,
                 self.plan.replace_tts,
                 self.plan.replace_cycle_builder,
+                self.plan.replace_segment_registry,
                 self.plan.replace_targeting,
                 self.plan.replace_allowed_wfos,
             )
@@ -262,6 +267,8 @@ class OrchestratorPreparedResources:
                 )
         if self.plan.replace_cycle_builder:
             items.append((self.orch, "cycle_builder", self.cycle_builder))
+        if self.segment_registry is not None:
+            items.append((self.orch, "segment_registry", self.segment_registry))
         if self.plan.replace_targeting:
             items.extend(
                 (
@@ -306,7 +313,16 @@ class OrchestratorPreparedResources:
         }
         items = [live_fields[path] for path in self.plan.changed_paths if path in live_fields]
         if self.plan.replace_cycle_builder:
-            items.append((refresher, "_builder", self.cycle_builder))
+            items.extend(
+                (
+                    (refresher, "_builder", self.cycle_builder),
+                    (refresher, "_seg_cache", None),
+                    (refresher, "_seg_cache_ts", 0.0),
+                    (refresher, "_seg_cache_mode", ""),
+                )
+            )
+        if self.segment_registry is not None:
+            items.append((refresher, "_registry", self.segment_registry))
         if self.plan.replace_tts:
             items.append((refresher, "_tts", self.tts))
         if self.plan.replace_timezone:
@@ -318,10 +334,20 @@ class OrchestratorPreparedResources:
         items: list[tuple[Any, str, object]] = []
         conductor = getattr(self.orch, "conductor", None)
         if conductor is not None:
+            if self.segment_registry is not None:
+                items.append((conductor, "_registry", self.segment_registry))
             if self.plan.replace_tts:
                 items.append((conductor, "_tts", self.tts))
             if self.plan.replace_timezone:
                 items.append((conductor, "_tz", self.timezone))
+            if self.plan.replace_segment_registry:
+                items.extend(
+                    (
+                        (conductor, "_cycle_order", []),
+                        (conductor, "_position_in_rotation", 0),
+                        (conductor, "_last_cycle_order", []),
+                    )
+                )
             if any(path == "/audio/sample_rate" for path in self.plan.changed_paths):
                 items.append((conductor, "_sample_rate", cfg.audio.sample_rate))
             if any(path.startswith("/cycle/alert_focus/") for path in self.plan.changed_paths):
@@ -344,6 +370,9 @@ class OrchestratorResourcePreparer:
         candidate_identity_sha256: str,
     ) -> PreparedResources:
         resource_plan = resource_plan_for_diff(diff)
+        segment_registry = (
+            DEFAULT_SEGMENT_REGISTRY.resolve(configuration.cycle) if resource_plan.replace_segment_registry else None
+        )
         timezone = ZoneInfo(configuration.station.timezone) if resource_plan.replace_timezone else None
         capability_registry = getattr(self.orch, "capability_registry", None)
         tts_capability_source = (
@@ -391,6 +420,9 @@ class OrchestratorResourcePreparer:
             if resource_plan.replace_tts
             else None
         )
+        builder_registry = segment_registry or getattr(self.orch, "segment_registry", None)
+        if builder_registry is None:
+            builder_registry = DEFAULT_SEGMENT_REGISTRY.resolve(configuration.cycle)
         builder = (
             CycleBuilder(
                 api=self.orch.api,
@@ -399,6 +431,7 @@ class OrchestratorResourcePreparer:
                 reference_points=configuration.cycle.reference_points,
                 same_fips_all=configuration.service_area.same_fips_all,
                 cycle_cfg=configuration.cycle,
+                registry=builder_registry,
             )
             if resource_plan.replace_cycle_builder
             else None
@@ -426,6 +459,7 @@ class OrchestratorResourcePreparer:
             tts_capability_source=tts_capability_source,
             tts_capability_check=tts_capability_check,
             cycle_builder=builder,
+            segment_registry=segment_registry,
             same_allow_set=allow_set,
             targeting=targeting,
             allowed_wfos=(

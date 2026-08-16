@@ -28,6 +28,10 @@
     "SWWP": {
       "1": 1,
       "2": 1
+    },
+    "SWSEG": {
+      "1": 1,
+      "2": 1
     }
   },
   "definitions": [
@@ -1075,6 +1079,44 @@
       "related_codes": ["SWCFG3003", "SWCFG4003", "SWCFG7008"],
       "documentation_references": ["docs/configuration-reload.md"],
       "supported_phases": ["reload", "reconciliation"]
+    },
+    {
+      "code": "SWSEG1001",
+      "title": "Segment registry definition is invalid",
+      "summary": "An authoritative segment registry definition has duplicate identity, malformed values, an unavailable builder, an invalid policy declaration, or an invalid typed configuration path.",
+      "namespace": "SWSEG",
+      "condition_class": 1,
+      "class_justification": "Malformed authoritative segment input must be rejected before runtime consumers observe it.",
+      "default_severity": "error",
+      "default_blocking": true,
+      "default_fatal": false,
+      "default_retryable": false,
+      "owner": "segment-registry",
+      "introduction_version": "0.18.0",
+      "status": "active",
+      "explanation_path": "explanations/SWSEG1001.md",
+      "related_codes": ["SWSEG2001"],
+      "documentation_references": ["docs/segment-registry.md"],
+      "supported_phases": ["semantic", "runtime"]
+    },
+    {
+      "code": "SWSEG2001",
+      "title": "Segment registry policy is contradictory",
+      "summary": "An authoritative segment definition contains incompatible policy metadata.",
+      "namespace": "SWSEG",
+      "condition_class": 2,
+      "class_justification": "A contradictory ordering or freshness policy is an unsupported segment runtime state.",
+      "default_severity": "error",
+      "default_blocking": true,
+      "default_fatal": false,
+      "default_retryable": false,
+      "owner": "segment-registry",
+      "introduction_version": "0.18.0",
+      "status": "active",
+      "explanation_path": "explanations/SWSEG2001.md",
+      "related_codes": ["SWSEG1001"],
+      "documentation_references": ["docs/segment-registry.md"],
+      "supported_phases": ["semantic", "runtime"]
     },
     {
       "code": "SWRUN4001",

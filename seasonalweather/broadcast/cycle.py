@@ -16,6 +16,7 @@ from .rwr import (
     ObsPressureCache, parse_rwr, build_rwr_obs_text, build_asos_obs_text,
     asos_to_rwr_station, RwrProduct, build_marine_obs_text,
 )
+from .segment_registry import DEFAULT_SEGMENT_REGISTRY, ResolvedSegmentRegistry
 from ..tts.tts import clean_for_tts, verbalize_url
 
 
@@ -765,6 +766,7 @@ class CycleBuilder:
         reference_points: List[Tuple[float, float, str]],
         same_fips_all: List[str],
         cycle_cfg=None,
+        registry: ResolvedSegmentRegistry | None = None,
         work_dir: str = "/var/lib/seasonalweather",
     ) -> None:
         self.api = api
@@ -773,6 +775,7 @@ class CycleBuilder:
         self.points = reference_points
         self.same_fips = set(same_fips_all)
         self._cycle_cfg = cycle_cfg  # CycleConfig | None — None falls back to hardcoded defaults
+        self._registry = registry or DEFAULT_SEGMENT_REGISTRY.resolve_for_cycle(cycle_cfg)
         # Pressure cache for RWR trend derivation (survives restarts)
         import os as _os
         _cache_path = _os.path.join(work_dir, "obs_pressure_cache.json")
@@ -1183,7 +1186,7 @@ class CycleBuilder:
           SEASONAL_CYCLE_SPC_MIN_DN=3  (3=MRGL)
           SEASONAL_CYCLE_SPC_DAYS=3    (1..3)
         """
-        if not (self._cycle_cfg.spc.enabled if self._cycle_cfg else False):
+        if not self._registry.enabled("spc"):
             return None
 
         wfos = list(self._cycle_cfg.spc.wfos) if self._cycle_cfg else ["LWX"]
@@ -1236,7 +1239,7 @@ class CycleBuilder:
         # Fetch and scrub the Coastal Waters Forecast for this cycle.
         # Enabled when cycle.cwf.enabled = true.
         # Tries each configured office in order; returns first non-empty result.
-        if not (self._cycle_cfg and self._cycle_cfg.cwf.enabled):
+        if not self._registry.enabled("cwf"):
             return None
         offices = list(self._cycle_cfg.cwf.offices) if self._cycle_cfg else []
         if not offices:
@@ -1363,7 +1366,7 @@ class CycleBuilder:
         No extra API call — marine obs are a section inside the same RWR we fetched
         for land obs.  Enabled via cycle.marine_obs.enabled = true in config.
         """
-        if not (self._cycle_cfg and self._cycle_cfg.marine_obs.enabled):
+        if not self._registry.enabled("marine_obs"):
             return None
         if not rwr_product or not rwr_product.marine_stations:
             return None
@@ -1401,8 +1404,8 @@ class CycleBuilder:
         if getattr(ctx, "health_detached_loop_only", False):
             notice = (getattr(ctx, "health_notice", None) or "SeasonalWeather is temporarily unable to receive current National Weather Service information. Please use another weather information source or visit weather.gov for the latest information.").strip()
             return [
-                CycleSegment(key="id", title="Station service notice", text=notice),
-                CycleSegment(key="health", title="Data feed status", text=notice),
+                CycleSegment(key="id", title=self._registry.title_for("id"), text=notice),
+                CycleSegment(key="health", title=self._registry.title_for("health"), text=notice),
             ]
 
         # --- Latest HWO (best-effort) ---
@@ -1645,30 +1648,25 @@ class CycleBuilder:
         status_text = self.build_status_text(ctx)
 
         segments: List[CycleSegment] = [
-            CycleSegment(key="id", title="Station ID", text=station_id),
+            CycleSegment(key="id", title=self._registry.title_for("id"), text=station_id),
         ]
         if health_notice:
-            segments.append(CycleSegment(key="health", title="Data feed status", text=health_notice))
-        segments.append(CycleSegment(key="status", title="Status", text=status_text))
+            segments.append(CycleSegment(key="health", title=self._registry.title_for("health"), text=health_notice))
+        segments.append(CycleSegment(key="status", title=self._registry.title_for("status"), text=status_text))
 
         # --- HWO ---
-        if hwo_text:
+        if hwo_text and self._registry.enabled("hwo"):
             segments.append(
                 CycleSegment(
                     key="hwo",
-                    title="Hazardous Weather Outlook",
+                    title=self._registry.title_for("hwo"),
                     text="And now for the hazardous weather outlook for the service area. " + hwo_text,
                 )
             )
         else:
-            if (self._cycle_cfg.hwo.speak_unavailable if self._cycle_cfg else True):
-                segments.append(
-                    CycleSegment(
-                        key="hwo-unavailable",
-                        title="Hazardous Weather Outlook",
-                        text="The hazardous weather outlook from LWX was unavailable.",
-                    )
-                )
+            fallback = self._hwo_unavailable_segment()
+            if fallback is not None:
+                segments.append(fallback)
 
         # --- SPC Convective Outlook (optional) ---
         spc_text = await self._build_spc_outlook_text(ctx, now)
@@ -1676,7 +1674,7 @@ class CycleBuilder:
             segments.append(
                 CycleSegment(
                     key="spc",
-                    title="SPC Convective Outlook",
+                    title=self._registry.title_for("spc"),
                     text=spc_text,
                 )
             )
@@ -1684,11 +1682,11 @@ class CycleBuilder:
 
 
         # --- “ZFP” key retained, but it’s now SYNOPSIS only (to avoid 1GB WAVs) ---
-        if synopsis_text:
+        if synopsis_text and self._registry.enabled("zfp"):
             segments.append(
                 CycleSegment(
                     key="zfp",
-                    title="Synopsis",
+                    title=self._registry.title_for("zfp"),
                     text=("This is the weather synopsis for our area. And now for the weather features affecting our region over the next several days. " + synopsis_text),
                 )
             )
@@ -1699,14 +1697,15 @@ class CycleBuilder:
                 forecast_text = "This is the summarized forecast section for our area. " + " ".join(fc_lines)
             else:
                 forecast_text = "This is the overall forecast section for our area from the National Weather Service. " + " ".join(fc_lines)
-            segments.append(CycleSegment(key="fcst", title="Forecast", text=forecast_text))
+            if self._registry.enabled("fcst"):
+                segments.append(CycleSegment(key="fcst", title=self._registry.title_for("fcst"), text=forecast_text))
 
         # --- Coastal Waters Forecast ---
-        if cwf_text:
+        if cwf_text and self._registry.enabled("cwf"):
             segments.append(
                 CycleSegment(
                     key="cwf",
-                    title="Coastal Waters Forecast",
+                    title=self._registry.title_for("cwf"),
                     text=(
                         "And now for the coastal and marine weather forecast for our area. "
                         + cwf_text
@@ -1716,14 +1715,15 @@ class CycleBuilder:
 
         # --- Observations ---
         if obs_text_rwr:
-            segments.append(CycleSegment(key="obs", title="Observations", text=obs_text_rwr))
+            if self._registry.enabled("obs"):
+                segments.append(CycleSegment(key="obs", title=self._registry.title_for("obs"), text=obs_text_rwr))
 
         # --- Marine Observations ---
-        if marine_obs_text:
+        if marine_obs_text and self._registry.enabled("marine_obs"):
             segments.append(
                 CycleSegment(
                     key="marine_obs",
-                    title="Marine Observations",
+                    title=self._registry.title_for("marine_obs"),
                     text=(
                         "And now for the marine observations in the service area. "
                         + marine_obs_text
@@ -1734,12 +1734,21 @@ class CycleBuilder:
         segments.append(
             CycleSegment(
                 key="outro",
-                title="Outro",
+                title=self._registry.title_for("outro"),
                 text="This is the end of the current broadcast cycle. Updated information will follow on the next rotation.",
             )
         )
 
         return segments
+
+    def _hwo_unavailable_segment(self) -> CycleSegment | None:
+        if not self._registry.enabled("hwo") or not self._registry.fallback_enabled("hwo"):
+            return None
+        return CycleSegment(
+            key="hwo-unavailable",
+            title=self._registry.title_for("hwo"),
+            text="The hazardous weather outlook from LWX was unavailable.",
+        )
 
     async def build_text(
         self,

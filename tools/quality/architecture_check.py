@@ -83,6 +83,27 @@ def _path_variables(tree: ast.AST) -> set[str]:
     return names
 
 
+def _module_literal_collections(tree: ast.Module, canonical_keys: set[str]) -> tuple[int, set[str]]:
+    """Find module-level literal collections that repeat canonical segment keys."""
+    first_line = 0
+    collected: set[str] = set()
+    for statement in tree.body:
+        value: ast.expr | None = None
+        if isinstance(statement, (ast.Assign, ast.AnnAssign)):
+            value = statement.value
+        if not isinstance(value, (ast.List, ast.Tuple, ast.Set, ast.Dict)):
+            continue
+        literals = {
+            node.value for node in ast.walk(value) if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        }
+        matching = literals & canonical_keys
+        if matching:
+            if first_line == 0:
+                first_line = statement.lineno
+            collected.update(matching)
+    return first_line, collected
+
+
 def _open_mutates(node: ast.Call) -> bool:
     if _qualified_call(node) != "open":
         return False
@@ -168,6 +189,93 @@ def scan(root: Path, config: dict[str, Any], exceptions: list[dict[str, Any]] | 
         path_variables = _path_variables(tree)
         is_worker = _matches_prefix(module, worker_roots)
         is_controller = _matches_prefix(module, controller_roots) and not is_worker
+
+        segment_owner_roots = config.get("segment_registry_owner_roots", [])
+        if _under(relative, config.get("segment_policy_consumer_roots", [])) and not _under(
+            relative, segment_owner_roots
+        ):
+            source = path.read_text(encoding="utf-8")
+            for term in config.get("segment_policy_forbidden_terms", []):
+                if term in source:
+                    line = next(
+                        (index for index, value in enumerate(source.splitlines(), start=1) if term in value),
+                        1,
+                    )
+                    findings.append(
+                        Finding(
+                            relative,
+                            line,
+                            "SWARCH044",
+                            f"segment policy authority must be queried from the registry: {term!r}",
+                        )
+                    )
+            static_line, static_keys = _module_literal_collections(
+                tree,
+                set(config.get("segment_registry_canonical_keys", [])),
+            )
+            if len(static_keys) >= 3:
+                findings.append(
+                    Finding(
+                        relative,
+                        static_line,
+                        "SWARCH044",
+                        "module-level literal collections repeat canonical static segment authority",
+                    )
+                )
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and _qualified_call(node) in config.get(
+                    "segment_policy_forbidden_calls", []
+                ):
+                    findings.append(
+                        Finding(
+                            relative,
+                            node.lineno,
+                            "SWARCH044",
+                            "segment policy definitions must be constructed only by the registry owner",
+                        )
+                    )
+
+        if _under(relative, segment_owner_roots):
+            for imported, line in imports:
+                if _matches_prefix(imported, config.get("segment_registry_forbidden_imports", [])):
+                    findings.append(
+                        Finding(
+                            relative,
+                            line,
+                            "SWARCH045",
+                            f"segment registry imports forbidden runtime or mutation authority {imported}",
+                        )
+                    )
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                call = _qualified_call(node)
+                if call in {
+                    "yaml.load",
+                    "yaml.safe_load",
+                    "yaml.full_load",
+                    "yaml.load_all",
+                    "yaml.safe_load_all",
+                    "yaml.full_load_all",
+                }:
+                    findings.append(
+                        Finding(
+                            relative,
+                            node.lineno,
+                            "SWARCH045",
+                            f"segment registry parses configuration directly via {call}",
+                        )
+                    )
+                mutation = _filesystem_mutation(node, path_variables)
+                if mutation:
+                    findings.append(
+                        Finding(
+                            relative,
+                            node.lineno,
+                            "SWARCH045",
+                            f"segment registry performs filesystem mutation via {mutation}",
+                        )
+                    )
 
         if is_controller:
             for imported, line in imports:
@@ -443,10 +551,14 @@ def scan(root: Path, config: dict[str, Any], exceptions: list[dict[str, Any]] | 
                             f"NWWS contract/helper imports transport or job authority {imported}",
                         )
                     )
-                elif _matches_prefix(imported, config.get("nwws_forbidden_imports", [])) and _under(
-                    relative,
-                    config.get("nwws_adapter_roots", []),
-                ) and imported != "slixmpp":
+                elif (
+                    _matches_prefix(imported, config.get("nwws_forbidden_imports", []))
+                    and _under(
+                        relative,
+                        config.get("nwws_adapter_roots", []),
+                    )
+                    and imported != "slixmpp"
+                ):
                     findings.append(
                         Finding(
                             relative,

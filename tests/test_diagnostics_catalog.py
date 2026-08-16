@@ -14,6 +14,7 @@ from seasonalweather.diagnostics.bindings import (
     RELOAD_CODES,
     RULE_BINDINGS,
     RUNTIME_CODES,
+    SEGMENT_BINDINGS,
     binding_for_rule,
 )
 from seasonalweather.diagnostics.codes import (
@@ -55,7 +56,7 @@ from seasonalweather.validation.rules import RULE_BY_ID
 
 ROOT = Path(__file__).resolve().parents[1]
 CODE_PATTERN = re.compile(
-    r'"((?:source|yaml|schema|compiler|semantic|compatibility|preflight|advisory|admission|validation)\.[a-z_.]+)"'
+    r'"((?:source|yaml|schema|compiler|semantic|compatibility|preflight|advisory|admission|validation|segment)\.[a-z_.]+)"'
 )
 
 
@@ -143,7 +144,9 @@ def test_canonical_catalog_is_immutable_complete_and_deterministic() -> None:
 
     assert first == second == load_catalog()
     assert first_bytes == second_bytes == packaged_catalog_bytes()
-    expected_count = len(RULE_BINDINGS) + len(RELOAD_CODES) + len(RUNTIME_CODES) + len(NWWS_CODES)
+    expected_count = (
+        len(RULE_BINDINGS) + len(SEGMENT_BINDINGS) + len(RELOAD_CODES) + len(RUNTIME_CODES) + len(NWWS_CODES)
+    )
     assert len(first.definitions) == expected_count
     assert {definition.introduction_version for definition in first.definitions} == {"0.18.0"}
     assert not first.tombstones
@@ -381,7 +384,7 @@ def test_package_data_metadata_covers_compiled_source_and_explanations() -> None
     assert "catalog/source.json" in declared
     assert "catalog/explanations/*.md" in declared
     assert len(tuple((CATALOG_ROOT / "explanations").glob("*.md"))) == (
-        len(RULE_BINDINGS) + len(RELOAD_CODES) + len(RUNTIME_CODES) + len(NWWS_CODES)
+        len(RULE_BINDINGS) + len(SEGMENT_BINDINGS) + len(RELOAD_CODES) + len(RUNTIME_CODES) + len(NWWS_CODES)
     )
 
 
@@ -417,26 +420,30 @@ def test_export_is_clean_deterministic_and_matches_package(tmp_path: Path) -> No
 def test_every_configuration_validation_rule_has_one_active_explainable_mapping() -> None:
     source = "\n".join(
         path.read_text(encoding="utf-8")
-        for package in ("configuration", "validation")
+        for package in ("configuration", "validation", "broadcast")
         for path in (ROOT / f"seasonalweather/{package}").glob("*.py")
     )
     emitted = set(CODE_PATTERN.findall(source)) - set(RULE_BY_ID)
-    mapped = {binding.rule_id for binding in RULE_BINDINGS}
+    all_bindings = (*RULE_BINDINGS, *SEGMENT_BINDINGS)
+    mapped = {binding.rule_id for binding in all_bindings}
     catalog = load_catalog()
 
     assert emitted == mapped
-    assert len({binding.code for binding in RULE_BINDINGS}) == len(RULE_BINDINGS)
-    for binding in RULE_BINDINGS:
+    assert len({binding.code for binding in all_bindings}) == len(all_bindings)
+    for binding in all_bindings:
         definition = catalog.definition(binding.code)
         assert definition is not None
         assert definition.status is DefinitionStatus.ACTIVE
-        assert definition.namespace == "SWCFG"
+        assert definition.namespace == ("SWSEG" if binding in SEGMENT_BINDINGS else "SWCFG")
         assert binding.phase in definition.supported_phases
         assert load_explanation(definition.explanation_path)
         assert binding_for_rule(binding.rule_id) is binding
     assert {str(item.code) for item in catalog.definitions if item.namespace == "SWCFG"} == {
         item.code for item in RULE_BINDINGS
     } | set(RELOAD_CODES.values())
+    assert {str(item.code) for item in catalog.definitions if item.namespace == "SWSEG"} == {
+        item.code for item in SEGMENT_BINDINGS
+    }
     assert set(RUNTIME_CODES.values()).issubset({str(item.code) for item in catalog.definitions})
 
 

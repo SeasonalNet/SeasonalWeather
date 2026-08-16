@@ -166,6 +166,7 @@ class SegmentEntry:
     duration_s: float
     last_updated_ts: float  # unix epoch
     refresh_interval_s: int  # 0 = never auto-stale (live / on-demand only)
+    max_age_s: int = 0  # authoritative registry freshness ceiling
     is_placeholder: bool = False
 
     def is_stale(self) -> bool:
@@ -173,6 +174,19 @@ class SegmentEntry:
         if self.refresh_interval_s <= 0:
             return False
         return (time.time() - self.last_updated_ts) >= self.refresh_interval_s
+
+    def is_expired(self) -> bool:
+        """True when content exceeds its maximum acceptable age."""
+        max_age = self.max_age_s or self.refresh_interval_s
+        if max_age <= 0:
+            return False
+        return (time.time() - self.last_updated_ts) >= max_age
+
+
+def _entry_from_payload(item: dict) -> SegmentEntry:
+    payload = dict(item)
+    payload["max_age_s"] = int(item.get("max_age_s", item.get("refresh_interval_s", 0)))
+    return SegmentEntry(**payload)
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +273,7 @@ class SegmentStore:
         loaded = 0
         for item in items:
             try:
-                e = SegmentEntry(**item)
+                e = _entry_from_payload(item)
                 if not Path(e.audio_path).exists():
                     e.is_placeholder = True
                 self._entries[e.key] = e
@@ -331,6 +345,7 @@ class SegmentStore:
         audio_path: Path,
         duration_s: float,
         refresh_interval_s: int,
+        max_age_s: int | None = None,
         *,
         is_placeholder: bool = False,
     ) -> None:
@@ -344,6 +359,7 @@ class SegmentStore:
                 duration_s=duration_s,
                 last_updated_ts=time.time(),
                 refresh_interval_s=refresh_interval_s,
+                max_age_s=max_age_s if max_age_s is not None else refresh_interval_s,
                 is_placeholder=is_placeholder,
             )
             self._persist_unlocked()
@@ -359,6 +375,7 @@ class SegmentStore:
         key: str,
         title: str,
         refresh_interval_s: int,
+        max_age_s: int | None = None,
     ) -> None:
         """
         Register *key* as known-unavailable.  Sets ``last_updated_ts=0`` so
@@ -373,6 +390,7 @@ class SegmentStore:
                 duration_s=0.0,
                 last_updated_ts=0.0,  # immediately stale → refresher retries
                 refresh_interval_s=refresh_interval_s,
+                max_age_s=max_age_s if max_age_s is not None else refresh_interval_s,
                 is_placeholder=True,
             )
             self._persist_unlocked()
@@ -389,6 +407,7 @@ class SegmentStore:
         title: str,
         text: str,
         refresh_interval_s: int,
+        max_age_s: int | None = None,
         *,
         sample_rate: int,
         seg_gap_s: float = _DEFAULT_SEG_GAP_S,
@@ -415,5 +434,6 @@ class SegmentStore:
             audio_path=wav_path,
             duration_s=dur,
             refresh_interval_s=refresh_interval_s,
+            max_age_s=max_age_s,
         )
         return dur

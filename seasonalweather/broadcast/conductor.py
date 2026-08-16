@@ -38,9 +38,10 @@ from zoneinfo import ZoneInfo
 from ..alerts.active import AlertTracker
 from ..alerts.focus import AlertFocusPolicy, alert_holds_focus
 from ..liquidsoap_telnet import LiquidsoapTelnet
-from ..tts.audio import concat_wavs, wav_duration_seconds, write_silence_wav
 from ..tts.async_bridge import FinalizationEvidence, synthesize_completed_wav_async
+from ..tts.audio import concat_wavs, wav_duration_seconds, write_silence_wav
 from ..tts.tts import TTS
+from .segment_registry import DEFAULT_SEGMENT_REGISTRY, ResolvedSegmentRegistry, SegmentBuilderKind
 from .segment_store import SegmentStore
 
 log = logging.getLogger("seasonalweather.conductor")
@@ -66,36 +67,6 @@ _MAX_PUSHES_PER_TICK: int = 30
 # avoids opening a telnet connection every few hundred milliseconds throughout
 # long alerts, while the final status check covers queued/preempted alerts.
 _INTERRUPT_STATUS_POLL_S: float = 0.5
-
-# Fixed base content order — alert segments are injected after "time".
-_BASE_CONTENT: list[str] = ["health", "status", "hwo", "spc", "zfp", "fcst", "cwf", "obs", "marine_obs"]
-
-# Heightened/active-alert mode is deliberately more selective: alerts and
-# severe-weather context stay hot, while routine forecast/marine products are
-# spaced out instead of truncated mid-sentence.
-_FOCUS_CONTENT: list[str] = ["health", "status", "hwo", "spc", "obs"]
-_FOCUS_DEFERRED_CONTENT: dict[str, float] = {
-    "zfp": 20 * 60.0,
-    "fcst": 20 * 60.0,
-    "marine_obs": 30 * 60.0,
-    "cwf": 40 * 60.0,
-}
-
-# Metadata titles for the Now-Playing / IP-RDS display.
-_NP_TITLES: dict[str, str] = {
-    "id": "Station identification.",
-    "time": "The current time in our service area.",
-    "health": "Data feed status.",
-    "status": "Overall station status and alerts.",
-    "hwo": "Hazardous weather outlook for the service area.",
-    "spc": "Severe weather outlook for the service area.",
-    "zfp": "Weather synopsis for the area.",
-    "fcst": "The forecast for the service area.",
-    "cwf": "Coastal and marine weather forecast.",
-    "marine_obs": "Marine observations for the service area.",
-    "obs": "Current conditions in our area.",
-}
-
 
 # ---------------------------------------------------------------------------
 #  Time formatting (mirrors cycle.py — kept local to avoid a circular import)
@@ -155,6 +126,7 @@ class CycleConductor:
         audio_dir: Path,
         sample_rate: int,
         np_meta_fn: Callable[..., dict[str, str]],
+        registry: ResolvedSegmentRegistry | None = None,
         seg_gap_s: float = _SEG_GAP_S,
         lookahead_s: float = _LOOKAHEAD_S,
         tick_s: float = _TICK_S,
@@ -196,6 +168,7 @@ class CycleConductor:
         self._telnet = telnet
         self._tts = tts
         self._alert_tracker = alert_tracker
+        self._registry = registry or DEFAULT_SEGMENT_REGISTRY.resolve()
         self._tz = tz
         self._audio_dir = Path(audio_dir)
         self._sample_rate = sample_rate
@@ -419,7 +392,7 @@ class CycleConductor:
         if active and not self._focus_mode_active:
             # Entering heightened/alert focus: postpone routine products from
             # this point so the next several rotations are severe-weather first.
-            for key in _FOCUS_DEFERRED_CONTENT:
+            for key in self._registry.deferred_focus_keys():
                 self._last_pushed_at[key] = now
             log.info("CycleConductor: alert-focus mode entered — routine segments deferred")
         elif not active and self._focus_mode_active:
@@ -430,7 +403,8 @@ class CycleConductor:
 
     def _deferred_focus_segments_due(self, now: float) -> list[str]:
         due: list[str] = []
-        for key, min_gap_s in _FOCUS_DEFERRED_CONTENT.items():
+        for key in self._registry.deferred_focus_keys():
+            min_gap_s = self._registry.minimum_air_interval(key)
             last = self._last_pushed_at.get(key, now)
             if now - last >= min_gap_s:
                 due.append(key)
@@ -501,22 +475,21 @@ class CycleConductor:
         self._rotation_seg_count = 0
         self._rotation_start_ts = now
 
-        order: list[str] = ["id", "time"]
+        focus = self._focus_mode_enabled(now)
+        static_order = self._registry.static_order(focus=focus)
+        order: list[str] = []
         self._insert_cache = {}
 
-        try:
-            for ae in self._alert_tracker.get_cycle_alerts():
-                order.append(f"_alert_{ae.id}")
-        except Exception:
-            log.exception("CycleConductor: could not fetch cycle alerts")
-
-        focus = self._focus_mode_enabled(now)
-        order.extend(self._insert_keys_for("after_time", rotation_count=self._rotation_count, focus=focus))
-
-        content_order = list(_FOCUS_CONTENT if focus else _BASE_CONTENT)
-        for content_key in content_order:
-            order.append(content_key)
-            if content_key == "status":
+        for static_key in static_order:
+            order.append(static_key)
+            if static_key == "time":
+                try:
+                    for ae in self._alert_tracker.get_cycle_alerts():
+                        order.append(f"_alert_{ae.id}")
+                except Exception:
+                    log.exception("CycleConductor: could not fetch cycle alerts")
+                order.extend(self._insert_keys_for("after_time", rotation_count=self._rotation_count, focus=focus))
+            elif static_key == "status":
                 order.extend(self._insert_keys_for("after_status", rotation_count=self._rotation_count, focus=focus))
 
         if focus:
@@ -580,12 +553,14 @@ class CycleConductor:
         self._position_in_rotation = (self._position_in_rotation + 1) % len(self._cycle_order)
 
         try:
-            if key == "time":
-                dur = await self._push_live_time()
-            elif key.startswith("_alert_"):
+            if key.startswith("_alert_"):
                 dur = self._push_tracker_alert(key[len("_alert_") :])
             elif key.startswith("_insert_"):
                 dur = self._push_scheduled_insert(key)
+            elif (
+                definition := self._registry.get(key)
+            ) is not None and definition.builder.kind is SegmentBuilderKind.CONDUCTOR_LIVE_TIME:
+                dur = await self._push_live_time()
             else:
                 dur = self._push_cached(key)
         except Exception:
@@ -663,7 +638,7 @@ class CycleConductor:
             )
             return 0.0
 
-        title = _NP_TITLES.get(key, entry.title or key)
+        title = self._registry.title_for(key, entry.title or key)
         meta = self._np_meta_fn(
             title=title,
             kind="cycle",
@@ -779,7 +754,7 @@ class CycleConductor:
                 return 0.0
 
             meta = self._np_meta_fn(
-                title=_NP_TITLES["time"],
+                title=self._registry.title_for("time"),
                 kind="cycle",
                 extra={"sw_cycle_key": "time"},
             )

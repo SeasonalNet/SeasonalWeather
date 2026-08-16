@@ -81,6 +81,7 @@ from .broadcast.now_runtime import NowRuntime
 from .broadcast.nwws_runtime import NwwsRuntime
 from .broadcast.pns_runtime import PnsRuntime
 from .broadcast.segment_refresher import SegmentRefresher
+from .broadcast.segment_registry import DEFAULT_SEGMENT_REGISTRY
 from .broadcast.segment_store import SegmentStore
 from .broadcast.service_runtime import SeasonalWeatherServiceRuntime
 from .broadcast.tests_runtime import RequiredTestRuntime
@@ -227,6 +228,7 @@ class Orchestrator:
         self.cap_last_severe_at: dt.datetime | None = None
         self.ern_last_tone_at: dt.datetime | None = None
 
+        self.segment_registry = DEFAULT_SEGMENT_REGISTRY.resolve(cfg.cycle)
         self.cycle_builder = CycleBuilder(
             api=self.api,
             tz_name=cfg.station.timezone,
@@ -234,6 +236,7 @@ class Orchestrator:
             reference_points=cfg.cycle.reference_points,
             same_fips_all=cfg.service_area.same_fips_all,
             cycle_cfg=cfg.cycle,
+            registry=self.segment_registry,
         )
 
         # Fast membership checks for "in-area" targeting
@@ -352,6 +355,7 @@ class Orchestrator:
             disclaimer=cfg.station.disclaimer,
             tz=self._tz,
             sample_rate=cfg.audio.sample_rate,
+            registry=self.segment_registry,
             on_alert_segments_changed=lambda reason: self.conductor.notify_flush(reset_rotation=True, reason=reason),
             activity_context=lambda: self.reload_activities.async_activity(RELOAD_SEGMENT_ACTIVITY),
         )
@@ -366,6 +370,7 @@ class Orchestrator:
             tz=self._tz,
             audio_dir=Path(cfg.paths.audio_dir),
             sample_rate=cfg.audio.sample_rate,
+            registry=self.segment_registry,
             np_meta_fn=self._np_meta,
             discord_fn=self.discord.cycle_rebuilt,
             active_alerts_fn=lambda: len(self.alert_tracker.get_cycle_alerts()),
@@ -415,20 +420,6 @@ class Orchestrator:
             log.debug("AlertTracker change: conductor notify failed", exc_info=True)
 
     # --- Now Playing / IP-RDS helpers (edit phrases freely) ---
-
-    _NP_CYCLE_TITLES = {
-        "id": "Station identification.",
-        "time": "The current time in our service area.",
-        "status": "Overall station status and alerts.",
-        "hwo": "Hazardous weather outlook for the service area.",
-        "hwo-unavailable": "Hazardous weather outlook for the service area.",
-        "spc": "Severe weather outlook for the service area.",
-        "zfp": "Weather synopsis for the area.",
-        "fcst": "The forecast for the service area.",
-        "obs": "Current conditions in our area.",
-        "outro": "End of the current broadcast cycle.",
-        "default": "Weather information for our service area.",
-    }
 
     _NP_ALERT_TEMPLATES = {
         "nwws_full": "{event}.",

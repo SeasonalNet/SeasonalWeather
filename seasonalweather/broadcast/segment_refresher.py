@@ -2,18 +2,9 @@
 broadcast/segment_refresher.py — SegmentRefresher: background segment refresh engine.
 
 Replaces the monolithic "build everything then push everything" pattern.
-Each segment now has its own cadence:
-
-  Segment    Interval   Trigger
-  ─────────  ─────────  ──────────────────────────────────────────────────────
-  id         60 s       Mode change (normal → heightened) also triggers early.
-  status     3 min      Reflects the local active-alert tracker; kept fresh.
-  hwo        60 min     HWO arrives via NWWS → call trigger_immediate("hwo").
-  spc        30 min     SPC day1 data; convective products trigger early.
-  zfp        60 min     RWS/AFD products trigger early.
-  fcst       30 min     ZFP zone data; stable between issuances.
-  cwf        2 h        CWF; marine; slow cadence.
-  obs        15 min     RWR/ASOS; medium cadence, most time-sensitive content.
+Each segment's cadence, enablement, and failure policy come from the
+authoritative registry in ``segment_registry.py``.  Product-trigger mappings
+below are event routing only; they do not define segment policy.
 
 Alert-tracker segments (_alert_{id}) are synthesised on demand when new
 entries appear and pruned when entries expire or are cancelled.
@@ -65,23 +56,15 @@ from zoneinfo import ZoneInfo
 from ..alerts.active import AlertTracker
 from ..tts.tts import TTS
 from .cycle import CycleBuilder, CycleContext, CycleSegment
+from .segment_registry import (
+    DEFAULT_SEGMENT_REGISTRY,
+    ResolvedSegmentRegistry,
+    SegmentBuilderKind,
+    SegmentFailurePolicy,
+)
 from .segment_store import SegmentStore
 
 log = logging.getLogger("seasonalweather.segment_refresher")
-
-# Default refresh intervals (seconds).  Override via refresh_intervals kwarg.
-_DEFAULT_INTERVALS: dict[str, int] = {
-    "id": 60,
-    "health": 60,
-    "status": 180,
-    "hwo": 3600,
-    "spc": 1800,
-    "zfp": 3600,
-    "fcst": 1800,
-    "cwf": 7200,
-    "marine_obs": 900,  # same cadence as land obs — RWR updates hourly
-    "obs": 900,
-}
 
 # How often the refresher polls for stale segments (regardless of events).
 _TICK_S: float = 30.0
@@ -89,34 +72,6 @@ _TICK_S: float = 30.0
 # Reuse a recent full build_segments() result to amortise API calls when
 # multiple segments are stale at the same time (e.g. cold start).
 _BUILD_CACHE_TTL_S: float = 20.0
-
-# All segment keys managed by the refresher (excluding live "time" and
-# dynamic "_alert_*" keys which have their own paths).
-_ALL_CONTENT_KEYS: list[str] = [
-    "id",
-    "health",
-    "status",
-    "hwo",
-    "spc",
-    "zfp",
-    "fcst",
-    "cwf",
-    "obs",
-    "marine_obs",
-]
-
-_SEGMENT_TITLES: dict[str, str] = {
-    "id": "Station identification.",
-    "health": "Data feed status.",
-    "status": "Overall station status and alerts.",
-    "hwo": "Hazardous weather outlook for the service area.",
-    "spc": "Severe weather outlook for the service area.",
-    "zfp": "Weather synopsis for the area.",
-    "fcst": "The forecast for the service area.",
-    "cwf": "Coastal and marine weather forecast.",
-    "marine_obs": "Marine observations for the service area.",
-    "obs": "Current conditions in our area.",
-}
 
 
 class SegmentRefresher:
@@ -146,8 +101,8 @@ class SegmentRefresher:
         disclaimer: str,
         tz: ZoneInfo,
         sample_rate: int,
+        registry: ResolvedSegmentRegistry | None = None,
         seg_gap_s: float = 0.45,
-        refresh_intervals: dict[str, int] | None = None,
         tick_s: float = _TICK_S,
         on_alert_segments_changed: Callable[[str], None] | None = None,
         activity_context: Callable[[], AsyncContextManager[None]] | None = None,
@@ -162,10 +117,8 @@ class SegmentRefresher:
         self._disclaimer = disclaimer
         self._tz = tz
         self._sample_rate = sample_rate
+        self._registry = registry or DEFAULT_SEGMENT_REGISTRY.resolve()
         self._seg_gap_s = seg_gap_s
-        self._intervals: dict[str, int] = dict(_DEFAULT_INTERVALS)
-        if refresh_intervals:
-            self._intervals.update(refresh_intervals)
         self._tick_s = tick_s
         self._on_alert_segments_changed = on_alert_segments_changed
         self._activity_context = activity_context
@@ -225,7 +178,7 @@ class SegmentRefresher:
             self._pending_alert_sync = False
 
             # Regular stale-check pass
-            for key in _ALL_CONTENT_KEYS:
+            for key in self._registry.refresh_keys():
                 if self._store.is_stale(key):
                     await self._refresh_one(key)
 
@@ -249,7 +202,7 @@ class SegmentRefresher:
     async def _populate_all(self) -> None:
         """Perform initial synthesis of all content segments."""
         log.info("SegmentRefresher: cold-start population beginning")
-        for key in _ALL_CONTENT_KEYS:
+        for key in self._registry.refresh_keys():
             try:
                 await self._refresh_one(key)
             except Exception:
@@ -270,31 +223,33 @@ class SegmentRefresher:
 
     async def _refresh_one_untracked(self, key: str) -> None:
         log.debug("SegmentRefresher: refreshing key=%s", key)
+        definition = self._registry.get(key)
+        if definition is None:
+            log.warning("SegmentRefresher: unrecognised key=%s, skipping", key)
+            return
+        if not self._registry.enabled(key):
+            log.debug("SegmentRefresher: disabled key=%s, skipping", key)
+            return
         try:
-            if key == "id":
+            if definition.builder.kind is SegmentBuilderKind.REFRESHER_ID:
                 await self._refresh_id()
-            elif key == "health":
-                await self._refresh_via_build("health")
-            elif key == "status":
+            elif definition.builder.kind is SegmentBuilderKind.REFRESHER_STATUS:
                 await self._refresh_status()
-            elif key == "hwo":
-                await self._refresh_via_build("hwo")
-            elif key == "spc":
-                await self._refresh_via_build("spc")
-            elif key == "zfp":
-                await self._refresh_via_build("zfp")
-            elif key == "fcst":
-                await self._refresh_via_build("fcst")
-            elif key == "cwf":
-                await self._refresh_via_build("cwf")
-            elif key == "marine_obs":
-                await self._refresh_via_build("marine_obs")
-            elif key == "obs":
-                await self._refresh_via_build("obs")
+            elif definition.builder.kind is SegmentBuilderKind.CYCLE_BUILDER_SEGMENTS:
+                await self._refresh_via_build(key)
             else:
-                log.warning("SegmentRefresher: unrecognised key=%s, skipping", key)
+                log.warning("SegmentRefresher: unsupported builder seam=%s key=%s", definition.builder, key)
         except Exception:
-            log.exception("SegmentRefresher: refresh failed key=%s", key)
+            if definition.failure_policy.value == SegmentFailurePolicy.RETAIN_LAST_KNOWN_GOOD.value:
+                log.exception("SegmentRefresher: refresh failed key=%s; retaining last known good", key)
+            else:
+                await self._store.mark_placeholder(
+                    key,
+                    self._registry.title_for(key, key),
+                    self._registry.refresh_cadence(key),
+                    max_age_s=self._registry.max_age(key),
+                )
+                log.exception("SegmentRefresher: refresh failed key=%s; marked placeholder", key)
 
     # ------------------------------------------------------------------
     #  Per-segment builders
@@ -332,8 +287,9 @@ class SegmentRefresher:
         await self._synth(
             key="id",
             text=text,
-            title=_SEGMENT_TITLES["id"],
-            interval=self._intervals["id"],
+            title=self._registry.title_for("id"),
+            interval=self._registry.refresh_cadence("id"),
+            max_age=self._registry.max_age("id"),
         )
 
     async def _refresh_status(self) -> None:
@@ -342,16 +298,18 @@ class SegmentRefresher:
         if getattr(ctx, "health_detached_loop_only", False):
             await self._store.mark_placeholder(
                 "status",
-                _SEGMENT_TITLES["status"],
-                self._intervals["status"],
+                self._registry.title_for("status"),
+                self._registry.refresh_cadence("status"),
+                max_age_s=self._registry.max_age("status"),
             )
             return
 
         await self._synth(
             key="status",
             text=self._builder.build_status_text(ctx),
-            title=_SEGMENT_TITLES["status"],
-            interval=self._intervals["status"],
+            title=self._registry.title_for("status"),
+            interval=self._registry.refresh_cadence("status"),
+            max_age=self._registry.max_age("status"),
         )
 
     async def _refresh_via_build(self, key: str) -> None:
@@ -363,14 +321,18 @@ class SegmentRefresher:
         ctx = self._ctx_fn()
         segs = await self._get_segments(ctx)
 
-        # Resolve the segment key — "hwo-unavailable" collapses to a placeholder
-        seg = next((s for s in segs if s.key == key), None)
+        # Admit the unavailable alias only when the registry enables fallback.
+        aliases = {key}
+        if key == "hwo" and self._registry.fallback_enabled("hwo"):
+            aliases.add("hwo-unavailable")
+        seg = next((s for s in segs if s.key in aliases), None)
 
         if seg is None or not seg.text.strip():
             await self._store.mark_placeholder(
                 key,
-                _SEGMENT_TITLES.get(key, key),
-                self._intervals.get(key, 0),
+                self._registry.title_for(key, key),
+                self._registry.refresh_cadence(key),
+                max_age_s=self._registry.max_age(key),
             )
             log.debug("SegmentRefresher: key=%s not available — marked placeholder", key)
             return
@@ -378,8 +340,9 @@ class SegmentRefresher:
         await self._synth(
             key=key,
             text=seg.text,
-            title=_SEGMENT_TITLES.get(key, seg.title or key),
-            interval=self._intervals.get(key, 0),
+            title=self._registry.title_for(key, seg.title or key),
+            interval=self._registry.refresh_cadence(key),
+            max_age=self._registry.max_age(key),
         )
 
     # ------------------------------------------------------------------
@@ -517,6 +480,7 @@ class SegmentRefresher:
         text: str,
         title: str,
         interval: int,
+        max_age: int = 0,
     ) -> None:
         """
         Synthesise *text* for *key* and update the store.
@@ -531,6 +495,7 @@ class SegmentRefresher:
             title=title,
             text=text,
             refresh_interval_s=interval,
+            max_age_s=max_age,
             sample_rate=self._sample_rate,
             seg_gap_s=self._seg_gap_s,
         )

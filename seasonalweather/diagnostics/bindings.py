@@ -55,7 +55,14 @@ RULE_BINDINGS = (
     RuleCodeBinding("advisory.deprecated", "SWCFG0002", "deprecation"),
 )
 
-_BINDING_BY_RULE = MappingProxyType({binding.rule_id: binding for binding in RULE_BINDINGS})
+SEGMENT_BINDINGS = (
+    RuleCodeBinding("segment.registry.invalid_definition", "SWSEG1001", "semantic"),
+    RuleCodeBinding("segment.registry.policy_invariant", "SWSEG2001", "semantic"),
+)
+
+_BINDING_BY_RULE = MappingProxyType(
+    {binding.rule_id: binding for binding in (*RULE_BINDINGS, *SEGMENT_BINDINGS)}
+)
 
 RUNTIME_CODES = MappingProxyType(
     {
@@ -98,7 +105,7 @@ def binding_for_rule(rule_id: str) -> RuleCodeBinding:
     try:
         return _BINDING_BY_RULE[rule_id]
     except KeyError as exc:
-        raise ValueError(f"unmapped public configuration rule: {rule_id}") from exc
+        raise ValueError(f"unmapped diagnostic rule ID: {rule_id}") from exc
 
 
 def code_for_rule(rule_id: str) -> str:
