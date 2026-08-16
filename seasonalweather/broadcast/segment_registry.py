@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from enum import StrEnum
 from types import MappingProxyType
 from typing import NoReturn
@@ -103,7 +104,7 @@ class SegmentCapabilityRequirement:
 
     name: str
     required: bool = True
-    parameters: Mapping[str, str | int | bool] = MappingProxyType({})
+    parameters: Mapping[str, str | int | bool] = dataclass_field(default_factory=lambda: MappingProxyType({}))
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "parameters", _freeze_value(self.parameters))

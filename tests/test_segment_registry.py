@@ -200,6 +200,25 @@ def test_policy_metadata_and_capability_requirements_are_immutable_and_declarati
     assert first.capability_requirements[0].parameters == {"format": "wav"}
 
 
+def test_default_capability_parameters_are_independent_immutable_and_convertible() -> None:
+    first = SegmentCapabilityRequirement(name="first")
+    second = SegmentCapabilityRequirement(name="second")
+
+    assert first.parameters == {}
+    assert second.parameters == {}
+    assert first.parameters is not second.parameters
+    with pytest.raises(TypeError):
+        first.parameters["format"] = "wav"
+    assert second.parameters == {}
+
+    canonical = DEFAULT_SEGMENT_REGISTRY.get("fcst").capability_requirements[0]
+    assert canonical.name == "tts.synthesis.v1"
+    assert canonical.parameters == {"format": "wav"}
+    converted = canonical.to_runtime_requirement()
+    assert converted.name == "tts.synthesis.v1"
+    assert converted.parameters == {"format": "wav"}
+
+
 def test_minimum_air_interval_failure_and_capability_policy_are_registry_owned() -> None:
     resolved = DEFAULT_SEGMENT_REGISTRY.resolve()
     assert resolved.minimum_air_interval("zfp") == 20 * 60
