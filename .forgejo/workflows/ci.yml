@@ -9,7 +9,7 @@ on:
 
 jobs:
   python:
-    runs-on: docker
+    runs-on: [docker, victus-fast]
     steps:
       - uses: actions/checkout@v6
       - name: Install Python tooling
