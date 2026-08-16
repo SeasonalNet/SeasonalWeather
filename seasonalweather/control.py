@@ -314,6 +314,13 @@ class OrchestratorControl:
             liquidsoap_ok = bool(self.orch.telnet.ping())
         except Exception:
             liquidsoap_ok = False
+        nwws_source = getattr(self.orch, "nwws_source", None)
+        nwws_health = None
+        if nwws_source is not None:
+            try:
+                nwws_health = nwws_source.health().to_dict()
+            except Exception:
+                nwws_health = {"state": "unavailable"}
         return {
             "mode": getattr(self.orch, "mode", "unknown"),
             "heightened_until": self._serialize_dt(getattr(self.orch, "heightened_until", None)),
@@ -321,6 +328,7 @@ class OrchestratorControl:
             "last_product_desc": getattr(self.orch, "last_product_desc", None),
             "liquidsoap_telnet_reachable": liquidsoap_ok,
             "nwws_queue_size": int(getattr(self.orch, "nwws_queue", asyncio.Queue()).qsize()),
+            "nwws_source": nwws_health,
             "cap_queue_size": int(getattr(self.orch, "cap_queue", asyncio.Queue()).qsize()),
             "ern_queue_size": int(getattr(self.orch, "ern_queue", asyncio.Queue()).qsize()),
             "config_sha256": self._config_file_hash(),

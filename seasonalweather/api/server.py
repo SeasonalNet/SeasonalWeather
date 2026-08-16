@@ -37,6 +37,7 @@ from ..job_store import (
 )
 from ..lifecycle import Lifecycle, LifecycleState, TaskSupervisor
 from ..main import Orchestrator, _setup_logging
+from ..nwws.diagnostics import NwwsRuntimeDiagnosticSink
 from ..runtime_diagnostics.fatal import FatalBoundary, SecondaryFailureLedger, enable_faulthandler
 from ..runtime_diagnostics.marker import ProcessMarkerStore, controller_marker
 from ..runtime_diagnostics.models import CorrelationContext, DiagnosticRole, PromotionReason
@@ -335,6 +336,12 @@ async def _run_api_server_impl(
         supervisor=supervisor,
         instance_id=instance_id,
     )
+    if diagnostic_service is not None:
+        orch.nwws_diagnostic_sink = NwwsRuntimeDiagnosticSink(
+            diagnostic_service,
+            context,
+            generation_provider=lambda: orch.configuration_generation,
+        )
     fatal[0] = FatalBoundary(
         diagnostic_service,
         context,

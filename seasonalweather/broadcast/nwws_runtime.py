@@ -6,19 +6,19 @@ import logging
 from ..alerts.active import ActiveAlert, _vtec_track_id
 from ..alerts.builder import build_spoken_alert
 from ..alerts.product import ParsedProduct, parse_product_text
-from ..alerts.vtec import same_codes_for_vtec, toneout_policy as _vtec_toneout_policy
+from ..alerts.vtec import same_codes_for_vtec
+from ..alerts.vtec import toneout_policy as _vtec_toneout_policy
+from ..nwws.source import NwwsProductEnvelope
 from .audio_origination import safe_event_code as _safe_event_code
 from .cap_policy import best_expiry_from_vtec, vtec_matches_configured_toneout_code
 from .pns import parse_nws_header_issued_dt, pns_text_same_issuance
 from .product_text import render_nws_product_script
-from .station_feed_runtime import (
-    nwws_area_from_text as _sf_nwws_area_from_text,
-    nwws_best_issued_dt as _sf_nwws_best_issued_dt,
-    nwws_event_label as _sf_nwws_event_label,
-    nwws_extract_issuer as _sf_nwws_extract_issuer,
-    nwws_make_headline as _sf_nwws_make_headline,
-    note_nwws as _station_feed_note_nwws,
-)
+from .station_feed_runtime import nwws_area_from_text as _sf_nwws_area_from_text
+from .station_feed_runtime import nwws_best_issued_dt as _sf_nwws_best_issued_dt
+from .station_feed_runtime import nwws_event_label as _sf_nwws_event_label
+from .station_feed_runtime import nwws_extract_issuer as _sf_nwws_extract_issuer
+from .station_feed_runtime import nwws_make_headline as _sf_nwws_make_headline
+from .station_feed_runtime import note_nwws as _station_feed_note_nwws
 
 log = logging.getLogger("seasonalweather")
 
@@ -77,7 +77,7 @@ class NwwsRuntime:
 
     async def run(self) -> None:
         while True:
-            raw = await self.nwws_queue.get()
+            envelope = await self.nwws_queue.get()
             self.health_state.mark_success("nwws_oi")
 
             # Flood-gate: allow the client logs for the first N messages, then silence them.
@@ -89,6 +89,7 @@ class NwwsRuntime:
                     self._nwws_rx_log_first_n,
                 )
 
+            raw = envelope.raw_text if isinstance(envelope, NwwsProductEnvelope) else str(envelope)
             parsed = parse_product_text(raw)
             if not parsed:
                 continue
@@ -753,7 +754,7 @@ class NwwsRuntime:
                     # Fall back to all tracks if vtec.py didn't differentiate
                     # (e.g. a product with only CAN and no CON).
                     if not cancel_track_ids and not continuation_track_ids:
-                        cancel_track_ids = frozenset(_nw_track_ids)
+                        cancel_track_ids = frozenset(track_id for track_id in _nw_track_ids if track_id)
 
                     if cancel_track_ids:
                         removed_n = self.alert_tracker.remove_by_vtec_tracks(

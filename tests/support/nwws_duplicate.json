@@ -1,0 +1,7 @@
+{
+  "body": "ABCD12 KLWX 121200\nKPHI\nTORNADO WARNING\n...SANITIZED PRODUCT...",
+  "message_type": "groupchat",
+  "sender": "NWWS@conference.example.invalid/Synthetic",
+  "stanza_id": "fixture-duplicate-001",
+  "received_at": "2026-08-12T12:00:18+00:00"
+}

@@ -274,6 +274,27 @@ runtime_fatal_forbidden_imports = [
   "seasonalweather.job_store",
   "seasonalweather.liquidsoap_telnet",
 ]
+
+nwws_source_roots = ["seasonalweather/nwws"]
+nwws_adapter_roots = ["seasonalweather/nwws/slixmpp_adapter.py"]
+nwws_slixmpp_allowed_roots = ["seasonalweather/nwws/slixmpp_adapter.py"]
+nwws_forbidden_imports = [
+  "slixmpp",
+  "seasonalweather.job_store",
+  "seasonalweather.jobs",
+  "seasonalweather.swwp",
+  "seasonalweather.worker",
+  "seasonalweather.workers",
+  "docker",
+  "systemd",
+]
+nwws_consumer_roots = [
+  "seasonalweather/broadcast/service_runtime.py",
+  "seasonalweather/broadcast/nwws_runtime.py",
+  "seasonalweather/broadcast/nwws_consumer.py",
+  "seasonalweather/control.py",
+  "seasonalweather/main.py",
+]
 api_runtime_diagnostics_allowed = ["seasonalweather/api/server.py"]
 api_diagnostics_forbidden_imports = [
   "seasonalweather.diagnostics.compiler",

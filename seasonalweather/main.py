@@ -44,6 +44,7 @@ from .lifecycle import (
     WorkClass,
 )
 from .logging_config import setup_logging
+from .nwws.source import NwwsDiagnosticSink, NwwsProductEnvelope, NwwsSource, NwwsSourceAdmissionFence
 
 # Module-level config reference — set once at startup before Orchestrator is created.
 _APP_CFG: AppConfig | None = None
@@ -253,7 +254,10 @@ class Orchestrator:
         self._nwws_decision_log_every = cfg.nwws.resiliency.decision_log_every
         self._nwws_allowed_wfos = self._norm_wfo_set(getattr(cfg.nwws, "allowed_wfos", []))
 
-        self.nwws_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=200)
+        self.nwws_queue: asyncio.Queue[NwwsProductEnvelope] = asyncio.Queue(maxsize=200)
+        self.nwws_source: NwwsSource | None = None
+        self.nwws_diagnostic_sink: NwwsDiagnosticSink | None = None
+        self.nwws_admission_fence = NwwsSourceAdmissionFence()
 
         # CAP queue (only used if CAP enabled and import succeeded)
         self.cap_queue: asyncio.Queue["CapAlertEvent"] = asyncio.Queue(maxsize=200)  # type: ignore[name-defined]

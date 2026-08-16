@@ -10,7 +10,7 @@ import tempfile
 from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 
-from .bindings import RELOAD_CODES, RULE_BINDINGS, RUNTIME_CODES, RuleCodeBinding
+from .bindings import NWWS_CODES, RELOAD_CODES, RULE_BINDINGS, RUNTIME_CODES, RuleCodeBinding
 from .codes import ConditionClass, DiagnosticCode, DiagnosticCodeError
 from .models import (
     DIAGNOSTIC_CATALOG_VERSION,
@@ -452,8 +452,11 @@ def _validate_configuration_binding(
 
 def _validate_runtime_bindings(by_code: dict[str, DiagnosticDefinition]) -> None:
     runtime_codes = set(RUNTIME_CODES.values())
+    nwws_codes = set(NWWS_CODES.values())
     if len(runtime_codes) != len(RUNTIME_CODES) or not runtime_codes.issubset(by_code):
         raise CatalogCompileError("runtime code bindings are incomplete or duplicated")
+    if len(nwws_codes) != len(NWWS_CODES) or not nwws_codes.issubset(by_code):
+        raise CatalogCompileError("NWWS source diagnostic bindings are incomplete or duplicated")
 
 
 def catalog_dict(catalog: DiagnosticCatalog) -> dict[str, object]:

@@ -60,6 +60,13 @@ class _RuntimeMessageFilter(logging.Filter):
         return True
 
 
+class _SlixmppOutputContainmentFilter(logging.Filter):
+    """Keep dependency wire records out of configured application outputs."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not (record.name == "slixmpp" or record.name.startswith("slixmpp."))
+
+
 class _AnsiFormatter(logging.Formatter):
     """ANSI presentation formatter; never mutates the original LogRecord."""
 
@@ -120,6 +127,9 @@ def setup_logging(cfg: "AppConfig | None" = None) -> None:
         formatter = _AnsiFormatter(_DEFAULT_FORMAT)
         for handler in root_logger.handlers:
             handler.setFormatter(formatter)
+
+    for handler in root_logger.handlers:
+        handler.addFilter(_SlixmppOutputContainmentFilter())
 
     if runtime is None:
         return

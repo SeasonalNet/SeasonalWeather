@@ -48,8 +48,27 @@ def test_invalid_architecture_fixture_proves_rules_fail_closed():
         "SWARCH037",
         "SWARCH038",
         "SWARCH039",
+        "SWARCH040",
+        "SWARCH041",
+        "SWARCH042",
+        "SWARCH043",
     }
     assert any("filesystem mutation" in finding.message for finding in findings)
+
+
+def test_nwws_architecture_rules_have_independent_matching_negative_fixtures():
+    findings = scan(FIXTURES / "invalid", CONFIG)
+    by_rule = {
+        rule: [finding.path for finding in findings if finding.rule == rule]
+        for rule in ("SWARCH040", "SWARCH041", "SWARCH042", "SWARCH043")
+    }
+    assert by_rule["SWARCH040"] == ["seasonalweather/nwws/bad_boundary.py", "seasonalweather/nwws/job_authority.py"]
+    assert by_rule["SWARCH041"] == ["seasonalweather/nwws/slixmpp_adapter.py"]
+    assert by_rule["SWARCH042"] == ["seasonalweather/broadcast/nwws_consumer.py"]
+    assert by_rule["SWARCH043"] == [
+        "seasonalweather/broadcast/nwws_consumer.py",
+        "seasonalweather/broadcast/slixmpp_import.py",
+    ]
 
 
 def test_tts_architecture_rules_have_independent_matching_negative_fixtures():

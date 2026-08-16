@@ -429,6 +429,60 @@ def scan(root: Path, config: dict[str, Any], exceptions: list[dict[str, Any]] | 
                         )
                     )
 
+        if _under(relative, config.get("nwws_source_roots", [])):
+            for imported, line in imports:
+                if _matches_prefix(imported, config.get("nwws_forbidden_imports", [])) and not _under(
+                    relative,
+                    config.get("nwws_adapter_roots", []),
+                ):
+                    findings.append(
+                        Finding(
+                            relative,
+                            line,
+                            "SWARCH040",
+                            f"NWWS contract/helper imports transport or job authority {imported}",
+                        )
+                    )
+                elif _matches_prefix(imported, config.get("nwws_forbidden_imports", [])) and _under(
+                    relative,
+                    config.get("nwws_adapter_roots", []),
+                ) and imported != "slixmpp":
+                    findings.append(
+                        Finding(
+                            relative,
+                            line,
+                            "SWARCH041",
+                            f"NWWS adapter imports job or deployment authority {imported}",
+                        )
+                    )
+
+        if relative in config.get("nwws_consumer_roots", []):
+            for imported, line in imports:
+                if _matches_prefix(imported, ("slixmpp",)):
+                    findings.append(
+                        Finding(
+                            relative,
+                            line,
+                            "SWARCH042",
+                            "NWWS consumer imports slixmpp instead of the normalized source boundary",
+                        )
+                    )
+
+        if relative.startswith("seasonalweather/") and not _under(
+            relative,
+            config.get("nwws_slixmpp_allowed_roots", []),
+        ):
+            for imported, line in imports:
+                if _matches_prefix(imported, ("slixmpp",)):
+                    findings.append(
+                        Finding(
+                            relative,
+                            line,
+                            "SWARCH043",
+                            "production code imports slixmpp outside the NWWS adapter seam",
+                        )
+                    )
+
         if relative.startswith("seasonalweather/") and relative != config.get("diagnostics_resource_loader"):
             for imported, line in imports:
                 if _matches_prefix(imported, ("importlib.resources",)):

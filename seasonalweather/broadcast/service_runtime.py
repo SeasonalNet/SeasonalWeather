@@ -4,26 +4,25 @@ import asyncio
 import logging
 from typing import Any
 
-# Optional NWWS-OI XMPP client (depends on slixmpp)
-try:
-    from ..nwws.client import NWWSClient
-except Exception:  # pragma: no cover
-    NWWSClient = None  # type: ignore
-from .station_feed_runtime import (
-    hydrate_persisted_alerts as _sf_hydrate_persisted_alerts,
-    purge_legacy_synthetic_alerts as _sf_purge_legacy_synthetic_alerts,
+from ..nwws.source import (
+    NwwsProductEnvelope,
+    NwwsSourceAdmissionFence,
+    ProductSink,
+    build_nwws_source,
 )
+from .station_feed_runtime import hydrate_persisted_alerts as _sf_hydrate_persisted_alerts
+from .station_feed_runtime import purge_legacy_synthetic_alerts as _sf_purge_legacy_synthetic_alerts
 
 # Optional CAP (api.weather.gov/alerts/active)
 try:
-    from ..alerts.cap_nws import NwsCapPoller, CapAlertEvent
+    from ..alerts.cap_nws import CapAlertEvent, NwsCapPoller
 except Exception:  # pragma: no cover
     NwsCapPoller = None  # type: ignore
     CapAlertEvent = None  # type: ignore
 
 # Optional IPAWS CAP (apps.fema.gov IPAWS Open feed)
 try:
-    from ..alerts.ipaws_cap import IpawsCapPoller, IpawsCapEvent
+    from ..alerts.ipaws_cap import IpawsCapEvent, IpawsCapPoller
 except Exception:  # pragma: no cover
     IpawsCapPoller = None  # type: ignore
     IpawsCapEvent = None  # type: ignore
@@ -37,6 +36,49 @@ except Exception:  # pragma: no cover
 
 
 log = logging.getLogger("seasonalweather")
+
+
+class _NwwsQueueSink(ProductSink):
+    """Controller consumer boundary for normalized NWWS envelopes."""
+
+    def __init__(
+        self,
+        queue: asyncio.Queue[NwwsProductEnvelope],
+        fence: NwwsSourceAdmissionFence,
+        source: object,
+    ) -> None:
+        self._queue = queue
+        self._fence = fence
+        self._source = source
+
+    def accept(self, envelope: NwwsProductEnvelope) -> bool:
+        """Fence and admit synchronously; no await can split the decision."""
+        if not self._fence.admits(self._source):
+            return False
+        try:
+            self._queue.put_nowait(envelope)
+        except asyncio.QueueFull:
+            return False
+        return True
+
+
+def _build_controller_owned_nwws_source(owner: Any) -> Any:
+    """Compose NWWS without coupling it to the global reload generation."""
+    return build_nwws_source(
+        owner.jid,
+        owner.password,
+        owner.nwws_server,
+        owner.nwws_port,
+        room_jid=owner.cfg.nwws.room,
+        nick=owner.cfg.nwws.nick,
+        stall_seconds=owner.cfg.nwws.resiliency.stall_seconds,
+        muc_confirm_seconds=owner.cfg.nwws.resiliency.muc_confirm_seconds,
+        start_wait_seconds=owner.cfg.nwws.resiliency.start_wait_seconds,
+        join_wait_seconds=owner.cfg.nwws.resiliency.join_wait_seconds,
+        backoff_max_seconds=owner.cfg.nwws.resiliency.backoff_max_seconds,
+        generation=0,
+        diagnostic_sink=getattr(owner, "nwws_diagnostic_sink", None),
+    )
 
 
 class SeasonalWeatherServiceRuntime:
@@ -207,25 +249,31 @@ class SeasonalWeatherServiceRuntime:
         elif not o.cfg.nwws.enabled:
             log.info("NWWS-OI disabled (set nwws.enabled: true in config.yaml to enable)")
         else:
-            if NWWSClient is None:
-                log.warning("NWWS-OI enabled but nwws.client import failed; NWWS-OI is disabled.")
-            else:
-                xmpp = NWWSClient(
-                    o.jid, o.password, o.nwws_server, o.nwws_port, o.nwws_queue,
-                    room_jid=o.cfg.nwws.room,
-                    nick=o.cfg.nwws.nick,
-                    # TODO: wire stall/reconnect callbacks to o.discord.nwws_stall() / .nwws_reconnected() once NWWSClient exposes them
-                    stall_seconds=o.cfg.nwws.resiliency.stall_seconds,
-                    muc_confirm_seconds=o.cfg.nwws.resiliency.muc_confirm_seconds,
-                    start_wait_seconds=o.cfg.nwws.resiliency.start_wait_seconds,
-                    join_wait_seconds=o.cfg.nwws.resiliency.join_wait_seconds,
-                    backoff_max_seconds=o.cfg.nwws.resiliency.backoff_max_seconds,
+            try:
+                source = _build_controller_owned_nwws_source(o)
+            except Exception as exc:
+                log.warning(
+                    "NWWS-OI source adapter could not be constructed (%s); NWWS-OI is disabled.",
+                    type(exc).__name__,
                 )
+            else:
+                o.nwws_source = source
+                admission_fence = getattr(o, "nwws_admission_fence", None)
+                if admission_fence is None:
+                    admission_fence = NwwsSourceAdmissionFence()
+                    o.nwws_admission_fence = admission_fence
+                admission_fence.activate(source)
+
+                async def _stop_nwws() -> None:
+                    admission_fence.retire(source)
+                    await source.drain()
+                    await source.stop()
+
                 supervisor.create_task(
-                    xmpp.run_forever(),
+                    source.start(_NwwsQueueSink(o.nwws_queue, admission_fence, source)),
                     name="nwws_xmpp",
                     required=False,
-                    stop=xmpp.request_shutdown,
+                    stop=_stop_nwws,
                     stop_timeout_seconds=o.lifecycle.timeouts.source_stop_seconds,
                 )
                 supervisor.create_task(

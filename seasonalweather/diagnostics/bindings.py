@@ -67,6 +67,21 @@ RUNTIME_CODES = MappingProxyType(
     }
 )
 
+NWWS_CODES = MappingProxyType(
+    {
+        "malformed_message": "SWNWWS1001",
+        "protocol_failure": "SWNWWS2001",
+        "transport_failure": "SWNWWS3001",
+        "tls_failure": "SWNWWS3002",
+        "reconnect_degraded": "SWNWWS4001",
+        "source_silent": "SWNWWS4002",
+        "auth_failure": "SWNWWS6001",
+        "lifecycle_deadline": "SWNWWS7001",
+        "stale_generation": "SWNWWS8001",
+        "lifecycle_failure": "SWNWWS8002",
+    }
+)
+
 RELOAD_CODES = MappingProxyType(
     {
         "operator_action_required": "SWCFG0004",

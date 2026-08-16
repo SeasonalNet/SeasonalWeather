@@ -1,0 +1,7 @@
+{
+  "body": "",
+  "message_type": "groupchat",
+  "sender": "NWWS@conference.example.invalid/Synthetic",
+  "stanza_id": "fixture-invalid-001",
+  "received_at": "2026-08-12T12:00:19+00:00"
+}

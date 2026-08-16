@@ -9,7 +9,13 @@ from pathlib import Path
 
 import pytest
 
-from seasonalweather.diagnostics.bindings import RELOAD_CODES, RULE_BINDINGS, RUNTIME_CODES, binding_for_rule
+from seasonalweather.diagnostics.bindings import (
+    NWWS_CODES,
+    RELOAD_CODES,
+    RULE_BINDINGS,
+    RUNTIME_CODES,
+    binding_for_rule,
+)
 from seasonalweather.diagnostics.codes import (
     ConditionClass,
     DiagnosticCode,
@@ -137,7 +143,8 @@ def test_canonical_catalog_is_immutable_complete_and_deterministic() -> None:
 
     assert first == second == load_catalog()
     assert first_bytes == second_bytes == packaged_catalog_bytes()
-    assert len(first.definitions) == len(RULE_BINDINGS) + len(RELOAD_CODES) + len(RUNTIME_CODES) == 50
+    expected_count = len(RULE_BINDINGS) + len(RELOAD_CODES) + len(RUNTIME_CODES) + len(NWWS_CODES)
+    assert len(first.definitions) == expected_count
     assert {definition.introduction_version for definition in first.definitions} == {"0.18.0"}
     assert not first.tombstones
     assert first_bytes.endswith(b"\n")
@@ -374,7 +381,7 @@ def test_package_data_metadata_covers_compiled_source_and_explanations() -> None
     assert "catalog/source.json" in declared
     assert "catalog/explanations/*.md" in declared
     assert len(tuple((CATALOG_ROOT / "explanations").glob("*.md"))) == (
-        len(RULE_BINDINGS) + len(RELOAD_CODES) + len(RUNTIME_CODES)
+        len(RULE_BINDINGS) + len(RELOAD_CODES) + len(RUNTIME_CODES) + len(NWWS_CODES)
     )
 
 
