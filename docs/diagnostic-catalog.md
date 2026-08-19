@@ -146,7 +146,8 @@ Success exits `0`; invalid, reserved-unassigned, unknown, retired, and export
 failures exit `1`; argparse errors exit `2`. Commands initialize no controller,
 database, source, worker, TTS, Liquidsoap, or occurrence store. Pure list,
 detail, explanation, unknown, and tombstone representations are ready for
-later application-service delegation, but P1-12 adds no HTTP route.
+later application-service delegation. P1-22 exposes authenticated catalog
+definitions through the API while keeping the catalog immutable and read-only.
 
 ## P1-11 configuration bindings
 

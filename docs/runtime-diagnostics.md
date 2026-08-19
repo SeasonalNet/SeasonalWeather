@@ -85,8 +85,9 @@ bounded, and limited to batches of 500. Controller startup invokes it with a
 rows per occurrence by discarding oldest repeat evidence first and then the
 oldest remaining bounded transition when necessary. Public summary/detail
 dictionaries are pure, include every version and fingerprint field plus
-bounded transition and resolution evidence, and are reserved for P1-22;
-P1-13 adds no route.
+bounded transition and resolution evidence. P1-22 exposes bounded active and
+historical occurrence summaries through authenticated API routes; it does not
+make the occurrence store writable through HTTP.
 
 Resolution evidence has a separate typed contract. Its only fields are
 criterion, worker diagnostic ID, recovery state, and bounded notes. Unknown

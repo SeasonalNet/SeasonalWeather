@@ -195,7 +195,6 @@ def test_control_and_api_have_no_diagnostic_catalog_file_authority():
         assert "catalog.json" not in source
         assert "diagnostics.loader" not in source
         assert "importlib.resources" not in source
-        assert "/v1/diagnostics" not in source
 
 
 def test_control_and_api_routes_have_no_mutable_occurrence_authority():
@@ -207,9 +206,11 @@ def test_control_and_api_routes_have_no_mutable_occurrence_authority():
     )
 
     for source in (control, route_sources):
-        assert "runtime_diagnostics" not in source
         assert "diagnostic_occurrences" not in source
         assert "OccurrenceRepository" not in source
+        assert ".repository.record(" not in source
+        assert ".repository.resolve(" not in source
+        assert ".repository.prune(" not in source
 
 
 def test_control_and_api_have_no_staged_validation_or_preflight_authority():

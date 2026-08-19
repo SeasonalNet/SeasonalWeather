@@ -44,4 +44,4 @@ Important outcomes are `noop`, `dry_run`, `restart_required`, `acknowledgment_re
 
 Stable reload diagnostics are `SWCFG0004`, `SWCFG2005`, `SWCFG3003`, `SWCFG4003`, `SWCFG7008`, and `SWCFG8001`. Ordinary validation findings retain their P1-14 codes.
 
-Phase 1 validation executes in deterministic embedded scaffolding through the durable job repository. Real worker execution and transport, backend-neutral or remote TTS, NWWS redesign, segment registries, general configuration/diagnostic catalog HTTP APIs, deployment changes, PostgreSQL, PostGIS, and Redis remain deferred.
+Phase 1 validation executes in deterministic embedded scaffolding through the durable job repository. Real worker execution and transport, backend-neutral or remote TTS, NWWS redesign, segment registries, deployment changes, PostgreSQL, PostGIS, and Redis remain deferred.

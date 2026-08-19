@@ -13,7 +13,7 @@ review_date = "2026-10-23"
 removal_condition = "Reduce whenever legacy files are materially changed; reach zero."
 
 [checks.lint]
-maximum = 893
+maximum = 890
 owner = "SeasonalWeather maintainers"
 rationale = "Initial v0.17.0 Ruff debt."
 scope = "seasonalweather/, tests/, and tools/"

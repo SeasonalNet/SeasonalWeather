@@ -48,6 +48,7 @@ class CommandType(StrEnum):
     ORIGINATE_TEXT = "originate.text"
     ORIGINATE_AUDIO = "originate.audio"
     CONFIG_RELOAD = "config.reload"
+    AUDIO_UPLOAD = "audio.upload"
 
 
 class CommandStatus(StrEnum):

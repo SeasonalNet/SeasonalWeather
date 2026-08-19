@@ -204,7 +204,10 @@ compatibility_default_terms = [
 ]
 
 configuration_core_roots = ["seasonalweather/configuration"]
-configuration_adapter_roots = ["seasonalweather/configuration/loader.py"]
+configuration_adapter_roots = [
+  "seasonalweather/configuration/loader.py",
+  "seasonalweather/configuration/inspection.py",
+]
 configuration_forbidden_imports = [
   "fastapi",
   "starlette",
@@ -348,7 +351,10 @@ segment_registry_forbidden_imports = [
   "seasonalweather.worker",
   "seasonalweather.workers",
 ]
-api_runtime_diagnostics_allowed = ["seasonalweather/api/server.py"]
+api_runtime_diagnostics_allowed = [
+  "seasonalweather/api/server.py",
+  "seasonalweather/api/api.py",
+]
 
 # P1-20 segment execution and inspection boundaries.  These rules are
 # intentionally narrow: the API route layer and application service may use

@@ -9,6 +9,7 @@ KNOWN_API_SCOPES = frozenset(
         "read:status",
         "read:alerts",
         "read:config",
+        "read:diagnostics",
         "control:cycle",
         "control:mode",
         "control:tests",
@@ -55,6 +56,9 @@ ROUTE_AUTH_POLICIES: dict[tuple[str, str], RouteAuthPolicy] = {
     ("GET", "/v1/handled-alerts"): PUBLIC_ROUTE,
     ("GET", "/v1/station-feed"): _protected("read:alerts"),
     ("GET", "/v1/config/summary"): _protected("read:config"),
+    ("GET", "/v1/config/schema"): _protected("read:config"),
+    ("GET", "/v1/config/effective"): _protected("read:config"),
+    ("POST", "/v1/config/validate"): _protected("control:config"),
     ("GET", "/v1/segments"): _protected("read:status"),
     ("GET", "/v1/segments/{key}"): _protected("read:status"),
     ("POST", "/v1/segments/{key}/refresh"): _protected("control:cycle"),
@@ -76,6 +80,10 @@ ROUTE_AUTH_POLICIES: dict[tuple[str, str], RouteAuthPolicy] = {
     ("POST", "/v1/originate/text"): _protected("control:originate"),
     ("POST", "/v1/originate/audio"): _protected("control:originate"),
     ("POST", "/v1/config/reload"): _protected("control:config"),
+    ("GET", "/v1/diagnostics/catalog"): _protected("read:diagnostics"),
+    ("GET", "/v1/diagnostics/catalog/{code}"): _protected("read:diagnostics"),
+    ("GET", "/v1/diagnostics/active"): _protected("read:diagnostics"),
+    ("GET", "/v1/diagnostics/history"): _protected("read:diagnostics"),
     ("GET", "/v1/events"): _protected("read:status"),
 }
 

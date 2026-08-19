@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import uuid
@@ -17,6 +18,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from ..auth.service import AuthenticationError, AuthenticationService
 from ..configuration_reload.models import ReloadRequest, WarningAcknowledgment
 from ..control import ControlError, OrchestratorControl
+from ..diagnostics import load_catalog
+from ..diagnostics.representations import detail_representation, list_representation
 from ..health_service import (
     ComponentProbe,
     ComponentState,
@@ -24,6 +27,8 @@ from ..health_service import (
     HealthService,
 )
 from ..lifecycle import Lifecycle, WorkClass
+from ..runtime_diagnostics.representations import occurrence_summary
+from ..runtime_diagnostics.service import RuntimeDiagnosticService
 from .auth import ApiPrincipal, get_client_authentication, require_route_policy
 from .commands import CommandNotFoundError, CommandStore, IdempotencyConflictError
 from .models import (
@@ -32,6 +37,7 @@ from .models import (
     CommandAccepted,
     CommandSnapshot,
     ConfigReloadRequest,
+    ConfigValidateRequest,
     CreateAudioInsertRequest,
     CreateTextInsertRequest,
     CycleInsertList,
@@ -130,6 +136,9 @@ def _command_accepted(record: Any, *, replayed: bool) -> CommandAccepted:
         idempotent_replay=replayed,
         request_id=record.request_id,
         status_url=f"/v1/commands/{record.command_id}",
+        finished_at=record.finished_at,
+        result=record.result.model_dump(mode="json") if record.result is not None else None,
+        error=record.error.model_dump(mode="json") if record.error is not None else None,
     )
 
 
@@ -149,6 +158,60 @@ async def _require_idempotency_key(idempotency_key: str | None = Header(default=
             status_code=400, detail={"code": "invalid_idempotency_key", "message": "Idempotency-Key is too long."}
         )
     return key
+
+
+async def _read_bounded_upload(request: Request, file: UploadFile, *, maximum_bytes: int) -> bytes:
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > maximum_bytes + 65_536:
+                raise HTTPException(
+                    status_code=413,
+                    detail={
+                        "code": "upload_too_large",
+                        "message": "Uploaded audio exceeds the configured size limit.",
+                        "details": {"max_bytes": maximum_bytes},
+                    },
+                )
+        except ValueError:
+            pass
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(min(65_536, maximum_bytes + 1 - total))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > maximum_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail={
+                    "code": "upload_too_large",
+                    "message": "Uploaded audio exceeds the configured size limit.",
+                    "details": {"max_bytes": maximum_bytes},
+                },
+            )
+    return b"".join(chunks)
+
+
+def _audio_upload_response(record: Any, *, replayed: bool) -> AudioUploadAccepted:
+    if record.result is None:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "upload_result_unavailable", "message": "The upload result is not available."},
+        )
+    details = dict(record.result.details)
+    asset_id = next((item for item in record.result.references if item.startswith("aud_")), None)
+    if asset_id is None:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "upload_result_invalid", "message": "The durable upload result is invalid."},
+        )
+    details["asset_id"] = asset_id
+    details["command_id"] = record.command_id
+    details["idempotent_replay"] = replayed
+    return AudioUploadAccepted.model_validate(details)
 
 
 async def _execute_command(
@@ -245,6 +308,7 @@ def create_app(
     health_service: HealthService | None = None,
     lifecycle: Lifecycle | None = None,
     reload_service: Any | None = None,
+    diagnostic_service: RuntimeDiagnosticService | None = None,
 ) -> FastAPI:
     command_store = store or CommandStore()
     if health_service is None:
@@ -272,6 +336,7 @@ def create_app(
     app.state.health_service = health_service
     app.state.lifecycle = lifecycle
     app.state.reload_service = reload_service
+    app.state.diagnostic_service = diagnostic_service
     install_openapi(app)
 
     @app.middleware("http")
@@ -522,6 +587,43 @@ def create_app(
         return await control.get_config_summary()
 
     @app.get(
+        "/v1/config/schema",
+        tags=["configuration"],
+        summary="Return the supported typed configuration schema.",
+        responses=STANDARD_PROBLEM_RESPONSES,
+    )
+    async def v1_config_schema(
+        principal: ApiPrincipal = Depends(require_route_policy("GET", "/v1/config/schema")),  # noqa: B008
+    ) -> dict[str, object]:
+        return await control.get_config_schema()
+
+    @app.get(
+        "/v1/config/effective",
+        tags=["configuration"],
+        summary="Return the effective configuration with secret-free redaction.",
+        responses=STANDARD_PROBLEM_RESPONSES,
+    )
+    async def v1_config_effective(
+        principal: ApiPrincipal = Depends(require_route_policy("GET", "/v1/config/effective")),  # noqa: B008
+    ) -> dict[str, object]:
+        return await control.get_effective_config()
+
+    @app.post(
+        "/v1/config/validate",
+        tags=["configuration"],
+        summary="Validate the configured candidate without changing runtime state.",
+        responses=STANDARD_PROBLEM_RESPONSES,
+    )
+    async def v1_config_validate(
+        req: ConfigValidateRequest,
+        principal: ApiPrincipal = Depends(require_route_policy("POST", "/v1/config/validate")),  # noqa: B008
+    ) -> dict[str, object]:
+        return await control.validate_config(
+            preflight=req.preflight,
+            warnings_as_errors=req.warnings_as_errors,
+        )
+
+    @app.get(
         "/v1/segments",
         response_model=SegmentListResponse,
         tags=["segments"],
@@ -555,6 +657,7 @@ def create_app(
     @app.post(
         "/v1/segments/{key}/refresh",
         response_model=CommandAccepted,
+        response_model_exclude_none=True,
         status_code=202,
         tags=["segments"],
         summary="Accept an asynchronous refresh for one independently buildable segment.",
@@ -630,6 +733,7 @@ def create_app(
     @app.post(
         "/v1/cycle/rebuild",
         response_model=CommandAccepted,
+        response_model_exclude_none=True,
         status_code=202,
         tags=["control"],
         summary="Rebuild the normal station cycle.",
@@ -653,6 +757,7 @@ def create_app(
     @app.post(
         "/v1/mode/heightened",
         response_model=CommandAccepted,
+        response_model_exclude_none=True,
         tags=["control"],
         summary="Set heightened mode for a bounded duration.",
         responses=STANDARD_PROBLEM_RESPONSES,
@@ -676,6 +781,7 @@ def create_app(
     @app.delete(
         "/v1/mode/heightened",
         response_model=CommandAccepted,
+        response_model_exclude_none=True,
         tags=["control"],
         summary="Clear heightened mode.",
         responses=STANDARD_PROBLEM_RESPONSES,
@@ -699,6 +805,7 @@ def create_app(
     @app.post(
         "/v1/tests/originate",
         response_model=CommandAccepted,
+        response_model_exclude_none=True,
         tags=["origination"],
         summary="Originate a configured RWT or RMT test.",
         responses=STANDARD_PROBLEM_RESPONSES,
@@ -727,24 +834,74 @@ def create_app(
         responses=STANDARD_PROBLEM_RESPONSES,
     )
     async def v1_upload_audio(
-        file: UploadFile = File(...),
-        principal: ApiPrincipal = Depends(require_route_policy("POST", "/v1/uploads/audio")),
+        request: Request,
+        file: UploadFile = File(...),  # noqa: B008
+        principal: ApiPrincipal = Depends(require_route_policy("POST", "/v1/uploads/audio")),  # noqa: B008
+        idempotency_key: str = Depends(_require_idempotency_key),  # noqa: B008
     ) -> AudioUploadAccepted:
-        data = await file.read()
+        maximum_bytes = (
+            int(control.audio_upload_max_bytes()) if hasattr(control, "audio_upload_max_bytes") else 64 * 1024 * 1024
+        )
+        data = await _read_bounded_upload(request, file, maximum_bytes=maximum_bytes)
+        filename = file.filename or "upload.wav"
+        content_type = file.content_type or "audio/wav"
+        payload = {
+            "filename": filename,
+            "content_type": content_type,
+            "size_bytes": len(data),
+            "content_sha256": hashlib.sha256(data).hexdigest(),
+        }
         try:
-            payload = await control.stage_wav_upload(
-                filename=file.filename or "upload.wav",
-                content_type=file.content_type or "audio/wav",
+            record, replayed = await command_store.create_or_replay(
+                command_type="audio.upload",
+                idempotency_key=idempotency_key,
+                actor=principal.subject,
+                payload=payload,
+                request_id=_request_id(request),
+            )
+            if replayed:
+                if record.status.value == "failed" and record.error is not None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "code": record.error.code,
+                            "message": record.error.message,
+                            "details": record.error.details,
+                        },
+                    )
+                return _audio_upload_response(record, replayed=True)
+            await command_store.mark_running(record.command_id)
+            staged = await control.stage_wav_upload(
+                filename=filename,
+                content_type=content_type,
                 data=data,
                 actor=principal.subject,
             )
+            record = await command_store.mark_succeeded(record.command_id, staged)
         except ControlError as exc:
+            if "record" in locals() and record.status.value in {"accepted", "running"}:
+                await command_store.mark_failed(record.command_id, exc.to_dict())
             raise HTTPException(status_code=exc.status_code, detail=exc.to_dict()) from exc
-        return AudioUploadAccepted.model_validate(payload)
+        except IdempotencyConflictError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "idempotency_conflict", "message": str(exc)},
+            ) from exc
+        except HTTPException:
+            raise
+        except Exception as exc:
+            error = {"code": "upload_failed", "message": "Audio upload could not be staged."}
+            if "record" in locals() and record.status.value in {"accepted", "running"}:
+                await command_store.mark_failed(record.command_id, error)
+            raise HTTPException(status_code=500, detail=error) from exc
+        return AudioUploadAccepted.model_validate(
+            staged | {"command_id": record.command_id, "idempotent_replay": False}
+        )
 
     @app.post(
         "/v1/inserts/text",
         response_model=CommandAccepted,
+        response_model_exclude_none=True,
         tags=["inserts"],
         summary="Schedule a bounded text insert into the normal broadcast cycle.",
         responses=STANDARD_PROBLEM_RESPONSES,
@@ -768,6 +925,7 @@ def create_app(
     @app.post(
         "/v1/inserts/audio",
         response_model=CommandAccepted,
+        response_model_exclude_none=True,
         tags=["inserts"],
         summary="Schedule a bounded uploaded-audio insert into the normal broadcast cycle.",
         responses=STANDARD_PROBLEM_RESPONSES,
@@ -823,6 +981,7 @@ def create_app(
     @app.delete(
         "/v1/inserts/{insert_id}",
         response_model=CommandAccepted,
+        response_model_exclude_none=True,
         tags=["inserts"],
         summary="Cancel a scheduled broadcast-cycle insert.",
         responses=STANDARD_PROBLEM_RESPONSES,
@@ -846,6 +1005,7 @@ def create_app(
     @app.post(
         "/v1/originate/text",
         response_model=CommandAccepted,
+        response_model_exclude_none=True,
         tags=["origination"],
         summary="Originate a manual text alert.",
         responses=STANDARD_PROBLEM_RESPONSES,
@@ -869,6 +1029,7 @@ def create_app(
     @app.post(
         "/v1/originate/audio",
         response_model=CommandAccepted,
+        response_model_exclude_none=True,
         tags=["origination"],
         summary="Originate a manual alert from a staged audio asset.",
         responses=STANDARD_PROBLEM_RESPONSES,
@@ -892,6 +1053,7 @@ def create_app(
     @app.post(
         "/v1/config/reload",
         response_model=CommandAccepted,
+        response_model_exclude_none=True,
         status_code=202,
         tags=["configuration"],
         summary="Reload runtime configuration where hot reload is safe.",
@@ -952,6 +1114,76 @@ def create_app(
             idempotency_key=idempotency_key,
         )
         return _command_accepted(record, replayed=replayed)
+
+    @app.get(
+        "/v1/diagnostics/catalog",
+        tags=["diagnostics"],
+        summary="List the immutable diagnostic catalog definitions.",
+        responses=STANDARD_PROBLEM_RESPONSES,
+    )
+    async def v1_diagnostics_catalog(
+        principal: ApiPrincipal = Depends(require_route_policy("GET", "/v1/diagnostics/catalog")),  # noqa: B008
+    ) -> dict[str, object]:
+        return list_representation(load_catalog())
+
+    @app.get(
+        "/v1/diagnostics/catalog/{code}",
+        tags=["diagnostics"],
+        summary="Return one immutable diagnostic catalog definition.",
+        responses=STANDARD_PROBLEM_RESPONSES,
+    )
+    async def v1_diagnostics_catalog_detail(
+        code: str,
+        principal: ApiPrincipal = Depends(require_route_policy("GET", "/v1/diagnostics/catalog/{code}")),  # noqa: B008
+    ) -> dict[str, object]:
+        catalog = load_catalog()
+        definition = catalog.definition(code.upper())
+        if definition is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "diagnostic_not_found", "message": "Diagnostic code was not found."},
+            )
+        return detail_representation(catalog, definition)
+
+    @app.get(
+        "/v1/diagnostics/active",
+        tags=["diagnostics"],
+        summary="List bounded active runtime diagnostic occurrences.",
+        responses=STANDARD_PROBLEM_RESPONSES,
+    )
+    async def v1_diagnostics_active(
+        limit: int = Query(default=100, ge=1, le=500),
+        principal: ApiPrincipal = Depends(require_route_policy("GET", "/v1/diagnostics/active")),  # noqa: B008
+    ) -> dict[str, object]:
+        if diagnostic_service is None:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "diagnostics_unavailable", "message": "Runtime diagnostics are unavailable."},
+            )
+        return {
+            "diagnostic_schema_version": 1,
+            "occurrences": [occurrence_summary(item) for item in diagnostic_service.repository.active(limit=limit)],
+        }
+
+    @app.get(
+        "/v1/diagnostics/history",
+        tags=["diagnostics"],
+        summary="List bounded recent runtime diagnostic occurrences.",
+        responses=STANDARD_PROBLEM_RESPONSES,
+    )
+    async def v1_diagnostics_history(
+        limit: int = Query(default=100, ge=1, le=500),
+        principal: ApiPrincipal = Depends(require_route_policy("GET", "/v1/diagnostics/history")),  # noqa: B008
+    ) -> dict[str, object]:
+        if diagnostic_service is None:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "diagnostics_unavailable", "message": "Runtime diagnostics are unavailable."},
+            )
+        return {
+            "diagnostic_schema_version": 1,
+            "occurrences": [occurrence_summary(item) for item in diagnostic_service.repository.recent(limit=limit)],
+        }
 
     @app.get(
         "/v1/events",

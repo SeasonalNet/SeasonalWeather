@@ -417,6 +417,7 @@ async def _run_api_server_impl(
         health_service=health_service,
         lifecycle=lifecycle,
         reload_service=reload_service,
+        diagnostic_service=diagnostic_service,
     )
 
     server = _ControllerOwnedUvicornServer(

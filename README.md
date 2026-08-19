@@ -304,11 +304,21 @@ Successful JSON endpoints use `application/json`. API errors use RFC 9457 Proble
 `/openapi.json`, `/docs`, `/docs/oauth2-redirect`, `/redoc`, `/healthz`,
 `/readyz`, and `/v1/handled-alerts` are public; the handled-alerts route remains
 cacheable for SPA/radio clients. Other application routes require a Bearer
-token and their declared scope. Mutating JSON routes also require an
-`Idempotency-Key` header. Scheduled broadcast inserts live under
+token and their declared scope. Mutating routes require an `Idempotency-Key`
+header, including multipart audio uploads; retrying an upload with the same
+key and request bytes reuses the original staged asset, while a changed
+request is rejected. Scheduled broadcast inserts live under
 `/v1/inserts/*` and require the `control:inserts` scope; they add bounded,
 non-SAME text or uploaded-audio segments into the normal cycle without
 flushing the Liquidsoap cycle queue.
+
+Configuration inspection and validation are available through the authenticated
+`/v1/config/schema`, `/v1/config/effective`, and `POST /v1/config/validate`
+surfaces. Effective values and validation reports redact secrets and local
+source identifiers. Diagnostic definitions and bounded runtime occurrence
+summaries are available under `/v1/diagnostics/*` with the `read:diagnostics`
+scope. Synchronous command responses include their terminal result; commands
+accepted for asynchronous work return `202` with a status URL.
 
 Health endpoint contracts and readiness aggregation are documented in
 [`docs/health-readiness.md`](docs/health-readiness.md).

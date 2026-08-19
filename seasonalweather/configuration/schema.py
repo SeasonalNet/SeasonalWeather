@@ -52,6 +52,52 @@ class SchemaNode:
     max_length: int | None = None
 
 
+def public_schema_document() -> dict[str, object]:
+    """Return the bounded, deterministic public configuration schema."""
+
+    return {
+        "config_schema": CURRENT_CONFIG_SCHEMA,
+        "supported_config_schemas": sorted(SUPPORTED_CONFIG_SCHEMAS),
+        "schema": _public_schema_node(SCHEMA_V1),
+    }
+
+
+def _public_schema_node(node: SchemaNode) -> dict[str, object]:
+    result: dict[str, object] = {"type": node.kind.value, **_public_schema_metadata(node)}
+    result.update(_public_schema_children(node))
+    return result
+
+
+def _public_schema_metadata(node: SchemaNode) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value, enabled in (
+        ("nullable", True, node.nullable),
+        ("required", True, node.required),
+        ("secret", True, node.secret),
+        ("min_length", node.min_length, node.min_length is not None),
+        ("max_length", node.max_length, node.max_length is not None),
+        ("default", node.default, node.default is not _MISSING),
+    ):
+        if enabled:
+            result[key] = value
+    if node.enum is not None:
+        result["enum"] = sorted(node.enum, key=lambda item: str(item))
+    return result
+
+
+def _public_schema_children(node: SchemaNode) -> dict[str, object]:
+    result: dict[str, object] = {}
+    if node.fields is not None:
+        result["properties"] = {key: _public_schema_node(child) for key, child in sorted(node.fields.items())}
+    if node.values is not None:
+        result["additional_properties"] = _public_schema_node(node.values)
+    if node.item is not None:
+        result["items"] = _public_schema_node(node.item)
+    if node.tuple_items:
+        result["prefix_items"] = [_public_schema_node(item) for item in node.tuple_items]
+    return result
+
+
 def _s(**kwargs: Any) -> SchemaNode:
     return SchemaNode(SchemaKind.STRING, **kwargs)
 

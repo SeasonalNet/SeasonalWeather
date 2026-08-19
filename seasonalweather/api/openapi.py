@@ -217,7 +217,7 @@ CONFIG_SUMMARY_SCHEMA: dict[str, Any] = {
         "tts",
     ],
     "properties": {
-        "config_path": {"type": "string"},
+        "config_path": {"type": "object", "additionalProperties": {"type": "boolean"}},
         "config_sha256": {"type": ["string", "null"]},
         "station": {"type": "object", "additionalProperties": True},
         "cycle": {"type": "object", "additionalProperties": True},

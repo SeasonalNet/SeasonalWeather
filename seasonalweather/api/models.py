@@ -215,6 +215,11 @@ class ConfigReloadRequest(ApiModel):
         return value
 
 
+class ConfigValidateRequest(ApiModel):
+    preflight: bool = False
+    warnings_as_errors: bool = False
+
+
 class ConfigWarningAcknowledgment(ApiModel):
     schema_version: Literal[1] = 1
     actor: str = Field(min_length=1, max_length=128)
@@ -252,6 +257,9 @@ class CommandAccepted(ApiModel):
     idempotent_replay: bool = False
     request_id: str
     status_url: str
+    finished_at: dt.datetime | None = None
+    result: dict[str, Any] | None = None
+    error: dict[str, Any] | None = None
 
 
 class CommandSnapshot(ApiModel):
@@ -323,6 +331,8 @@ class AudioUploadAccepted(ApiModel):
     sha256: str
     uploaded_at: str
     expires_at: str
+    command_id: str | None = None
+    idempotent_replay: bool = False
 
 
 class InsertRepeatRequest(ApiModel):

@@ -21,6 +21,7 @@ from .api.models import (
 )
 from .broadcast.segment_service import SegmentApplicationService, SegmentServiceError
 from .broadcast.segment_store import render_segment_wav_async
+from .configuration.inspection import configuration_schema, effective_configuration, validate_configuration
 from .database.assets import AudioAssetRepository
 from .database.inserts import CycleInsertRepository
 from .database.station_feed import StationFeedRepository
@@ -177,6 +178,11 @@ class OrchestratorControl:
 
     def _asset_max_size_bytes(self) -> int:
         return max(1024, self.orch.cfg.api.audio_max_bytes)
+
+    def audio_upload_max_bytes(self) -> int:
+        """Return the configured hard bound used before upload persistence."""
+
+        return self._asset_max_size_bytes()
 
     def _asset_max_duration_seconds(self) -> float:
         return max(1.0, min(float(self.orch.cfg.api.audio_max_seconds), 3600.0))
@@ -424,7 +430,7 @@ class OrchestratorControl:
     async def get_config_summary(self) -> dict[str, Any]:
         cfg = self.orch.cfg
         return {
-            "config_path": self.config_path,
+            "config_path": {"configured": bool(self.config_path)},
             "config_sha256": self._config_file_hash(),
             "station": {
                 "name": cfg.station.name,
@@ -458,7 +464,6 @@ class OrchestratorControl:
                     ),
                     "store": {
                         "kind": "controller-sqlite",
-                        "path": cfg.database.path,
                     },
                     "ttl_policy": {
                         "minimum_seconds": cfg.api.auth.exchange.minimum_ttl_seconds,
@@ -490,6 +495,24 @@ class OrchestratorControl:
                 "station_feed_enabled": self.orch.cfg.station_feed.enabled,
             },
         }
+
+    async def get_config_schema(self) -> dict[str, object]:
+        return configuration_schema()
+
+    async def get_effective_config(self) -> dict[str, object]:
+        return effective_configuration(self.orch.cfg)
+
+    async def validate_config(
+        self,
+        *,
+        preflight: bool = False,
+        warnings_as_errors: bool = False,
+    ) -> dict[str, object]:
+        return await validate_configuration(
+            self.config_path,
+            preflight=preflight,
+            warnings_as_errors=warnings_as_errors,
+        )
 
     async def rebuild_cycle(self, *, reason: str | None, actor: str) -> dict[str, Any]:
         self._ensure_backend_ready()
