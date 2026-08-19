@@ -21,10 +21,13 @@ from seasonalweather.broadcast.segment_registry import (
 from seasonalweather.broadcast.segment_store import SegmentEntry
 
 
-def _cycle_config(*, spc: bool = True, cwf: bool = True, marine_obs: bool = True, hwo: bool = True) -> SimpleNamespace:
+def _cycle_config(
+    *, spc: bool = True, cwf: bool = True, offnt2: bool = False, marine_obs: bool = True, hwo: bool = True
+) -> SimpleNamespace:
     return SimpleNamespace(
         spc=SimpleNamespace(enabled=spc),
         cwf=SimpleNamespace(enabled=cwf),
+        offnt2=SimpleNamespace(enabled=offnt2),
         marine_obs=SimpleNamespace(enabled=marine_obs),
         hwo=SimpleNamespace(speak_unavailable=hwo),
     )
@@ -42,6 +45,7 @@ def test_registry_contains_every_static_segment_exactly_once() -> None:
         "zfp",
         "fcst",
         "cwf",
+        "offnt2",
         "obs",
         "marine_obs",
         "outro",
@@ -189,6 +193,7 @@ def test_disabled_optional_segments_are_not_selected_by_consumers() -> None:
 
     assert resolved.enabled("spc") is False
     assert resolved.enabled("cwf") is False
+    assert resolved.enabled("offnt2") is False
     assert resolved.enabled("marine_obs") is False
     assert resolved.enabled("hwo") is True
     assert resolved.fallback_enabled("hwo") is False
@@ -201,6 +206,12 @@ def test_enablement_is_a_mapping_to_typed_configuration_not_yaml() -> None:
     resolved = DEFAULT_SEGMENT_REGISTRY.resolve(_cycle_config(spc=False))
     assert resolved.enabled("spc") is False
     assert DEFAULT_SEGMENT_REGISTRY.get("spc").enablement.config_path == ("spc", "enabled")
+
+
+def test_offnt2_enablement_is_registry_driven() -> None:
+    resolved = DEFAULT_SEGMENT_REGISTRY.resolve(_cycle_config(offnt2=True))
+    assert resolved.enabled("offnt2") is True
+    assert DEFAULT_SEGMENT_REGISTRY.get("offnt2").builder.operation == "CycleBuilder.build_offnt2_segment"
 
 
 def test_policy_metadata_and_capability_requirements_are_immutable_and_declarative() -> None:

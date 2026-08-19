@@ -41,6 +41,7 @@ def _config() -> SimpleNamespace:
     return SimpleNamespace(
         spc=SimpleNamespace(enabled=True),
         cwf=SimpleNamespace(enabled=True),
+        offnt2=SimpleNamespace(enabled=False),
         marine_obs=SimpleNamespace(enabled=True),
         hwo=SimpleNamespace(speak_unavailable=True),
     )
@@ -107,7 +108,7 @@ def _real_segment_refresher(store: SegmentStore, tmp_path: Path) -> SegmentRefre
 
 def test_every_static_product_uses_one_independent_builder_method() -> None:
     registry = DEFAULT_SEGMENT_REGISTRY.resolve(_config())
-    product_keys = ("health", "hwo", "spc", "zfp", "fcst", "cwf", "obs", "marine_obs")
+    product_keys = ("health", "hwo", "spc", "zfp", "fcst", "cwf", "offnt2", "obs", "marine_obs")
     operations = [registry.get(key).builder.operation for key in product_keys]
     assert len(operations) == len(set(operations))
     assert all(operation.startswith("CycleBuilder.build_") for operation in operations)
@@ -1887,6 +1888,7 @@ def _observation_config() -> SimpleNamespace:
     return SimpleNamespace(
         spc=SimpleNamespace(enabled=True),
         cwf=SimpleNamespace(enabled=True, offices=["LWX"], max_chars_normal=2000),
+        offnt2=SimpleNamespace(enabled=False),
         marine_obs=SimpleNamespace(
             enabled=True,
             max_stations=2,

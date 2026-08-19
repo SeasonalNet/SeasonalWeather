@@ -180,3 +180,14 @@ class NWSApi:
         if not pid:
             return None
         return await self.get_product(pid)
+
+    async def offshore_forecast_product(self, office: str = "KWBC") -> NWSProduct | None:
+        """Return the newest offshore forecast candidate for an office.
+
+        The caller must still validate the product's AWIPS/WMO identity.  The
+        product type and office are acquisition hints, not regional authority.
+        """
+        pid = await self.latest_product_id("OFF", office)
+        if not pid:
+            return None
+        return await self.get_product(pid)

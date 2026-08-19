@@ -313,6 +313,30 @@ SCHEMA_V1 = _o(
                     },
                     default={},
                 ),
+                "offnt2": _o(
+                    {
+                        "enabled": _b(default=False),
+                        "source_office": _s(default="KWBC"),
+                        "product_type": _s(default="OFF"),
+                        "zones": _l(
+                            _o(
+                                {
+                                    "id": _s(required=True),
+                                    "label": _s(required=True),
+                                }
+                            ),
+                            default=[],
+                        ),
+                        "include_synopsis": _b(default=True),
+                        "max_chars_normal": _i(default=2400),
+                        "max_chars_heightened": _i(default=1200),
+                        "max_airtime_seconds": _i(default=90),
+                        "rotate_period_s": _i(default=1800),
+                        "rotate_step": _i(default=1),
+                        "defer_in_heightened": _b(default=True),
+                    },
+                    default={},
+                ),
                 "rwr": _o(
                     {
                         "enabled": _b(default=False),

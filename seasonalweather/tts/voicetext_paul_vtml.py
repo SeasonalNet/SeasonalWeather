@@ -83,6 +83,14 @@ def _wind_dir_repl(m: re.Match[str]) -> str:
     return f'<vtml_sub alias="{alias}">{tok}</vtml_sub>'
 
 
+def _wind_range_end_repl(m: re.Match[str]) -> str:
+    tok = m.group("dir")
+    alias = _DIR_MAP.get(tok.upper())
+    if not alias:
+        return m.group(0)
+    return f'{m.group("prefix")}<vtml_sub alias="{alias}">{tok}</vtml_sub>'
+
+
 # State/territory abbreviations -> spoken names, but only in place-name contexts
 # like "Baltimore MD", "Smith Point VA", "Washington DC", etc.
 _STATE_MAP = {
@@ -237,6 +245,28 @@ def _place_state_repl(m: re.Match[str]) -> str:
 
 
 _RULES: list[Rule] = [
+    # Wind-direction ranges such as "W to SW winds" need both abbreviations
+    # expanded.  The following direct-before-"winds" rule handles only SW;
+    # this companion rule handles the leading W without broadening direction
+    # substitutions in ordinary prose.
+    Rule(
+        re.compile(
+            r"\b(?P<dir>NNE|ENE|ESE|SSE|SSW|WSW|WNW|NNW|NE|NW|SE|SW|N|S|E|W)\b"
+            r"(?=\s+to\s+(?:NNE|ENE|ESE|SSE|SSW|WSW|WNW|NNW|NE|NW|SE|SW|N|S|E|W)"
+            r"(?=\s*(?:wind(?:s|['’]s)?\b|[.,;!?])))",
+            re.IGNORECASE,
+        ),
+        _wind_dir_repl,
+    ),
+    Rule(
+        re.compile(
+            r"(?P<prefix>\bto\s+)"
+            r"(?P<dir>NNE|ENE|ESE|SSE|SSW|WSW|WNW|NNW|NE|NW|SE|SW|N|S|E|W)\b"
+            r"(?=\s*(?:wind(?:s|['’]s)?\b|[.,;!?]))",
+            re.IGNORECASE,
+        ),
+        _wind_range_end_repl,
+    ),
     # --- Common wind-direction abbreviations, only in "NW winds ..." contexts ---
     Rule(
         re.compile(
@@ -276,6 +306,13 @@ _RULES: list[Rule] = [
     Rule(re.compile(r"\bkt\b", re.IGNORECASE), _sub_alias("knots")),
     Rule(re.compile(r"\bhpa\b", re.IGNORECASE), _sub_alias("hecto pascals")),
     Rule(re.compile(r"\bmb\b", re.IGNORECASE), _sub_alias("millibars")),
+    # A terminal period marks the end of the unit, not a place-name suffix.
+    # Handle it before the guarded bare-unit rules so "3 ft. Chance" still
+    # becomes "3 feet" when the next sentence starts with a capital letter.
+    Rule(
+        re.compile(r"(\d+(?:\.\d+)?)\s*(ft\.)(?=\s|$|[,:;!?])", re.IGNORECASE),
+        lambda m: f'{m.group(1)} <vtml_sub alias="feet">{m.group(2)}</vtml_sub>',
+    ),
     # Degree symbol forms
     Rule(re.compile(r"°\s*F\b"), _sub_alias("degrees Fahrenheit")),
     Rule(re.compile(r"°\s*C\b"), _sub_alias("degrees Celsius")),

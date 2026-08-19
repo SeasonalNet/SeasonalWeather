@@ -25,7 +25,7 @@ def test_in_rule_still_avoids_place_name_false_positive() -> None:
 
     rendered = apply_voicetext_paul_vtml(text)
 
-    assert 'inches' not in rendered
+    assert "inches" not in rendered
 
 
 def test_same_acronym_is_spoken_as_word() -> None:
@@ -34,3 +34,12 @@ def test_same_acronym_is_spoken_as_word() -> None:
     rendered = apply_voicetext_paul_vtml(text)
 
     assert '<vtml_sub alias="same">SAME</vtml_sub>' in rendered
+
+
+def test_marine_units_and_direction_ranges_are_expanded() -> None:
+    rendered = apply_voicetext_paul_vtml("W to SW winds 10 kt. Becoming W to SW. Seas 3 to 4 ft. Chance of tstms.")
+
+    assert '<vtml_sub alias="west">W</vtml_sub>' in rendered
+    assert '<vtml_sub alias="southwest">SW</vtml_sub>' in rendered
+    assert '<vtml_sub alias="knots">kt</vtml_sub>' in rendered
+    assert '<vtml_sub alias="feet">ft.</vtml_sub>' in rendered

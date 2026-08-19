@@ -166,6 +166,22 @@ class CycleCwfConfig:
 
 
 @dataclass(frozen=True)
+class CycleOffnt2Config:
+    # Mid-Atlantic Offshore Waters Forecast segment configuration.
+    enabled: bool
+    source_office: str
+    product_type: str
+    zones: list[tuple[str, str]]
+    include_synopsis: bool
+    max_chars_normal: int
+    max_chars_heightened: int
+    max_airtime_seconds: int
+    rotate_period_s: int
+    rotate_step: int
+    defer_in_heightened: bool
+
+
+@dataclass(frozen=True)
 class CycleRwrConfig:
     # Regional Weather Roundup (RWR) observations segment configuration.
     enabled: bool
@@ -214,6 +230,7 @@ class CycleConfig:
     afd: CycleProductConfig
     syn: CycleProductConfig
     cwf: CycleCwfConfig
+    offnt2: CycleOffnt2Config
     rwr: CycleRwrConfig
     marine_obs: CycleMarineObsConfig
 
@@ -1423,6 +1440,7 @@ def _build_app_config(
     afd_raw = cy.get("afd", {})
     syn_raw = cy.get("syn", {})
     cwf_raw = cy.get("cwf", {})
+    offnt2_raw = cy.get("offnt2", {})
     rwr_raw = cy.get("rwr", {})
     marine_obs_raw = cy.get("marine_obs", {})
 
@@ -1481,6 +1499,23 @@ def _build_app_config(
             offices=[str(o).upper().strip() for o in (cwf_raw.get("offices") or [])],
             max_chars_normal=int(cwf_raw.get("max_chars_normal", 2000)),
             max_chars_heightened=int(cwf_raw.get("max_chars_heightened", 1200)),
+        ),
+        offnt2=CycleOffnt2Config(
+            enabled=bool(offnt2_raw.get("enabled", False)),
+            source_office=str(offnt2_raw.get("source_office", "KWBC")).upper().strip(),
+            product_type=str(offnt2_raw.get("product_type", "OFF")).upper().strip(),
+            zones=[
+                (str(z["id"]).upper().strip(), str(z["label"]).strip())
+                for z in (offnt2_raw.get("zones") or [])
+                if isinstance(z, dict) and z.get("id") and z.get("label")
+            ],
+            include_synopsis=bool(offnt2_raw.get("include_synopsis", True)),
+            max_chars_normal=int(offnt2_raw.get("max_chars_normal", 2400)),
+            max_chars_heightened=int(offnt2_raw.get("max_chars_heightened", 1200)),
+            max_airtime_seconds=int(offnt2_raw.get("max_airtime_seconds", 90)),
+            rotate_period_s=int(offnt2_raw.get("rotate_period_s", 1800)),
+            rotate_step=int(offnt2_raw.get("rotate_step", 1)),
+            defer_in_heightened=bool(offnt2_raw.get("defer_in_heightened", True)),
         ),
         rwr=CycleRwrConfig(
             enabled=bool(rwr_raw.get("enabled", False)),

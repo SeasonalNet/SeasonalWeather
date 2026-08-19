@@ -4,8 +4,8 @@ import datetime as dt
 import json
 import os
 import re
-from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from dataclasses import dataclass, replace
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, cast
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -13,6 +13,7 @@ import httpx
 from ..alerts.active import ActiveAlert
 from ..alerts.nws_api import NWSApi, NWSProduct
 from ..tts.tts import clean_for_tts, verbalize_url
+from .offnt2 import Offnt2Product, parse_offnt2_product, render_offnt2
 from .rwr import (
     ObsPressureCache,
     RwrProduct,
@@ -137,13 +138,17 @@ def _scrub_cwf_product_text(text: str) -> str:
     # This pre-pass handles all variants: the continuation line is recognised by
     # (a) starting with a non-. non-blank character, and (b) ending with '...'
     _synopsis_hdr_re = re.compile(
-        r"^\.(SYNOPSIS\b[^\n]*)(?:\n(?![.\n])[^\n]*\.{3})?",
+        r"^\.(?:SYNOPSIS\b[^\n]*?\.{3}(?P<body>[^\n]*)|"
+        r"SYNOPSIS\b[^\n]*\n(?![.\n])[^\n]*\.{3})",
         re.IGNORECASE | re.MULTILINE,
     )
-    text = _synopsis_hdr_re.sub(
-        "The synopsis for the coastal and inland waters in our area.",
-        (text or ""),
-    )
+
+    def _replace_synopsis_header(match: re.Match[str]) -> str:
+        body = match.group("body")
+        suffix = f" {body.strip()}" if body and body.strip() else ""
+        return f"The synopsis for the coastal and inland waters in our area.{suffix}"
+
+    text = _synopsis_hdr_re.sub(_replace_synopsis_header, text or "")
 
     # Zone name lines come in the form:
     #   "Tidal Potomac from Key Bridge to Indian Head-"
@@ -500,6 +505,7 @@ class CycleContext:
     health_status_line: Optional[str] = None
     health_detached_loop_only: bool = False
     active_alerts: tuple[ActiveAlert, ...] = ()
+    cwf_synopsis: str | None = None
 
 
 _ALERT_COUNT_WORDS = {
@@ -1398,6 +1404,72 @@ class CycleBuilder:
                 continue
         return None
 
+    async def _offnt2_direct_candidate(self, office: str) -> NWSProduct | None:
+        fetcher = getattr(self.api, "offshore_forecast_product", None)
+        if not callable(fetcher):
+            return None
+        try:
+            return cast(NWSProduct | None, await fetcher(office))
+        except Exception as exc:
+            _ = exc
+            return None
+
+    async def _offnt2_reference_candidates(self, product_type: str, office: str) -> list[NWSProduct]:
+        list_refs = getattr(self.api, "list_product_references", None)
+        get_product = getattr(self.api, "get_product", None)
+        if not callable(list_refs) or not callable(get_product):
+            return []
+        try:
+            refs = await list_refs(product_type, office, limit=10)
+            candidates: list[NWSProduct] = []
+            seen: set[str] = set()
+            for reference in refs:
+                if reference.product_id in seen:
+                    continue
+                product = await get_product(reference.product_id)
+                if product is not None:
+                    candidates.append(product)
+                    seen.add(product.product_id)
+            return candidates
+        except Exception as exc:
+            _ = exc
+            return []
+
+    async def _offnt2_candidates(self, product_type: str, office: str) -> list[NWSProduct]:
+        direct = await self._offnt2_direct_candidate(office)
+        candidates = [direct] if direct is not None else []
+        references = await self._offnt2_reference_candidates(product_type, office)
+        seen = {product.product_id for product in candidates}
+        candidates.extend(product for product in references if product.product_id not in seen)
+        return candidates
+
+    async def _fetch_offnt2_product(self) -> tuple[Offnt2Product, SegmentSourceEvidence] | None:
+        cfg = self._cycle_cfg.offnt2 if self._cycle_cfg else None
+        if not cfg or not cfg.enabled or not self._registry.enabled("offnt2"):
+            return None
+
+        candidates = await self._offnt2_candidates(cfg.product_type, cfg.source_office)
+
+        for product in candidates:
+            parsed = parse_offnt2_product(getattr(product, "product_text", None))
+            if parsed is None:
+                continue
+            fetched_at = dt.datetime.now(dt.UTC)
+            return parsed, SegmentSourceEvidence(
+                source_name="nws",
+                product_identifier=getattr(product, "product_id", None),
+                product_type=getattr(product, "product_type", None) or "OFFNT2",
+                issuing_office=getattr(product, "wfo", None) or cfg.source_office,
+                issuance_time=getattr(product, "issuance_time", None),
+                fetched_at=fetched_at,
+                source_reference=(
+                    f"https://api.weather.gov/products/{product.product_id}"
+                    if getattr(product, "product_id", None)
+                    else None
+                ),
+            )
+        return None
+
     async def _acquire_rwr_source(self, ctx: CycleContext) -> tuple[RwrProduct, SegmentSourceEvidence] | None:
         rwr_cfg = self._cycle_cfg.rwr if self._cycle_cfg else None
         if not rwr_cfg or not rwr_cfg.enabled:
@@ -1768,6 +1840,41 @@ class CycleBuilder:
             evidence=evidence,
         )
 
+    async def build_offnt2_segment(self, request: SegmentBuildInput) -> SegmentCandidate | None:
+        cfg = self._cycle_cfg.offnt2 if self._cycle_cfg else None
+        if not cfg or not cfg.enabled or not self._registry.enabled("offnt2"):
+            return None
+        fetched = await self._fetch_offnt2_product()
+        if not fetched:
+            return None
+        product, evidence = fetched
+        context = request.context
+        heightened = context.mode == "heightened"
+        max_chars = cfg.max_chars_heightened if heightened else cfg.max_chars_normal
+        text = render_offnt2(
+            product,
+            configured_zones=cfg.zones,
+            include_synopsis=cfg.include_synopsis,
+            rotate_period_s=cfg.rotate_period_s,
+            rotate_step=cfg.rotate_step,
+            now=dt.datetime.now(tz=self.tz),
+            max_chars=max_chars,
+            max_airtime_seconds=cfg.max_airtime_seconds,
+            heightened=heightened,
+            defer_in_heightened=cfg.defer_in_heightened,
+            cwf_synopsis=context.cwf_synopsis,
+        )
+        if not text:
+            return None
+        return SegmentCandidate.from_cycle_segment(
+            CycleSegment(
+                key="offnt2",
+                title=self._registry.title_for("offnt2"),
+                text=clean_for_tts(_scrub_nws_product_text(text)),
+            ),
+            evidence=evidence,
+        )
+
     async def build_obs_segment(self, request: SegmentBuildInput) -> SegmentCandidate | None:
         built = await self._build_obs_rwr_segment(request.context)
         text: str | None
@@ -1863,6 +1970,7 @@ class CycleBuilder:
             self.build_zfp_segment,
             self.build_fcst_segment,
             self.build_cwf_segment,
+            self.build_offnt2_segment,
             self.build_obs_segment,
             self.build_marine_obs_segment,
             self.build_outro_segment,
@@ -1871,6 +1979,8 @@ class CycleBuilder:
             candidate = await builder(request)
             if candidate is not None:
                 segments.append(CycleSegment(candidate.key, candidate.title, candidate.text))
+                if candidate.key == "cwf":
+                    request = replace(request, context=replace(request.context, cwf_synopsis=candidate.text))
         return segments
 
     def _hwo_unavailable_segment(self) -> CycleSegment | None:

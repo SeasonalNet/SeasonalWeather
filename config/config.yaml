@@ -103,6 +103,20 @@ cycle:
     max_chars_normal: 1500
     max_chars_heightened: 0   # deprecated/ignored
 
+  # Mid-Atlantic Offshore Waters Forecast (OFFNT2), disabled until zones are configured.
+  offnt2:
+    enabled: false
+    source_office: "KWBC"
+    product_type: "OFF"
+    zones: []                  # e.g. [{id: "ANZ450", label: "Coastal waters from Sandy Hook to Manasquan Inlet"}]
+    include_synopsis: true
+    max_chars_normal: 2400
+    max_chars_heightened: 1200
+    max_airtime_seconds: 90
+    rotate_period_s: 1800
+    rotate_step: 1
+    defer_in_heightened: true
+
 # Observations station IDs for api.weather.gov/stations/<id>/observations/latest
 observations:
   stations: ["KDCA", "KBWI", "KIAD", "KMRB", "KCHO", "KHGR", "KFDK", "KMTN", "KFME", "KGAI", "KJYO", "KHEF", "KADW", "KTHV"]
