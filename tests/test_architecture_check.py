@@ -105,9 +105,26 @@ def test_segment_registry_architecture_rules_have_independent_matching_negative_
     }
     assert by_rule["SWARCH044"] == [
         "seasonalweather/broadcast/segment_registry_authority.py",
+        "seasonalweather/broadcast/segment_registry_frozenset.py",
         "seasonalweather/broadcast/segment_registry_parallel_authority.py",
     ]
     assert by_rule["SWARCH045"] == ["seasonalweather/broadcast/segment_registry.py"]
+
+
+def test_p1_20_boundaries_have_positive_and_independent_negative_fixtures():
+    assert scan(FIXTURES / "valid", CONFIG) == []
+    findings = scan(FIXTURES / "invalid", CONFIG)
+    by_rule = {
+        rule: [finding.path for finding in findings if finding.rule == rule]
+        for rule in ("SWARCH046", "SWARCH047", "SWARCH048", "SWARCH049")
+    }
+    assert by_rule["SWARCH046"] == ["seasonalweather/api/api.py"]
+    assert by_rule["SWARCH047"] == [
+        "seasonalweather/broadcast/cycle.py",
+        "seasonalweather/broadcast/cycle.py",
+    ]
+    assert by_rule["SWARCH048"] == ["seasonalweather/broadcast/segment_service.py"]
+    assert by_rule["SWARCH049"] == ["seasonalweather/control.py"]
 
 
 def test_control_module_has_no_duplicate_job_repository_or_scheduler_authority():

@@ -19,6 +19,7 @@ from .api.models import (
     OriginateTextRequest,
     VoiceMode,
 )
+from .broadcast.segment_service import SegmentApplicationService, SegmentServiceError
 from .broadcast.segment_store import render_segment_wav_async
 from .database.assets import AudioAssetRepository
 from .database.inserts import CycleInsertRepository
@@ -61,7 +62,13 @@ class DependencyUnavailableError(ControlError):
 
 
 class OrchestratorControl:
-    def __init__(self, orch: Any, *, config_path: str) -> None:
+    def __init__(
+        self,
+        orch: Any,
+        *,
+        config_path: str,
+        segment_service: SegmentApplicationService | None = None,
+    ) -> None:
         self.orch = orch
         self.config_path = str(config_path)
         self._assets_lock = asyncio.Lock()
@@ -72,6 +79,56 @@ class OrchestratorControl:
         self._station_feed_repo = getattr(self.orch, "station_feed_repo", None)
         if self._station_feed_repo is None and db is not None:
             self._station_feed_repo = StationFeedRepository(db)
+        self.segment_service = segment_service
+
+    @staticmethod
+    def _segment_service_error(exc: SegmentServiceError) -> ControlError:
+        return ControlError(exc.code, exc.message, status_code=exc.status_code)
+
+    async def list_segments(self) -> dict[str, Any]:
+        if self.segment_service is None:
+            raise ControlError("segments_unavailable", "Segment inspection is unavailable.", status_code=503)
+        return self.segment_service.list_segments()
+
+    async def get_segment(self, key: str) -> dict[str, Any]:
+        if self.segment_service is None:
+            raise ControlError("segments_unavailable", "Segment inspection is unavailable.", status_code=503)
+        try:
+            return self.segment_service.get_segment(key)
+        except SegmentServiceError as exc:
+            raise self._segment_service_error(exc) from exc
+
+    async def get_cycle_plan(self) -> dict[str, Any]:
+        if self.segment_service is None:
+            raise ControlError("segments_unavailable", "Segment inspection is unavailable.", status_code=503)
+        return self.segment_service.cycle_plan()
+
+    async def get_cycle_preview(self) -> dict[str, Any]:
+        if self.segment_service is None:
+            raise ControlError("segments_unavailable", "Segment inspection is unavailable.", status_code=503)
+        return self.segment_service.cycle_preview()
+
+    async def refresh_segment(
+        self,
+        *,
+        key: str,
+        actor: str,
+        idempotency_key: str,
+        command_store: Any,
+        request_id: str | None = None,
+    ) -> tuple[Any, bool]:
+        if self.segment_service is None:
+            raise ControlError("segments_unavailable", "Segment refresh is unavailable.", status_code=503)
+        try:
+            return await self.segment_service.accept_refresh(
+                key=key,
+                actor=actor,
+                idempotency_key=idempotency_key,
+                command_store=command_store,
+                request_id=request_id,
+            )
+        except SegmentServiceError as exc:
+            raise self._segment_service_error(exc) from exc
 
     def _now_utc(self) -> dt.datetime:
         return dt.datetime.now(dt.UTC)

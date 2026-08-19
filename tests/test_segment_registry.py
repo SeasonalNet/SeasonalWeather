@@ -49,6 +49,12 @@ def test_registry_contains_every_static_segment_exactly_once() -> None:
     assert len(keys) == len(set(keys))
 
 
+def test_registry_is_the_only_static_identity_authority() -> None:
+    resolved = DEFAULT_SEGMENT_REGISTRY.resolve(_cycle_config())
+    assert all(resolved.is_managed(key) for key in (item.key for item in DEFAULT_SEGMENT_REGISTRY.definitions))
+    assert not resolved.is_managed("unregistered-static-key")
+
+
 def test_duplicate_key_rejection_is_a_governed_diagnostic() -> None:
     duplicate = replace(DEFAULT_SEGMENT_REGISTRY.get("obs"), title="duplicate")
     with pytest.raises(SegmentRegistryError) as caught:
@@ -90,6 +96,27 @@ def test_malformed_failure_policy_cannot_reach_refresher_exception_handling() ->
 
     assert caught.value.issue.code == "SWSEG1001"
     assert "AttributeError" not in caught.value.issue.message
+
+
+@pytest.mark.parametrize(
+    ("key", "operation"),
+    (
+        ("hwo", "CycleBuilder.build_obs_segment"),
+        ("obs", "CycleBuilder.build_hwo_segment"),
+        ("fcst", "CycleBuilder.build_segments"),
+        ("spc", "CycleBuilder.build_nonexistent_segment"),
+    ),
+)
+def test_independent_builder_seam_is_exact_and_finite(key: str, operation: str) -> None:
+    invalid = replace(
+        DEFAULT_SEGMENT_REGISTRY.get(key),
+        builder=replace(DEFAULT_SEGMENT_REGISTRY.get(key).builder, operation=operation),
+    )
+    with pytest.raises(SegmentRegistryError) as caught:
+        SegmentRegistry((invalid,))
+
+    assert caught.value.issue.code == "SWSEG1001"
+    assert "independent segment builder" in caught.value.issue.message
 
 
 def test_refresh_beyond_maximum_age_is_rejected_deterministically() -> None:
@@ -434,13 +461,15 @@ def test_builder_references_map_to_real_current_execution_seams() -> None:
         "CycleConductor._push_live_time",
         SegmentBuilderKind.CONDUCTOR_LIVE_TIME,
     )
+    assert references["health"] == (
+        "seasonalweather.broadcast.cycle",
+        "CycleBuilder.build_health_segment",
+        SegmentBuilderKind.INDEPENDENT_SEGMENT,
+    )
     assert all(
-        reference
-        == (
-            "seasonalweather.broadcast.cycle",
-            "CycleBuilder.build_segments",
-            SegmentBuilderKind.CYCLE_BUILDER_SEGMENTS,
-        )
+        reference[0] == "seasonalweather.broadcast.cycle"
+        and reference[1].startswith("CycleBuilder.build_")
+        and reference[2] is SegmentBuilderKind.INDEPENDENT_SEGMENT
         for key, reference in references.items()
         if key not in {"id", "status", "time"}
     )
@@ -623,15 +652,19 @@ def test_refresher_hwo_unavailable_alias_consumption_matches_fallback_policy(spe
         async def mark_placeholder(self, key: str, *_args, **_kwargs) -> None:
             self.placeholders.append(key)
 
+    from seasonalweather.broadcast.segment_builders import SegmentCandidate
+
     class Builder:
-        async def build_segments(self, **_kwargs):
-            return [
+        async def build_hwo_segment(self, _request):
+            if not speak_unavailable:
+                return None
+            return SegmentCandidate.from_cycle_segment(
                 CycleSegment(
-                    key="hwo-unavailable",
+                    key="hwo",
                     title="Hazardous weather outlook.",
                     text="The hazardous weather outlook from LWX was unavailable.",
                 )
-            ]
+            )
 
     store = Store()
     refresher = SegmentRefresher(

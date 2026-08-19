@@ -38,6 +38,7 @@ class CommandTransitionError(CommandContractError):
 
 class CommandType(StrEnum):
     CYCLE_REBUILD = "cycle.rebuild"
+    SEGMENT_REFRESH = "segment.refresh"
     HEIGHTENED_SET = "mode.heightened.set"
     HEIGHTENED_CLEAR = "mode.heightened.clear"
     TEST_ORIGINATE = "tests.originate"

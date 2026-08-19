@@ -104,17 +104,8 @@ class NWSApi:
                 NWSProductReference(
                     product_id=pid.rstrip("/").split("/")[-1],
                     issuance_time=item.get("issuanceTime") or item.get("issuance_time"),
-                    product_type=(
-                        item.get("productCode")
-                        or item.get("product_code")
-                        or product_type
-                    ),
-                    wfo=(
-                        item.get("issuingOffice")
-                        or item.get("wfo")
-                        or item.get("wfoCode")
-                        or wfo
-                    ),
+                    product_type=(item.get("productCode") or item.get("product_code") or product_type),
+                    wfo=(item.get("issuingOffice") or item.get("wfo") or item.get("wfoCode") or wfo),
                 )
             )
 
@@ -182,3 +173,10 @@ class NWSApi:
         if not prod or not prod.product_text:
             return None
         return prod.product_text
+
+    async def coastal_waters_forecast_product(self, office: str) -> Optional[NWSProduct]:
+        """Return the latest CWF product without discarding its identity."""
+        pid = await self.latest_product_id("CWF", office)
+        if not pid:
+            return None
+        return await self.get_product(pid)

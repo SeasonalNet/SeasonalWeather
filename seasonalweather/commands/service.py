@@ -4,9 +4,12 @@ import asyncio
 import datetime as dt
 import hashlib
 import json
+import threading
 import uuid
+from collections.abc import AsyncIterator
 from contextlib import suppress
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, cast
 
 from ..database.commands import CommandRepository
 from ..database.core import SeasonalDatabase
@@ -33,6 +36,15 @@ class IdempotencyConflictError(Exception):
 
 class CommandNotFoundError(KeyError):
     pass
+
+
+CommandCursor = tuple[str, str]
+
+
+@dataclass
+class _PublicationOwnership:
+    identity: tuple[str, object]
+    depth: int = 1
 
 
 def utc_now() -> dt.datetime:
@@ -106,6 +118,10 @@ class CommandStore:
         self._repo = CommandRepository(database) if database is not None else None
         self._lifecycle = lifecycle
         self._clock = clock
+        self._publication_gates: dict[str, threading.RLock] = {}
+        self._publication_gates_lock = threading.Lock()
+        self._publication_gate_owner_locks: dict[str, threading.Lock] = {}
+        self._publication_owners: dict[str, _PublicationOwnership] = {}
 
     @property
     def broker(self) -> EventBroker:
@@ -276,6 +292,138 @@ class CommandStore:
         )
         return record, False
 
+    async def list_nonterminal(
+        self,
+        command_type: CommandType,
+        *,
+        limit: int = 256,
+    ) -> tuple[CommandRecord, ...]:
+        """Return a bounded typed view of durable nonterminal commands."""
+        bounded_limit = max(1, min(int(limit), 256))
+        statuses = (CommandStatus.ACCEPTED.value, CommandStatus.RUNNING.value)
+        async with self._lock:
+            if self._repo is not None:
+                raw_records = self._repo.list_by_type_and_status(
+                    command_type.value,
+                    statuses,
+                    limit=bounded_limit,
+                )
+                records = tuple(self._record_from_dict(raw) for raw in raw_records)
+                for record in records:
+                    self._commands_by_id[record.command_id] = record
+                    self._commands_by_idempotency_key[record.idempotency_key] = record.command_id
+                return records
+            return tuple(
+                record
+                for record in self._commands_by_id.values()
+                if record.command_type is command_type and record.status.value in statuses
+            )[:bounded_limit]
+
+    async def _nonterminal_snapshot_fence(self, command_type: CommandType) -> CommandCursor | None:
+        statuses = (CommandStatus.ACCEPTED.value, CommandStatus.RUNNING.value)
+        async with self._lock:
+            if self._repo is not None:
+                return self._repo.nonterminal_cursor(command_type.value, statuses)
+            cursors = (
+                (record.accepted_at.isoformat(), record.command_id)
+                for record in self._commands_by_id.values()
+                if record.command_type is command_type and record.status.value in statuses
+            )
+            return max(cursors, default=None)
+
+    async def _list_nonterminal_page(
+        self,
+        command_type: CommandType,
+        *,
+        after: CommandCursor | None,
+        through: CommandCursor | None,
+        limit: int,
+    ) -> tuple[tuple[CommandRecord, ...], CommandCursor | None]:
+        statuses = (CommandStatus.ACCEPTED.value, CommandStatus.RUNNING.value)
+        async with self._lock:
+            if self._repo is not None:
+                return self._list_repository_nonterminal_page(
+                    command_type,
+                    statuses,
+                    after=after,
+                    through=through,
+                    limit=limit,
+                )
+            return self._list_memory_nonterminal_page(command_type, statuses, after=after, through=through, limit=limit)
+
+    def _list_repository_nonterminal_page(
+        self,
+        command_type: CommandType,
+        statuses: tuple[str, str],
+        *,
+        after: CommandCursor | None,
+        through: CommandCursor | None,
+        limit: int,
+    ) -> tuple[tuple[CommandRecord, ...], CommandCursor | None]:
+        repo = cast(CommandRepository, self._repo)
+        raw_records, cursor = repo.list_by_type_and_status_page(
+            command_type.value,
+            statuses,
+            after=after,
+            through=through,
+            limit=limit,
+        )
+        records = tuple(self._record_from_dict(raw) for raw in raw_records)
+        for record in records:
+            self._commands_by_id[record.command_id] = record
+            self._commands_by_idempotency_key[record.idempotency_key] = record.command_id
+        return records, cursor
+
+    def _list_memory_nonterminal_page(
+        self,
+        command_type: CommandType,
+        statuses: tuple[str, str],
+        *,
+        after: CommandCursor | None,
+        through: CommandCursor | None,
+        limit: int,
+    ) -> tuple[tuple[CommandRecord, ...], CommandCursor | None]:
+        candidates = sorted(
+            (
+                record
+                for record in self._commands_by_id.values()
+                if record.command_type is command_type and record.status.value in statuses
+            ),
+            key=lambda record: (record.accepted_at.isoformat(), record.command_id),
+        )
+        selected = tuple(
+            record
+            for record in candidates
+            if through is not None
+            and (record.accepted_at.isoformat(), record.command_id) <= through
+            and (after is None or (record.accepted_at.isoformat(), record.command_id) > after)
+        )[:limit]
+        cursor = (selected[-1].accepted_at.isoformat(), selected[-1].command_id) if selected else None
+        return selected, cursor
+
+    async def iter_nonterminal_pages(
+        self,
+        command_type: CommandType,
+        *,
+        page_size: int = 256,
+    ) -> AsyncIterator[tuple[CommandRecord, ...]]:
+        bounded_size = max(1, min(int(page_size), 256))
+        through = await self._nonterminal_snapshot_fence(command_type)
+        after: CommandCursor | None = None
+        while through is not None:
+            records, next_cursor = await self._list_nonterminal_page(
+                command_type,
+                after=after,
+                through=through,
+                limit=bounded_size,
+            )
+            if not records:
+                return
+            yield records
+            if next_cursor is None or next_cursor == after:
+                return
+            after = next_cursor
+
     async def _transition(
         self,
         command_id: str,
@@ -286,6 +434,7 @@ class CommandStore:
     ) -> CommandRecord:
         async with self._lock:
             record = await self._find(command_id)
+            previous = record
             record = transition_command(
                 record,
                 target,
@@ -294,7 +443,14 @@ class CommandStore:
                 error=command_error_from_mapping(error or {}) if target is CommandStatus.FAILED else None,
             )
             self._commands_by_id[command_id] = record
-            self._persist_record(record)
+            try:
+                self._persist_record(record)
+            except Exception:
+                # Keep the in-memory view at the last durable command state;
+                # a committed segment receipt must remain repairable when
+                # success persistence fails before the database update wins.
+                self._commands_by_id[command_id] = previous
+                raise
         await self._broker.publish(
             f"command.{target.value}",
             {
@@ -311,19 +467,169 @@ class CommandStore:
     async def mark_succeeded(self, command_id: str, result: dict[str, Any]) -> CommandRecord:
         return await self._transition(command_id, CommandStatus.SUCCEEDED, result=result)
 
+    async def reconcile_committed_segment_refresh(
+        self, command_id: str, segment_key: str, *, publication_won: bool = False
+    ) -> bool:
+        """Repair only an exact refresh with validated publication evidence."""
+        async with self._lock:
+            try:
+                record = await self._find(command_id)
+            except CommandNotFoundError:
+                return False
+            if (
+                record.command_type is not CommandType.SEGMENT_REFRESH
+                or record.reason != f"segment-refresh:{segment_key}"
+            ):
+                return False
+            if record.status is CommandStatus.SUCCEEDED:
+                return True
+            if record.status not in {CommandStatus.ACCEPTED, CommandStatus.RUNNING}:
+                return False
+            if not publication_won:
+                return False
+            previous = record
+            transition_at = self._clock()
+            if record.status is CommandStatus.ACCEPTED:
+                # A committed publication is authoritative even when the
+                # process crashed before the execution recorded RUNNING.
+                record = transition_command(record, CommandStatus.RUNNING, at=transition_at)
+            record = transition_command(
+                record,
+                CommandStatus.SUCCEEDED,
+                at=transition_at,
+                result=command_result_from_mapping({"code": "segment_refresh_completed", "segment_key": segment_key}),
+            )
+            self._commands_by_id[command_id] = record
+            try:
+                self._persist_record(record)
+            except Exception:
+                self._commands_by_id[command_id] = previous
+                raise
+        await self._broker.publish(
+            "command.succeeded",
+            {
+                "command_id": record.command_id,
+                "command_type": record.command_type.value,
+                "request_id": record.request_id,
+            },
+        )
+        return True
+
     async def mark_failed(self, command_id: str, error: dict[str, Any]) -> CommandRecord:
         return await self._transition(command_id, CommandStatus.FAILED, error=error)
 
     async def request_cancellation(self, command_id: str) -> CommandRecord:
-        async with self._lock:
-            record = request_command_cancellation(await self._find(command_id), at=self._clock())
-            self._commands_by_id[command_id] = record
-            self._persist_record(record)
+        gate = self._publication_gate(command_id)
+        await self._acquire_publication_gate(gate, command_id)
+        try:
+            async with self._lock:
+                record = request_command_cancellation(await self._find(command_id), at=self._clock())
+                self._commands_by_id[command_id] = record
+                self._persist_record(record)
+        finally:
+            self.finish_publication(command_id)
         await self._broker.publish(
             "command.cancellation_requested",
             {"command_id": record.command_id, "command_type": record.command_type.value},
         )
         return record
+
+    def _publication_gate(self, command_id: str) -> threading.RLock:
+        gate, _owner_lock = self._publication_gate_state(command_id)
+        return gate
+
+    def _publication_gate_state(self, command_id: str) -> tuple[threading.RLock, threading.Lock]:
+        with self._publication_gates_lock:
+            gate = self._publication_gates.setdefault(command_id, threading.RLock())
+            owner_lock = self._publication_gate_owner_locks.setdefault(command_id, threading.Lock())
+            return gate, owner_lock
+
+    @staticmethod
+    def _publication_identity() -> tuple[str, object]:
+        try:
+            task = asyncio.current_task()
+        except RuntimeError:
+            task = None
+        if task is not None:
+            return "task", task
+        return "thread", threading.current_thread()
+
+    def _try_acquire_publication_gate(self, command_id: str, identity: tuple[str, object]) -> bool:
+        gate, owner_lock = self._publication_gate_state(command_id)
+        with owner_lock:
+            ownership = self._publication_owners.get(command_id)
+            if ownership is not None and ownership.identity != identity:
+                return False
+            if not gate.acquire(blocking=False):
+                return False
+            if ownership is None:
+                self._publication_owners[command_id] = _PublicationOwnership(identity)
+            else:
+                ownership.depth += 1
+            return True
+
+    async def _acquire_publication_gate(self, gate: threading.RLock, command_id: str) -> None:
+        """Observe a worker-held gate without blocking the event-loop thread."""
+        del gate
+        identity = self._publication_identity()
+        while not self._try_acquire_publication_gate(command_id, identity):
+            await asyncio.sleep(0.001)
+
+    def begin_publication(self, command_id: str) -> bool:
+        """Atomically reserve the command's candidate-publication decision."""
+        gate, owner_lock = self._publication_gate_state(command_id)
+        identity = self._publication_identity()
+        with owner_lock:
+            ownership = self._publication_owners.get(command_id)
+            if ownership is not None and ownership.identity != identity and identity[0] == "task":
+                raise RuntimeError("publication gate is owned by another asyncio task")
+        gate.acquire()
+        with owner_lock:
+            ownership = self._publication_owners.get(command_id)
+            if ownership is not None and ownership.identity != identity:
+                gate.release()
+                raise RuntimeError("publication gate ownership changed while acquiring")
+            if ownership is None:
+                self._publication_owners[command_id] = _PublicationOwnership(identity)
+            else:
+                ownership.depth += 1
+        if self.cancellation_requested(command_id):
+            self.finish_publication(command_id)
+            return False
+        return True
+
+    def finish_publication(self, command_id: str | None = None) -> bool:
+        """Release exactly one gate acquisition owned by this task or thread."""
+        selected = command_id
+        if selected is None:
+            identity = self._publication_identity()
+            candidates: list[str] = []
+            with self._publication_gates_lock:
+                command_ids = tuple(self._publication_gate_owner_locks)
+            for candidate in command_ids:
+                _gate, owner_lock = self._publication_gate_state(candidate)
+                with owner_lock:
+                    ownership = self._publication_owners.get(candidate)
+                    if ownership is not None and ownership.identity == identity:
+                        candidates.append(candidate)
+            if len(candidates) != 1:
+                return False
+            selected = candidates[0]
+        gate, owner_lock = self._publication_gate_state(selected)
+        identity = self._publication_identity()
+        with owner_lock:
+            ownership = self._publication_owners.get(selected)
+            if ownership is None or ownership.identity != identity:
+                return False
+            try:
+                gate.release()
+            except RuntimeError:
+                return False
+            if ownership.depth == 1:
+                del self._publication_owners[selected]
+            else:
+                ownership.depth -= 1
+            return True
 
     async def mark_cancelled(self, command_id: str) -> CommandRecord:
         return await self._transition(command_id, CommandStatus.CANCELLED)

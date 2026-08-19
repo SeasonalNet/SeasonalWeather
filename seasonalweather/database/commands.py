@@ -20,6 +20,96 @@ class CommandRepository:
             row = conn.execute("SELECT * FROM api_commands WHERE idempotency_key = ?", (idempotency_key,)).fetchone()
         return self._row_to_dict(row) if row is not None else None
 
+    def list_by_type_and_status(
+        self,
+        command_type: str,
+        statuses: tuple[str, ...],
+        *,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        if len(statuses) != 2:
+            return []
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM api_commands
+                 WHERE command_type = ?
+                   AND status IN (?, ?)
+                 ORDER BY accepted_at, command_id
+                 LIMIT ?
+                """,
+                (command_type, *statuses, limit),
+            ).fetchall()
+        return [self._row_to_dict(row) for row in rows]
+
+    def nonterminal_cursor(
+        self,
+        command_type: str,
+        statuses: tuple[str, ...],
+    ) -> tuple[str, str] | None:
+        if len(statuses) != 2:
+            return None
+        with self.db.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT accepted_at, command_id FROM api_commands
+                 WHERE command_type = ?
+                   AND status IN (?, ?)
+                 ORDER BY accepted_at DESC, command_id DESC
+                 LIMIT 1
+                """,
+                (command_type, *statuses),
+            ).fetchone()
+        return (str(row["accepted_at"]), str(row["command_id"])) if row is not None else None
+
+    def list_by_type_and_status_page(
+        self,
+        command_type: str,
+        statuses: tuple[str, ...],
+        *,
+        after: tuple[str, str] | None,
+        through: tuple[str, str] | None,
+        limit: int,
+    ) -> tuple[list[dict[str, Any]], tuple[str, str] | None]:
+        if len(statuses) != 2 or through is None:
+            return [], None
+        after_at = after[0] if after is not None else None
+        after_id = after[1] if after is not None else None
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM api_commands
+                 WHERE command_type = ?
+                   AND status IN (?, ?)
+                   AND (
+                       accepted_at < ?
+                       OR (accepted_at = ? AND command_id <= ?)
+                   )
+                   AND (
+                       ? IS NULL
+                       OR accepted_at > ?
+                       OR (accepted_at = ? AND command_id > ?)
+                   )
+                 ORDER BY accepted_at, command_id
+                 LIMIT ?
+                """,
+                (
+                    command_type,
+                    *statuses,
+                    through[0],
+                    through[0],
+                    through[1],
+                    after_at,
+                    after_at,
+                    after_at,
+                    after_id,
+                    limit,
+                ),
+            ).fetchall()
+        records = [self._row_to_dict(row) for row in rows]
+        cursor = (str(rows[-1]["accepted_at"]), str(rows[-1]["command_id"])) if rows else None
+        return records, cursor
+
     def insert(self, record: dict[str, Any]) -> None:
         with self.db.transaction() as conn:
             conn.execute(

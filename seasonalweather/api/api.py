@@ -36,11 +36,15 @@ from .models import (
     CreateTextInsertRequest,
     CycleInsertList,
     CycleInsertSnapshot,
+    CyclePlanResponse,
+    CyclePreviewResponse,
     OriginateAudioRequest,
     OriginateTestRequest,
     OriginateTextRequest,
     ProblemDetails,
     RebuildCycleRequest,
+    SegmentListResponse,
+    SegmentSnapshot,
     SetHeightenedModeRequest,
     TokenExchangeRequest,
     TokenExchangeResponse,
@@ -516,6 +520,93 @@ def create_app(
         principal: ApiPrincipal = Depends(require_route_policy("GET", "/v1/config/summary")),
     ) -> dict[str, Any]:
         return await control.get_config_summary()
+
+    @app.get(
+        "/v1/segments",
+        response_model=SegmentListResponse,
+        tags=["segments"],
+        summary="List authoritative static segments and runtime provenance.",
+        responses=STANDARD_PROBLEM_RESPONSES,
+    )
+    async def v1_segments(
+        principal: ApiPrincipal = Depends(require_route_policy("GET", "/v1/segments")),  # noqa: B008
+    ) -> SegmentListResponse:
+        try:
+            return SegmentListResponse.model_validate(await control.list_segments())
+        except ControlError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.to_dict()) from exc
+
+    @app.get(
+        "/v1/segments/{key}",
+        response_model=SegmentSnapshot,
+        tags=["segments"],
+        summary="Inspect one authoritative segment and its bounded provenance.",
+        responses=STANDARD_PROBLEM_RESPONSES,
+    )
+    async def v1_segment(
+        key: str,
+        principal: ApiPrincipal = Depends(require_route_policy("GET", "/v1/segments/{key}")),  # noqa: B008
+    ) -> SegmentSnapshot:
+        try:
+            return SegmentSnapshot.model_validate(await control.get_segment(key))
+        except ControlError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.to_dict()) from exc
+
+    @app.post(
+        "/v1/segments/{key}/refresh",
+        response_model=CommandAccepted,
+        status_code=202,
+        tags=["segments"],
+        summary="Accept an asynchronous refresh for one independently buildable segment.",
+        responses=STANDARD_PROBLEM_RESPONSES,
+    )
+    async def v1_segment_refresh(
+        request: Request,
+        key: str,
+        principal: ApiPrincipal = Depends(require_route_policy("POST", "/v1/segments/{key}/refresh")),  # noqa: B008
+        idempotency_key: str = Depends(_require_idempotency_key),
+    ) -> CommandAccepted:
+        try:
+            record, replayed = await control.refresh_segment(
+                key=key,
+                actor=principal.subject,
+                idempotency_key=idempotency_key,
+                command_store=command_store,
+                request_id=_request_id(request),
+            )
+        except ControlError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.to_dict()) from exc
+        return _command_accepted(record, replayed=replayed)
+
+    @app.get(
+        "/v1/cycle/plan",
+        response_model=CyclePlanResponse,
+        tags=["segments"],
+        summary="Return the deterministic current normal and focus cycle plan.",
+        responses=STANDARD_PROBLEM_RESPONSES,
+    )
+    async def v1_cycle_plan(
+        principal: ApiPrincipal = Depends(require_route_policy("GET", "/v1/cycle/plan")),  # noqa: B008
+    ) -> CyclePlanResponse:
+        try:
+            return CyclePlanResponse.model_validate(await control.get_cycle_plan())
+        except ControlError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.to_dict()) from exc
+
+    @app.get(
+        "/v1/cycle/preview",
+        response_model=CyclePreviewResponse,
+        tags=["segments"],
+        summary="Preview the current cycle selection without side effects.",
+        responses=STANDARD_PROBLEM_RESPONSES,
+    )
+    async def v1_cycle_preview(
+        principal: ApiPrincipal = Depends(require_route_policy("GET", "/v1/cycle/preview")),  # noqa: B008
+    ) -> CyclePreviewResponse:
+        try:
+            return CyclePreviewResponse.model_validate(await control.get_cycle_preview())
+        except ControlError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.to_dict()) from exc
 
     @app.get(
         "/v1/commands/{command_id}",

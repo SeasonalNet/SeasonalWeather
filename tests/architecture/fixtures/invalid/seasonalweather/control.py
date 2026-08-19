@@ -1,3 +1,6 @@
+from seasonalweather.broadcast.segment_service import SegmentApplicationService
 from seasonalweather.configuration_reload.service import ConfigurationReloadService
 
-authority = ConfigurationReloadService
+
+def compose():
+    return SegmentApplicationService()

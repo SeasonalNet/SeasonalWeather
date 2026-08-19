@@ -85,13 +85,29 @@ def _path_variables(tree: ast.AST) -> set[str]:
 
 def _module_literal_collections(tree: ast.Module, canonical_keys: set[str]) -> tuple[int, set[str]]:
     """Find module-level literal collections that repeat canonical segment keys."""
+
+    def literal_collection(value: ast.expr | None) -> ast.expr | None:
+        if isinstance(value, (ast.List, ast.Tuple, ast.Set, ast.Dict)):
+            return value
+        if (
+            isinstance(value, ast.Call)
+            and _qualified_call(value) in {"frozenset", "set", "tuple", "list"}
+            and len(value.args) == 1
+            and not value.keywords
+        ):
+            wrapped = value.args[0]
+            if isinstance(wrapped, (ast.List, ast.Tuple, ast.Set, ast.Dict)):
+                return wrapped
+        return None
+
     first_line = 0
     collected: set[str] = set()
     for statement in tree.body:
         value: ast.expr | None = None
         if isinstance(statement, (ast.Assign, ast.AnnAssign)):
             value = statement.value
-        if not isinstance(value, (ast.List, ast.Tuple, ast.Set, ast.Dict)):
+        value = literal_collection(value)
+        if value is None:
             continue
         literals = {
             node.value for node in ast.walk(value) if isinstance(node, ast.Constant) and isinstance(node.value, str)
@@ -189,6 +205,68 @@ def scan(root: Path, config: dict[str, Any], exceptions: list[dict[str, Any]] | 
         path_variables = _path_variables(tree)
         is_worker = _matches_prefix(module, worker_roots)
         is_controller = _matches_prefix(module, controller_roots) and not is_worker
+
+        if _under(relative, config.get("segment_api_roots", [])):
+            for imported, line in imports:
+                if _matches_prefix(imported, config.get("segment_api_forbidden_imports", [])):
+                    findings.append(
+                        Finding(
+                            relative,
+                            line,
+                            "SWARCH046",
+                            f"segment API route imports runtime mutation authority {imported}",
+                        )
+                    )
+
+        if _under(relative, config.get("segment_builder_roots", [])):
+            for imported, line in imports:
+                if _matches_prefix(imported, config.get("segment_builder_forbidden_imports", [])):
+                    findings.append(
+                        Finding(
+                            relative,
+                            line,
+                            "SWARCH047",
+                            f"independent segment builder imports artifact/runtime authority {imported}",
+                        )
+                    )
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and _qualified_call(node) in config.get(
+                    "segment_builder_forbidden_calls", []
+                ):
+                    findings.append(
+                        Finding(
+                            relative,
+                            node.lineno,
+                            "SWARCH047",
+                            "independent segment builder cannot promote or publish artifacts",
+                        )
+                    )
+
+        if _under(relative, config.get("segment_service_roots", [])):
+            for imported, line in imports:
+                if _matches_prefix(imported, config.get("segment_service_forbidden_imports", [])):
+                    findings.append(
+                        Finding(
+                            relative,
+                            line,
+                            "SWARCH048",
+                            f"segment application service imports forbidden runtime owner {imported}",
+                        )
+                    )
+
+        if relative == "seasonalweather/control.py":
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and _qualified_call(node) in config.get(
+                    "segment_control_forbidden_calls", []
+                ):
+                    findings.append(
+                        Finding(
+                            relative,
+                            node.lineno,
+                            "SWARCH049",
+                            "control facade cannot compose the segment application dependency graph",
+                        )
+                    )
 
         segment_owner_roots = config.get("segment_registry_owner_roots", [])
         if _under(relative, config.get("segment_policy_consumer_roots", [])) and not _under(

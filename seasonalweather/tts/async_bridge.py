@@ -17,21 +17,22 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, TypeVar, cast
 
-from .cancellation import SynthesisStop, StopCause
+from .cancellation import StopCause, SynthesisStop
 from .models import (
     BackendId,
+    FinalizationContext,
     SynthesisDisposition,
     SynthesisFailure,
     SynthesisPurpose,
     SynthesisRequest,
     SynthesisResult,
-    FinalizationContext,
 )
 from .policy import deadline_for
 from .subprocess import ProcessFailure
 from .tts import TTS
 
 DEFAULT_SHUTDOWN_SECONDS = 5.0
+
 
 @dataclass(frozen=True)
 class FinalizationEvidence:
@@ -65,9 +66,7 @@ class EmbeddedExecutionPort(Executor):
             raise ValueError("embedded TTS execution is intentionally one lane in Phase 1")
         self._executor: ThreadPoolExecutor | None = None
 
-    def submit(
-        self, fn: Callable[..., _ExecutionResult], *args: Any, **kwargs: Any
-    ) -> Future[_ExecutionResult]:
+    def submit(self, fn: Callable[..., _ExecutionResult], *args: Any, **kwargs: Any) -> Future[_ExecutionResult]:
         if self._executor is None:
             self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="seasonalweather-tts")
         return self._executor.submit(fn, *args, **kwargs)
@@ -149,14 +148,12 @@ def _completion_finished_before_stop(
 ) -> bool:
     requested_at = stop.requested_at
     effective_at = publication_decision_at if publication_decision_at is not None else completed_at
-    return effective_at is not None and effective_at <= deadline and (
-        requested_at is None or effective_at <= requested_at
+    return (
+        effective_at is not None and effective_at <= deadline and (requested_at is None or effective_at <= requested_at)
     )
 
 
-def _stop_result_for_cause(
-    result: object, request: object, cause: StopCause | None, started: float
-) -> object:
+def _stop_result_for_cause(result: object, request: object, cause: StopCause | None, started: float) -> object:
     if cause is None:
         return result
     disposition = getattr(result, "disposition", None)
@@ -171,9 +168,7 @@ def _stop_result_for_cause(
 
 
 def _capacity_reservation_required(tts: TTS, request: object, has_reservation_port: bool) -> bool:
-    return bool(
-        getattr(tts, "capacity_is_relevant", lambda _request: has_reservation_port)(request)
-    )
+    return bool(getattr(tts, "capacity_is_relevant", lambda _request: has_reservation_port)(request))
 
 
 def _atomic_publication_replace(
@@ -185,27 +180,36 @@ def _atomic_publication_replace(
     stop: SynthesisStop,
     commit_decision: Callable[[float], None],
     clear_decision: Callable[[], None],
+    abort_publication: Callable[[], None] | None = None,
 ) -> float:
     """Commit one valid decision, then perform only the atomic stable replace.
 
     The decision timestamp is the final deadline authority.  This function is
-    called while the publication lock is held, which also serializes stop
-    requests with both the decision commit and replacement.
+    called while the short bridge publication section is held.  Controller
+    publication callbacks run after this function returns, outside that
+    section.
     """
 
-    decision_at = clock()
-    cause = stop.cause
-    if cause is StopCause.TIMED_OUT:
-        raise ProcessFailure("timed_out", "TTS publication decision reached its deadline")
-    if cause is StopCause.CANCELLED:
-        raise ProcessFailure("cancelled", "TTS publication decision was cancelled")
-    if decision_at >= deadline:
-        raise ProcessFailure("timed_out", "TTS publication decision reached its deadline")
-    commit_decision(decision_at)
     try:
+        decision_at = clock()
+        cause = stop.cause
+        if cause is StopCause.TIMED_OUT:
+            raise ProcessFailure("timed_out", "TTS publication decision reached its deadline")
+        if cause is StopCause.CANCELLED:
+            raise ProcessFailure("cancelled", "TTS publication decision was cancelled")
+        if decision_at >= deadline:
+            raise ProcessFailure("timed_out", "TTS publication decision reached its deadline")
+        if not stop.try_commit_publication():
+            cause = stop.cause
+            classification = "timed_out" if cause is StopCause.TIMED_OUT else "cancelled"
+            raise ProcessFailure(classification, "TTS publication decision was stopped")
+        commit_decision(decision_at)
         os.replace(source, target)
     except BaseException:
+        stop.clear_publication_decision()
         clear_decision()
+        if abort_publication is not None:
+            abort_publication()
         raise
     return decision_at
 
@@ -254,9 +258,7 @@ async def _wait_for_worker(
         await asyncio.sleep(min(0.01, max(0.001, deadline - loop.time())))
     if future.done():
         return _completed_worker_result(future, stop, deadline, clock)
-    return await _wait_for_worker_shutdown(
-        future, stop, timeout, cancel_if_queued, loop
-    )
+    return await _wait_for_worker_shutdown(future, stop, timeout, cancel_if_queued, loop)
 
 
 def _completed_worker_result(
@@ -317,6 +319,9 @@ async def synthesize_async(
     shutdown_timeout: float = DEFAULT_SHUTDOWN_SECONDS,
     executor: Executor | None = None,
     finalize: Finalize | Callable[[object], FinalizationEvidence] | None = None,
+    publication_fence: Callable[[], None] | None = None,
+    publication_committed: Callable[[], None] | None = None,
+    publication_aborted: Callable[[], None] | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> SynthesisResult:
     """Return typed synthesis state; explicit task cancellation stays native.
@@ -335,7 +340,6 @@ async def synthesize_async(
         request = request.model_copy(update={"operation_deadline": operation_deadline})
     stop = SynthesisStop(clock=clock)
     publication_lock = threading.Lock()
-    stop.set_decision_lock(publication_lock)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     workspace = Path(tempfile.mkdtemp(prefix=".tts-async-", dir=output_path.parent))
@@ -347,9 +351,10 @@ async def synthesize_async(
     # Async callers wait for the controller-local P1-09 reservation before
     # occupying the embedded execution lane.  Test doubles without that port
     # retain the typed bridge behavior without inventing capacity truth.
-    has_reservation_port = callable(getattr(tts, "try_reserve_capacity", None)) and getattr(
-        getattr(tts, "capability_check", None), "reserve", None
-    ) is not None
+    has_reservation_port = (
+        callable(getattr(tts, "try_reserve_capacity", None))
+        and getattr(getattr(tts, "capability_check", None), "reserve", None) is not None
+    )
     needs_local_capacity = _capacity_reservation_required(tts, request, has_reservation_port)
     if has_reservation_port and needs_local_capacity:
         try:
@@ -423,11 +428,11 @@ async def synthesize_async(
         if finalize is None:
             if not worker_path.is_file() or worker_path.is_symlink():
                 raise ValueError("TTS raw completion evidence is missing or unsafe")
-            effective_request, effective_reservation = _effective_finalization_context(
-                token, request, reservation
-            )
+            effective_request, effective_reservation = _effective_finalization_context(token, request, reservation)
             with publication_lock:
                 finalization_fence(effective_request, effective_reservation)
+                if publication_fence is not None:
+                    publication_fence()
                 # The worker-owned decision point is after the complete
                 # authority fence and immediately before the one atomic
                 # caller-visible replace.  The same timestamp both validates
@@ -440,7 +445,15 @@ async def synthesize_async(
                     stop=stop,
                     commit_decision=_set_publication_decision,
                     clear_decision=_clear_publication_decision,
+                    abort_publication=publication_aborted,
                 )
+            if publication_committed is not None:
+                try:
+                    publication_committed()
+                except BaseException:
+                    if publication_aborted is not None:
+                        publication_aborted()
+                    raise
             return FinalizationEvidence(output_path)
         try:
             parameter_count = len(inspect.signature(finalize).parameters)
@@ -469,11 +482,11 @@ async def synthesize_async(
             raise ValueError("TTS finalizer completion evidence must identify one private staged file")
         # The finalizer has completed every potentially long operation.  This
         # is the only fence preceding the one bounded caller-visible write.
-        effective_request, effective_reservation = _effective_finalization_context(
-            token, request, reservation
-        )
+        effective_request, effective_reservation = _effective_finalization_context(token, request, reservation)
         with publication_lock:
             finalization_fence(effective_request, effective_reservation)
+            if publication_fence is not None:
+                publication_fence()
             publication_decision_at = _atomic_publication_replace(
                 staged_path,
                 output_path,
@@ -482,7 +495,15 @@ async def synthesize_async(
                 stop=stop,
                 commit_decision=_set_publication_decision,
                 clear_decision=_clear_publication_decision,
+                abort_publication=publication_aborted,
             )
+        if publication_committed is not None:
+            try:
+                publication_committed()
+            except BaseException:
+                if publication_aborted is not None:
+                    publication_aborted()
+                raise
         return FinalizationEvidence(output_path)
 
     def run() -> object:
@@ -520,6 +541,7 @@ async def synthesize_async(
         shutil.rmtree(workspace, ignore_errors=True)
 
     future.add_done_callback(deferred_cleanup)
+
     def cancel_queued() -> None:
         if concurrent_future is not None:
             concurrent_future.cancel()
@@ -568,6 +590,9 @@ async def synthesize_completed_wav_async(
     shutdown_timeout: float = DEFAULT_SHUTDOWN_SECONDS,
     executor: Executor | None = None,
     finalize: Finalize | Callable[[object], FinalizationEvidence] | None = None,
+    publication_fence: Callable[[], None] | None = None,
+    publication_committed: Callable[[], None] | None = None,
+    publication_aborted: Callable[[], None] | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> SynthesisResult:
     """Compatibility operation for callers whose contract requires a WAV."""
@@ -583,13 +608,16 @@ async def synthesize_completed_wav_async(
         shutdown_timeout=shutdown_timeout,
         executor=executor,
         finalize=finalize,
+        publication_fence=publication_fence,
+        publication_committed=publication_committed,
+        publication_aborted=publication_aborted,
         clock=clock,
     )
     if result.disposition not in {SynthesisDisposition.SUCCEEDED, SynthesisDisposition.LKG_REUSED}:
         raise TTSCompatibilityError(result)
-    # With a finalizer, the bridge has already validated explicit private
-    # completion evidence and atomically published this exact stable target.
-    # Without one, this is the raw-TTS output and must still exist.
-    if not Path(output_path).is_file():
+    # A complete publication callback may promote the validated private
+    # output into a controller-owned target before this compatibility check.
+    # Without such a callback, the requested output path must still exist.
+    if publication_committed is None and not Path(output_path).is_file():
         raise TTSCompatibilityError(result)
     return result

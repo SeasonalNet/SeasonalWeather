@@ -4,20 +4,33 @@ import datetime as dt
 import json
 import os
 import re
-import httpx
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
-from typing import Any, Dict, Iterable, Mapping, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
 
+import httpx
+
 from ..alerts.active import ActiveAlert
-from ..alerts.nws_api import NWSApi
-from .rwr import (
-    ObsPressureCache, parse_rwr, build_rwr_obs_text, build_asos_obs_text,
-    asos_to_rwr_station, RwrProduct, build_marine_obs_text,
-)
-from .segment_registry import DEFAULT_SEGMENT_REGISTRY, ResolvedSegmentRegistry
+from ..alerts.nws_api import NWSApi, NWSProduct
 from ..tts.tts import clean_for_tts, verbalize_url
+from .rwr import (
+    ObsPressureCache,
+    RwrProduct,
+    asos_to_rwr_station,
+    build_asos_obs_text,
+    build_marine_obs_text,
+    build_rwr_obs_text,
+    parse_rwr,
+)
+from .segment_builders import SegmentBuildInput, SegmentCandidate, SegmentSourceEvidence
+from .segment_registry import DEFAULT_SEGMENT_REGISTRY, ResolvedSegmentRegistry
+
+
+@dataclass(frozen=True)
+class _ObservationSourceResult:
+    text: str
+    product: RwrProduct | None
+    evidence: SegmentSourceEvidence
 
 
 def _fmt_time(now: dt.datetime) -> str:
@@ -54,6 +67,26 @@ def _short_tz(now: dt.datetime) -> str:
     return _expand_tz_token(now.tzname() or "local")
 
 
+def station_id_text(ctx: object, station_name: str, service_area_name: str, disclaimer: str) -> str:
+    """Build the canonical station-ID wording used by refresh and composition."""
+    if getattr(ctx, "health_detached_loop_only", False):
+        return (
+            getattr(ctx, "health_notice", None)
+            or "SeasonalWeather is temporarily unable to receive current National Weather Service information. Please use another weather information source or visit weather.gov for the latest information."
+        ).strip()
+    base = (
+        f"This is the SeasonalNet I P Weather Radio Station, {station_name}, "
+        f"with station programming and streaming facilities originating from SeasonalNet, "
+        f"providing weather information for {service_area_name}. "
+    )
+    if getattr(ctx, "mode", "") == "heightened":
+        base += (
+            "Due to severe weather affecting the service area, normal broadcasts have been "
+            "curtailed to bring you the latest severe weather information. "
+        )
+    return base + disclaimer
+
+
 # _env_int removed — cycle tuning now flows through CycleBuilder constructor.
 
 
@@ -66,9 +99,7 @@ _ALL_PUNCT_LINE_RE = re.compile(r"^[\W_]+$")
 #   ANZ531-532-533-212300-  or  MDZ010-011-VAZ036-260700-
 # The existing _scrub_nws_product_text catches most of these via _CODELINE_RE
 # but this dedicated regex guarantees removal as a lightweight pre-pass.
-_MARINE_ZONE_ROUTING_RE = re.compile(
-    r"^[A-Z]{2}[Z0-9]\d{2,3}(?:-[A-Z0-9]{3,6})*-\d{6}-?\s*$"
-)
+_MARINE_ZONE_ROUTING_RE = re.compile(r"^[A-Z]{2}[Z0-9]\d{2,3}(?:-[A-Z0-9]{3,6})*-\d{6}-?\s*$")
 
 
 def _strip_marine_routing_lines(text: str) -> str:
@@ -106,12 +137,12 @@ def _scrub_cwf_product_text(text: str) -> str:
     # This pre-pass handles all variants: the continuation line is recognised by
     # (a) starting with a non-. non-blank character, and (b) ending with '...'
     _synopsis_hdr_re = re.compile(
-        r'^\.(SYNOPSIS\b[^\n]*)(?:\n(?![.\n])[^\n]*\.{3})?',
+        r"^\.(SYNOPSIS\b[^\n]*)(?:\n(?![.\n])[^\n]*\.{3})?",
         re.IGNORECASE | re.MULTILINE,
     )
     text = _synopsis_hdr_re.sub(
-        'The synopsis for the coastal and inland waters in our area.',
-        (text or ''),
+        "The synopsis for the coastal and inland waters in our area.",
+        (text or ""),
     )
 
     # Zone name lines come in the form:
@@ -120,26 +151,32 @@ def _scrub_cwf_product_text(text: str) -> str:
     #   "Delaware Bay waters south of East Point NJ to Slaughter Beach DE-"
     # Pattern: starts with a letter (not a digit → excludes "20 nm-" continuations),
     # contains at least one internal space, ends with '-'.
-    _zone_name_re = re.compile(r'^[A-Za-z][A-Za-z0-9].*\s+\S.*-\s*$')
+    _zone_name_re = re.compile(r"^[A-Za-z][A-Za-z0-9].*\s+\S.*-\s*$")
 
     _period_map = {
-        'REST OF TONIGHT': 'Rest of tonight',
-        'REST OF TODAY':   'Rest of today',
-        'TONIGHT': 'Tonight',
-        'TODAY':   'Today',
-        'SUN': 'Sunday',       'SUN NIGHT': 'Sunday night',
-        'MON': 'Monday',       'MON NIGHT': 'Monday night',
-        'TUE': 'Tuesday',      'TUE NIGHT': 'Tuesday night',
-        'WED': 'Wednesday',    'WED NIGHT': 'Wednesday night',
-        'THU': 'Thursday',     'THU NIGHT': 'Thursday night',
-        'FRI': 'Friday',       'FRI NIGHT': 'Friday night',
-        'SAT': 'Saturday',     'SAT NIGHT': 'Saturday night',
+        "REST OF TONIGHT": "Rest of tonight",
+        "REST OF TODAY": "Rest of today",
+        "TONIGHT": "Tonight",
+        "TODAY": "Today",
+        "SUN": "Sunday",
+        "SUN NIGHT": "Sunday night",
+        "MON": "Monday",
+        "MON NIGHT": "Monday night",
+        "TUE": "Tuesday",
+        "TUE NIGHT": "Tuesday night",
+        "WED": "Wednesday",
+        "WED NIGHT": "Wednesday night",
+        "THU": "Thursday",
+        "THU NIGHT": "Thursday night",
+        "FRI": "Friday",
+        "FRI NIGHT": "Friday night",
+        "SAT": "Saturday",
+        "SAT NIGHT": "Saturday night",
     }
     # Longest keys first so 'SUN NIGHT' matches before 'SUN'.
     _period_keys = sorted(_period_map, key=len, reverse=True)
     _period_re = re.compile(
-        r'^\.' + r'(' + '|'.join(re.escape(k) for k in _period_keys) + r')'
-        + r'\s*\.{3}(.*)',
+        r"^\." + r"(" + "|".join(re.escape(k) for k in _period_keys) + r")" + r"\s*\.{3}(.*)",
         re.IGNORECASE,
     )
 
@@ -158,20 +195,27 @@ def _scrub_cwf_product_text(text: str) -> str:
 
     # Direction abbreviations: longest first to avoid N matching in NW etc.
     _dir_map = {
-        'NNW': 'north-northwest', 'NNE': 'north-northeast',
-        'SSW': 'south-southwest', 'SSE': 'south-southeast',
-        'NW': 'northwest', 'NE': 'northeast',
-        'SW': 'southwest', 'SE': 'southeast',
-        'N': 'north', 'S': 'south', 'E': 'east', 'W': 'west',
+        "NNW": "north-northwest",
+        "NNE": "north-northeast",
+        "SSW": "south-southwest",
+        "SSE": "south-southeast",
+        "NW": "northwest",
+        "NE": "northeast",
+        "SW": "southwest",
+        "SE": "southeast",
+        "N": "north",
+        "S": "south",
+        "E": "east",
+        "W": "west",
     }
-    _dir_re = re.compile(r'\b(NNW|NNE|SSW|SSE|NW|NE|SW|SE|N|S|E|W)\b')
+    _dir_re = re.compile(r"\b(NNW|NNE|SSW|SSE|NW|NE|SW|SE|N|S|E|W)\b")
 
     out: List[str] = []
-    for raw_ln in (text or '').replace('\r', '').splitlines():
+    for raw_ln in (text or "").replace("\r", "").splitlines():
         ln = raw_ln.strip()
 
         if not ln:
-            out.append('')
+            out.append("")
             continue
 
         # Drop known boilerplate lines.
@@ -181,7 +225,7 @@ def _scrub_cwf_product_text(text: str) -> str:
         # Transform inline advisory banners.
         m = _advisory_re.match(ln)
         if m:
-            out.append(m.group(1).strip().title() + '.')
+            out.append(m.group(1).strip().title() + ".")
             continue
 
         # Zone name lines: e.g. "Tidal Potomac from Key Bridge to Indian Head-"
@@ -190,8 +234,8 @@ def _scrub_cwf_product_text(text: str) -> str:
         # Emits a spoken zone anchor before the forecast body.
         m = _zone_name_re.match(ln)
         if m:
-            zone = ln.rstrip('-').strip()
-            out.append(f'The forecast for {zone}.')
+            zone = ln.rstrip("-").strip()
+            out.append(f"The forecast for {zone}.")
             continue
 
         # Expand .DAY... period markers.
@@ -200,24 +244,25 @@ def _scrub_cwf_product_text(text: str) -> str:
             key = m.group(1).strip().upper()
             rest = m.group(2).strip()
             spoken = _period_map.get(key, key.title())
-            ln = f'{spoken}. {rest}' if rest else f'{spoken}.'
+            ln = f"{spoken}. {rest}" if rest else f"{spoken}."
 
         # Collapse remaining ... to ', '
-        ln = re.sub(r'\.{3,}', ', ', ln)
+        ln = re.sub(r"\.{3,}", ", ", ln)
 
         # Expand direction abbreviations.
         ln = _dir_re.sub(lambda mo: _dir_map.get(mo.group(1), mo.group(1)), ln)
 
         # Expand marine units -- singular before plural so '1 ft' -> '1 foot'
         # not '1 feet', matching how real NWR reads the CWF.
-        ln = re.sub(r'\b1\s+kt\b', '1 knot', ln)
-        ln = re.sub(r'\b1\s+ft\b', '1 foot', ln)
-        ln = re.sub(r'\bkt\b', 'knots', ln)
-        ln = re.sub(r'\bft\b', 'feet', ln)
+        ln = re.sub(r"\b1\s+kt\b", "1 knot", ln)
+        ln = re.sub(r"\b1\s+ft\b", "1 foot", ln)
+        ln = re.sub(r"\bkt\b", "knots", ln)
+        ln = re.sub(r"\bft\b", "feet", ln)
 
         out.append(ln)
 
-    return '\n'.join(out)
+    return "\n".join(out)
+
 
 _WMO_HEADER_RE = re.compile(r"^[A-Z]{4}\d{2}\s+[A-Z]{4}\s+\d{6}$")
 _ALL_ZERO_RE = re.compile(r"^0{3,}$")
@@ -485,7 +530,7 @@ def _pluralize_station_status_label(label: str) -> str:
     low = label.casefold()
     for singular, plural in replacements.items():
         if low.endswith(singular):
-            suffix = label[-len(singular):]
+            suffix = label[-len(singular) :]
             spoken_plural = plural.capitalize() if suffix[:1].isupper() else plural
             return label[: -len(singular)] + spoken_plural
     return label if low.endswith("s") else label + "s"
@@ -530,7 +575,7 @@ def _station_status_alert_summary(
             rendered.append(f"{count_text} {_pluralize_station_status_label(str(label))}")
 
     if len(groups) > len(visible):
-        remaining = sum(int(count) for _label, count in groups[len(visible):])
+        remaining = sum(int(count) for _label, count in groups[len(visible) :])
         count_text = _ALERT_COUNT_WORDS.get(remaining, str(remaining))
         rendered.append(f"{count_text} additional active alerts")
 
@@ -544,9 +589,7 @@ def build_station_status_text(
     last_product_max_chars: int = 260,
 ) -> str:
     mode = "heightened" if (ctx.mode or "").strip().casefold() == "heightened" else "normal"
-    status_bits: list[str] = [
-        f"SeasonalWeather is currently operating in {mode} broadcast mode."
-    ]
+    status_bits: list[str] = [f"SeasonalWeather is currently operating in {mode} broadcast mode."]
 
     if mode == "heightened" and ctx.last_heightened_ago:
         status_bits.append(f"Heightened mode was activated {ctx.last_heightened_ago} ago.")
@@ -565,17 +608,11 @@ def build_station_status_text(
 
     alert_summary, alert_count = _station_status_alert_summary(active_alerts)
     if alert_count == 1:
-        status_bits.append(
-            f"The active alert in the service area is {alert_summary}."
-        )
+        status_bits.append(f"The active alert in the service area is {alert_summary}.")
     elif alert_count > 1:
-        status_bits.append(
-            f"The active alerts in the service area are: {alert_summary}."
-        )
+        status_bits.append(f"The active alerts in the service area are: {alert_summary}.")
     else:
-        status_bits.append(
-            "No active alerts are currently being tracked for the service area."
-        )
+        status_bits.append("No active alerts are currently being tracked for the service area.")
 
     return "And now, the station status and active alerts. " + " ".join(status_bits)
 
@@ -585,7 +622,6 @@ class CycleSegment:
     key: str
     title: str
     text: str
-
 
 
 # --- Broadcast text helpers (HWO/OBS formatting) ---
@@ -606,6 +642,7 @@ _DOW_FULL = {
 }
 
 # _parse_kv_env removed — obs aliases now come from CycleBuilder constructor.
+
 
 def _parse_kv_env(key: str) -> Dict[str, str]:
     """Legacy shim — kept so any callers outside CycleBuilder still compile."""
@@ -728,6 +765,7 @@ def _simplify_hwo(raw: str) -> str:
 
     return _SPACE_RE.sub(" ", " ".join(parts)).strip()
 
+
 def _spc_threats_phrase(torn_prob: int, hail_prob: int, wind_prob: int, *, severity_dn: int) -> str:
     """
     Build a short, broadcast-friendly threat phrase from SPC probabilistic layers.
@@ -778,6 +816,7 @@ class CycleBuilder:
         self._registry = registry or DEFAULT_SEGMENT_REGISTRY.resolve_for_cycle(cycle_cfg)
         # Pressure cache for RWR trend derivation (survives restarts)
         import os as _os
+
         _cache_path = _os.path.join(work_dir, "obs_pressure_cache.json")
         _rwr = cycle_cfg.rwr if cycle_cfg else None
         self._pressure_cache = ObsPressureCache(
@@ -839,7 +878,6 @@ class CycleBuilder:
         self._obs_name_cache[st] = st
         return st
 
-
     def _product_max_chars(self, kind: str, mode: str) -> Optional[int]:
         """Return per-product hard character caps.
 
@@ -867,7 +905,7 @@ class CycleBuilder:
 
         return None
 
-    async def _fetch_product_text(self, kind: str, office: str) -> Optional[str]:
+    async def _fetch_product(self, kind: str, office: str) -> tuple[NWSProduct, SegmentSourceEvidence] | None:
         try:
             pid = await self.api.latest_product_id(kind, office)
             if not pid:
@@ -875,11 +913,59 @@ class CycleBuilder:
             prod = await self.api.get_product(pid)
             if not prod or not prod.product_text:
                 return None
-            return prod.product_text
+            fetched_at = dt.datetime.now(dt.UTC)
+            return prod, SegmentSourceEvidence(
+                source_name="nws",
+                product_identifier=getattr(prod, "product_id", None) or pid,
+                product_type=getattr(prod, "product_type", None) or kind,
+                issuing_office=getattr(prod, "wfo", None) or office,
+                issuance_time=getattr(prod, "issuance_time", None),
+                fetched_at=fetched_at,
+                source_reference=f"https://api.weather.gov/products/{getattr(prod, 'product_id', None) or pid}",
+            )
         except Exception:
             return None
 
-    async def _build_synopsis_text(self, ctx: CycleContext) -> Optional[str]:
+    async def _fetch_product_text(self, kind: str, office: str) -> Optional[str]:
+        fetched = await self._fetch_product(kind, office)
+        return fetched[0].product_text if fetched else None
+
+    @staticmethod
+    def _clean_hwo_body(raw: str) -> str:
+        raw = raw.replace("\r", "")
+        issued = _hwo_issued_phrase(raw)
+        lines = raw.splitlines()
+
+        def norm(value: str) -> str:
+            return (value or "").lstrip("\ufeff").strip()
+
+        def is_blank(index: int) -> bool:
+            return index >= len(lines) or not norm(lines[index])
+
+        index = 0
+        while index < len(lines) and is_blank(index):
+            index += 1
+        banner = index
+        while banner < len(lines) and "hazardous weather outlook" not in norm(lines[banner]).lower():
+            banner += 1
+        if banner < len(lines):
+            index = banner + 1
+            while index < len(lines) and is_blank(index):
+                index += 1
+            if index < len(lines) and norm(lines[index]).lower().startswith("national weather service"):
+                index += 1
+            while index < len(lines) and is_blank(index):
+                index += 1
+            if index < len(lines) and _HWO_ISSUED_RE.match(norm(lines[index])):
+                index += 1
+            while index < len(lines) and is_blank(index):
+                index += 1
+        body = "\n".join(lines[index:]).strip()
+        if issued:
+            body = f"{issued}\n{body}" if body else issued
+        return _scrub_nws_product_text(clean_for_tts(body))
+
+    async def _build_synopsis_text(self, ctx: CycleContext) -> tuple[str, SegmentSourceEvidence] | str | None:
         """
         "Synopsis" segment source order:
           1) SYN product if available (some offices: BOU, ABR, GJT, MRX)
@@ -889,33 +975,36 @@ class CycleBuilder:
           4) None (fail closed; never read full ZFP by accident)
         """
         # 1) Dedicated synopsis product (a few offices only)
-        syn_raw = await self._fetch_product_text("SYN", "LWX")
-        if syn_raw:
-            syn_clean = clean_for_tts(syn_raw)
+        syn_fetched = await self._fetch_product("SYN", "LWX")
+        if syn_fetched:
+            syn_product, syn_evidence = syn_fetched
+            syn_clean = clean_for_tts(syn_product.product_text)
             syn_clean = _trim_chars(syn_clean, self._product_max_chars("SYN", ctx.mode))
             syn_clean = _scrub_nws_product_text(syn_clean)
             if syn_clean:
-                return syn_clean
+                return syn_clean, syn_evidence
 
         # 2) Regional Weather Summary — broadcast-ready prose, same format real NWR uses
-        rws_raw = await self._fetch_product_text("RWS", "LWX")
-        if rws_raw:
-            rws_clean = clean_for_tts(rws_raw)
+        rws_fetched = await self._fetch_product("RWS", "LWX")
+        if rws_fetched:
+            rws_product, rws_evidence = rws_fetched
+            rws_clean = clean_for_tts(rws_product.product_text)
             rws_clean = _trim_chars(rws_clean, self._product_max_chars("SYN", ctx.mode))
             rws_clean = _scrub_nws_product_text(rws_clean)
             if rws_clean:
-                return rws_clean
+                return rws_clean, rws_evidence
 
         # 3) AFD synopsis extraction fallback
-        afd_raw = await self._fetch_product_text("AFD", "LWX")
-        if afd_raw:
-            syn = _extract_afd_synopsis(afd_raw)
+        afd_fetched = await self._fetch_product("AFD", "LWX")
+        if afd_fetched:
+            afd_product, afd_evidence = afd_fetched
+            syn = _extract_afd_synopsis(afd_product.product_text)
             if syn:
                 syn_clean = clean_for_tts(syn)
                 syn_clean = _trim_chars(syn_clean, self._product_max_chars("SYNOPSIS", ctx.mode))
                 syn_clean = _scrub_nws_product_text(syn_clean)
                 if syn_clean:
-                    return syn_clean
+                    return syn_clean, afd_evidence
 
         return None
 
@@ -938,12 +1027,14 @@ class CycleBuilder:
                 else:
                     r = await client.get(url, params=p)
                 r.raise_for_status()
-                return r.json()
+                payload = r.json()
+                return payload if isinstance(payload, dict) else None
         except Exception:
             return None
 
-
-    async def _arcgis_find_layer_id(self, base_url: str, want_keywords: Iterable[str], timeout_s: float) -> Optional[int]:
+    async def _arcgis_find_layer_id(
+        self, base_url: str, want_keywords: Iterable[str], timeout_s: float
+    ) -> Optional[int]:
         """
         Fetch MapServer metadata and find the first layer whose name contains all keywords.
         Caches results per (base_url, keywords).
@@ -1011,7 +1102,9 @@ class CycleBuilder:
         if wfo in self._wfo_geom_cache:
             return self._wfo_geom_cache[wfo]
 
-        ref_base = "https://mapservices.weather.noaa.gov/static/rest/services/nws_reference_maps/nws_reference_map/MapServer"
+        ref_base = (
+            "https://mapservices.weather.noaa.gov/static/rest/services/nws_reference_maps/nws_reference_map/MapServer"
+        )
         layer_id = (
             await self._arcgis_find_layer_id(ref_base, ["county warning area"], timeout_s)
             or await self._arcgis_find_layer_id(ref_base, ["cwa"], timeout_s)
@@ -1023,7 +1116,9 @@ class CycleBuilder:
 
         field_candidates = ["WFO", "WFO_ID", "WFOID", "CWA", "OFFICE", "SITE", "SITEID", "ID"]
         for fld in field_candidates:
-            feats = await self._arcgis_query(ref_base, layer_id, f"{fld}='{wfo}'", return_geometry=True, timeout_s=timeout_s)
+            feats = await self._arcgis_query(
+                ref_base, layer_id, f"{fld}='{wfo}'", return_geometry=True, timeout_s=timeout_s
+            )
             if feats:
                 geom = (feats[0] or {}).get("geometry")
                 if isinstance(geom, dict) and ("rings" in geom):
@@ -1101,8 +1196,7 @@ class CycleBuilder:
                 continue
 
             feats = await self._arcgis_query(
-                spc_base, layer_id, "1=1",
-                geometry=geom, return_geometry=False, timeout_s=timeout_s
+                spc_base, layer_id, "1=1", geometry=geom, return_geometry=False, timeout_s=timeout_s
             )
 
             for f in feats:
@@ -1115,7 +1209,9 @@ class CycleBuilder:
                     continue
 
                 # Otherwise parse label/label2
-                lab = get_attr(attrs, "LABEL", "label", "LABEL2", "label2", "CAT", "cat", "CATEGORY", "category", "RISK", "risk")
+                lab = get_attr(
+                    attrs, "LABEL", "label", "LABEL2", "label2", "CAT", "cat", "CATEGORY", "category", "RISK", "risk"
+                )
                 if isinstance(lab, str) and lab.strip():
                     u = lab.strip().upper()
 
@@ -1132,7 +1228,6 @@ class CycleBuilder:
                                 break
 
         return max_dn
-
 
     async def _spc_max_prob(self, day: int, hazard: str, wfos: List[str], timeout_s: float) -> int:
         """
@@ -1167,14 +1262,29 @@ class CycleBuilder:
             geom = await self._wfo_cwa_geometry(wfo, timeout_s)
             if not geom:
                 continue
-            feats = await self._arcgis_query(spc_base, layer_id, "1=1", geometry=geom, return_geometry=False, timeout_s=timeout_s)
+            feats = await self._arcgis_query(
+                spc_base, layer_id, "1=1", geometry=geom, return_geometry=False, timeout_s=timeout_s
+            )
             for f in feats:
                 attrs = (f or {}).get("attributes") or {}
-                v = get_attr(attrs, "PROB", "prob", "PROBABILITY", "probability", "PERCENT", "percent", "VALUE", "value", "VAL", "val", "DN", "dn")
+                v = get_attr(
+                    attrs,
+                    "PROB",
+                    "prob",
+                    "PROBABILITY",
+                    "probability",
+                    "PERCENT",
+                    "percent",
+                    "VALUE",
+                    "value",
+                    "VAL",
+                    "val",
+                    "DN",
+                    "dn",
+                )
                 if isinstance(v, (int, float)):
                     max_p = max(max_p, int(v))
         return max_p
-
 
     async def _build_spc_outlook_text(self, ctx: CycleContext, now: dt.datetime) -> Optional[str]:
         """
@@ -1233,9 +1343,16 @@ class CycleBuilder:
         if not lines:
             return None
 
-        return "And now, for the Storm Prediction Center's convective outlook for severe thunderstorms in our area. " + " ".join(lines)
+        return (
+            "And now, for the Storm Prediction Center's convective outlook for severe thunderstorms in our area. "
+            + " ".join(lines)
+        )
 
     async def _build_cwf_text(self, ctx: CycleContext) -> Optional[str]:
+        built = await self._build_cwf_text_with_evidence(ctx)
+        return built[0] if built else None
+
+    async def _build_cwf_text_with_evidence(self, ctx: CycleContext) -> tuple[str, SegmentSourceEvidence] | None:
         # Fetch and scrub the Coastal Waters Forecast for this cycle.
         # Enabled when cycle.cwf.enabled = true.
         # Tries each configured office in order; returns first non-empty result.
@@ -1247,9 +1364,27 @@ class CycleBuilder:
         max_chars = self._product_max_chars("CWF", ctx.mode)
         for office in offices:
             try:
-                raw = await self.api.coastal_waters_forecast_text(office)
-                if not raw:
-                    continue
+                product_fetcher = getattr(self.api, "coastal_waters_forecast_product", None)
+                if callable(product_fetcher):
+                    product = await product_fetcher(office)
+                    if not product:
+                        continue
+                    raw = product.product_text
+                    product_id = getattr(product, "product_id", None)
+                    evidence = SegmentSourceEvidence(
+                        source_name="nws",
+                        product_identifier=product_id,
+                        product_type=getattr(product, "product_type", None) or "CWF",
+                        issuing_office=getattr(product, "wfo", None) or office,
+                        issuance_time=getattr(product, "issuance_time", None),
+                        fetched_at=dt.datetime.now(dt.UTC),
+                        source_reference=(f"https://api.weather.gov/products/{product_id}" if product_id else None),
+                    )
+                else:
+                    raw = await self.api.coastal_waters_forecast_text(office)
+                    if not raw:
+                        continue
+                    evidence = SegmentSourceEvidence(source_name="nws", product_type="CWF", issuing_office=office)
                 # Pre-pass: strip zone routing lines (ANZ531-532-212300-)
                 cleaned = _strip_marine_routing_lines(raw)
                 # CWF-specific pass: boilerplate, period markers, abbrevs
@@ -1258,77 +1393,52 @@ class CycleBuilder:
                 cleaned = _scrub_nws_product_text(cleaned)
                 cleaned = _trim_chars(cleaned, max_chars)
                 if cleaned:
-                    return cleaned
+                    return cleaned, evidence
             except Exception:
                 continue
         return None
 
-    async def _build_obs_rwr_segment(self, ctx: CycleContext) -> Tuple[Optional[str], Optional[RwrProduct]]:
-        # Build the observations segment using RWR as primary source,
-        # falling back to ASOS when RWR is stale or unavailable.
-        # Returns (spoken_text_or_None, parsed_RwrProduct_or_None).
-        # The parsed product is returned alongside the text so that callers
-        # (e.g. _build_marine_obs_segment) can reuse it without a second fetch.
-        import datetime as _dt
+    async def _acquire_rwr_source(self, ctx: CycleContext) -> tuple[RwrProduct, SegmentSourceEvidence] | None:
         rwr_cfg = self._cycle_cfg.rwr if self._cycle_cfg else None
-        rwr_enabled = rwr_cfg and rwr_cfg.enabled
+        if not rwr_cfg or not rwr_cfg.enabled:
+            return None
+        try:
+            fetched = await self._fetch_product("RWR", rwr_cfg.office)
+            if not fetched:
+                return None
+            product, evidence = fetched
+            parsed = parse_rwr(product.product_text, name_map=dict(rwr_cfg.station_names))
+            if parsed is None:
+                return None
+            stale = True
+            if parsed.issuance_dt:
+                age_mins = (dt.datetime.now(tz=dt.timezone.utc) - parsed.issuance_dt).total_seconds() / 60
+                stale = age_mins > rwr_cfg.staleness_minutes
+            return None if stale else (parsed, evidence)
+        except Exception:
+            return None
+
+    async def _build_asos_obs_source(self, ctx: CycleContext) -> _ObservationSourceResult | None:
+        rwr_cfg = self._cycle_cfg.rwr if self._cycle_cfg else None
         intro = "And now for the current observed weather conditions in our area"
-
-        if rwr_enabled:
-            try:
-                raw = await self._fetch_product_text("RWR", rwr_cfg.office)
-                if raw:
-                    product = parse_rwr(
-                        raw,
-                        name_map=dict(rwr_cfg.station_names) if rwr_cfg else {},
-                    )
-                    # Staleness check
-                    stale = True
-                    if product and product.issuance_dt:
-                        age_mins = (
-                            _dt.datetime.now(tz=_dt.timezone.utc)
-                            - product.issuance_dt
-                        ).total_seconds() / 60
-                        stale = age_mins > (rwr_cfg.staleness_minutes if rwr_cfg else 75)
-                    if product and not stale:
-                        anchors = list(rwr_cfg.anchor_stations) if rwr_cfg else []
-                        text = build_rwr_obs_text(
-                            product=product,
-                            anchor_names=anchors,
-                            max_compact_per_section=(
-                                rwr_cfg.max_compact_per_section if rwr_cfg else 8
-                            ),
-                            intro_prefix=intro,
-                            cache=self._pressure_cache,
-                        )
-                        if text:
-                            # Return the parsed product alongside text so
-                            # _build_marine_obs_segment can reuse it for free.
-                            return text, product
-            except Exception:
-                pass  # fall through to ASOS
-
-        # ASOS fallback
         fallback_ids = (
-            list(rwr_cfg.fallback_stations)
-            if rwr_cfg and rwr_cfg.fallback_stations
-            else list(self.obs_stations)
+            list(rwr_cfg.fallback_stations) if rwr_cfg and rwr_cfg.fallback_stations else list(self.obs_stations)
         )
         if not fallback_ids:
-            return None, None
+            return None
 
         # Height-aware station count
-        max_obs = 1 if ctx.mode == "heightened" else (
-            (self._cycle_cfg.obs.max_normal if self._cycle_cfg else 0)
-            or min(8, len(fallback_ids))
+        max_obs = (
+            1
+            if ctx.mode == "heightened"
+            else ((self._cycle_cfg.obs.max_normal if self._cycle_cfg else 0) or min(8, len(fallback_ids)))
         )
 
         # Rotation
         sts = list(fallback_ids)
         rot_period = self._cycle_cfg.obs.rotate_period_s if self._cycle_cfg else 300
         rot_step = (self._cycle_cfg.obs.rotate_step or max_obs) if self._cycle_cfg else max_obs
-        import datetime as _dt2
-        slot = int(_dt2.datetime.now().timestamp() // max(rot_period, 1))
+        slot = int(dt.datetime.now().timestamp() // max(rot_period, 1))
         offset = (slot * max(rot_step, 1)) % len(sts)
         sts = sts[offset:] + sts[:offset]
 
@@ -1336,25 +1446,74 @@ class CycleBuilder:
         name_map = dict(rwr_cfg.station_names) if rwr_cfg else {}
         anchor = sts[0] if sts else ""
         station_obs: List[Any] = []
+        accepted_station: str | None = None
+        accepted_properties: dict[str, Any] | None = None
         for st in sts[:max_obs]:
             try:
                 props = await self.api.latest_observation(st)
                 if props:
                     station_obs.append((st, props))
+                    accepted_station = accepted_station or st
+                    accepted_properties = accepted_properties or props
             except Exception:
                 continue
 
         if not station_obs:
-            return None, None
+            return None
 
-        return build_asos_obs_text(
+        text = build_asos_obs_text(
             stations=station_obs,
             anchor_id=anchor,
             max_compact=max_obs,
             intro_prefix=intro,
             cache=self._pressure_cache,
             name_map=name_map,
-        ), None
+        )
+        if not text or not accepted_station:
+            return None
+        fetched_at = dt.datetime.now(dt.UTC)
+        observed_at = (accepted_properties or {}).get("timestamp")
+        evidence = SegmentSourceEvidence(
+            source_name="asos",
+            product_type="ASOS",
+            issuing_office=None,
+            issuance_time=str(observed_at) if observed_at else None,
+            fetched_at=fetched_at,
+            source_reference=f"https://api.weather.gov/stations/{accepted_station}/observations/latest",
+        )
+        return _ObservationSourceResult(text=text, product=None, evidence=evidence)
+
+    async def _build_obs_rwr_segment(
+        self, ctx: CycleContext
+    ) -> (
+        tuple[str | None, RwrProduct | None, SegmentSourceEvidence | None]
+        | tuple[str | None, RwrProduct | None]
+        | _ObservationSourceResult
+    ):
+        """Build land observations and return the source that actually won.
+
+        The tuple shape remains accepted for narrow legacy test doubles; the
+        real path returns text, parsed RWR product, and typed source evidence.
+        """
+        rwr_cfg = self._cycle_cfg.rwr if self._cycle_cfg else None
+        if rwr_cfg is None:
+            return None, None, None
+        acquired = await self._acquire_rwr_source(ctx)
+        if acquired:
+            product, evidence = acquired
+            text = build_rwr_obs_text(
+                product=product,
+                anchor_names=list(rwr_cfg.anchor_stations),
+                max_compact_per_section=rwr_cfg.max_compact_per_section,
+                intro_prefix="And now for the current observed weather conditions in our area",
+                cache=self._pressure_cache,
+            )
+            if text:
+                return text, product, evidence
+        fallback = await self._build_asos_obs_source(ctx)
+        if fallback is None:
+            return None, None, None
+        return fallback.text, None, fallback.evidence
 
     async def _build_marine_obs_segment(
         self,
@@ -1387,6 +1546,276 @@ class CycleBuilder:
             last_product_max_chars=max_chars,
         )
 
+    # ------------------------------------------------------------------
+    # Independent static segment builders
+    # ------------------------------------------------------------------
+
+    async def build_health_segment(self, request: SegmentBuildInput) -> SegmentCandidate | None:
+        notice = (getattr(request.context, "health_notice", None) or "").strip()
+        if not notice:
+            return None
+        return SegmentCandidate.from_cycle_segment(
+            CycleSegment(key="health", title=self._registry.title_for("health"), text=notice),
+            source_name="controller-health",
+            product_type="health",
+        )
+
+    async def build_hwo_segment(self, request: SegmentBuildInput) -> SegmentCandidate | None:
+        fetched = await self._fetch_product("HWO", "LWX")
+        if not fetched:
+            if self._registry.fallback_enabled("hwo"):
+                return SegmentCandidate.from_cycle_segment(
+                    CycleSegment(
+                        key="hwo",
+                        title=self._registry.title_for("hwo"),
+                        text="The hazardous weather outlook from LWX was unavailable.",
+                    ),
+                    source_name="nws",
+                    product_type="HWO",
+                    issuing_office="LWX",
+                )
+            return None
+        product, evidence = fetched
+        body = self._clean_hwo_body(product.product_text)
+        body = _trim_chars(body, self._product_max_chars("HWO", request.context.mode))
+        if not body:
+            return None
+        return SegmentCandidate.from_cycle_segment(
+            CycleSegment(
+                key="hwo",
+                title=self._registry.title_for("hwo"),
+                text="And now for the hazardous weather outlook for the service area. " + body,
+            ),
+            evidence=evidence,
+        )
+
+    async def build_spc_segment(self, request: SegmentBuildInput) -> SegmentCandidate | None:
+        if not self._registry.enabled("spc"):
+            return None
+        text = await self._build_spc_outlook_text(request.context, dt.datetime.now(tz=self.tz))
+        if not text:
+            return None
+        return SegmentCandidate.from_cycle_segment(
+            CycleSegment(key="spc", title=self._registry.title_for("spc"), text=text),
+            source_name="spc",
+            product_type="convective_outlook",
+        )
+
+    async def build_zfp_segment(self, request: SegmentBuildInput) -> SegmentCandidate | None:
+        built = await self._build_synopsis_text(request.context)
+        if not built or not self._registry.enabled("zfp"):
+            return None
+        if isinstance(built, str):
+            text, evidence = built, None
+        else:
+            text, evidence = built
+        return SegmentCandidate.from_cycle_segment(
+            CycleSegment(
+                key="zfp",
+                title=self._registry.title_for("zfp"),
+                text=(
+                    "This is the weather synopsis for our area. And now for the weather features affecting our region over the next several days. "
+                    + text
+                ),
+            ),
+            evidence=evidence,
+            source_name="nws" if evidence is None else None,
+        )
+
+    def _forecast_max_points(self, ctx: CycleContext, max_periods: int) -> int:
+        max_points = 1 if ctx.mode == "heightened" else (self._cycle_cfg.fc.max_points_normal if self._cycle_cfg else 6)
+        if max_periods >= 10:
+            return min(max_points, self._cycle_cfg.fc.max_points_7day if self._cycle_cfg else 2)
+        if max_periods >= 6:
+            return min(max_points, 3)
+        return max_points
+
+    def _forecast_settings(self, ctx: CycleContext) -> tuple[int, str, int, int, int, list]:
+        field = "shortForecast" if (self._cycle_cfg.fc.use_short if self._cycle_cfg else True) else "detailedForecast"
+        max_periods = 1 if ctx.mode == "heightened" else (self._cycle_cfg.fc.periods_normal if self._cycle_cfg else 14)
+        max_points = self._forecast_max_points(ctx, max_periods)
+        per_group = self._cycle_cfg.fc.periods_per_group if self._cycle_cfg else 4
+        point_max = self._cycle_cfg.fc.point_max_chars if self._cycle_cfg else 1600
+        return (
+            max_points,
+            field,
+            max_periods,
+            per_group,
+            point_max,
+            list(self._cycle_cfg.fc.forecast_zones) if self._cycle_cfg else [],
+        )
+
+    @staticmethod
+    def _forecast_line(label: str, entries: list[str], per_group: int, point_max: int) -> str | None:
+        if not entries:
+            return None
+        groups = [
+            ". ".join(entries[i : i + max(1, per_group)]) + "." for i in range(0, len(entries), max(1, per_group))
+        ]
+        return _trim_chars(_scrub_nws_product_text(f"The forecast for {label}.\n" + "\n".join(groups)), point_max)
+
+    async def _forecast_zone_lines(
+        self, zones: list, now: dt.datetime, max_points: int, max_periods: int, per_group: int, point_max: int
+    ) -> list[str]:
+        rotate_period = self._cycle_cfg.fc.rotate_period_s if self._cycle_cfg else 300
+        rotate_step = (self._cycle_cfg.fc.rotate_step or max_points) if self._cycle_cfg else max_points
+        offset = (int(now.timestamp() // max(rotate_period, 1)) * max(rotate_step, 1)) % len(zones)
+        lines: list[str] = []
+        for zone_id, label in (zones[offset:] + zones[:offset])[:max_points]:
+            line = await self._forecast_zone_line(zone_id, label, max_periods, per_group, point_max)
+            if line:
+                lines.append(line)
+        return lines
+
+    async def _forecast_zone_line(
+        self, zone_id: str, label: str, max_periods: int, per_group: int, point_max: int
+    ) -> str | None:
+        try:
+            periods = await self.api.zone_forecast_periods(zone_id)
+            entries = [
+                f"{_SPACE_RE.sub(' ', str(period.get('name') or '').replace('—', '-')).strip()}: "
+                f"{_SPACE_RE.sub(' ', str(period.get('detailedForecast') or '').replace('—', '-')).strip()}"
+                for period in periods[:max_periods]
+                if str(period.get("detailedForecast") or "").strip()
+            ]
+            entries = [re.sub(r"\.\s*$", "", entry.strip()) for entry in entries]
+            return self._forecast_line(label, entries, per_group, point_max)
+        except Exception:
+            return None
+
+    async def _forecast_point_lines(
+        self,
+        points: list,
+        now: dt.datetime,
+        max_points: int,
+        field: str,
+        max_periods: int,
+        per_group: int,
+        point_max: int,
+    ) -> list[str]:
+        if points:
+            rotate_period = self._cycle_cfg.fc.rotate_period_s if self._cycle_cfg else 300
+            rotate_step = (self._cycle_cfg.fc.rotate_step or max_points) if self._cycle_cfg else max_points
+            offset = (int(now.timestamp() // max(rotate_period, 1)) * max(rotate_step, 1)) % len(points)
+            points = points[offset:] + points[:offset]
+        lines: list[str] = []
+        for lat, lon, label in points[:max_points]:
+            line = await self._forecast_point_line(lat, lon, label, field, max_periods, per_group, point_max)
+            if line:
+                lines.append(line)
+        return lines
+
+    @staticmethod
+    def _forecast_point_entries(periods: list[dict], field: str, max_periods: int) -> list[str]:
+        entries = []
+        for period in periods[:max_periods]:
+            name = _SPACE_RE.sub(" ", str(period.get("name") or "").replace("—", "-")).strip()
+            value = _SPACE_RE.sub(" ", str(period.get(field) or "").replace("—", "-")).strip()
+            if not value:
+                continue
+            temperature = period.get("temperature")
+            if isinstance(temperature, (int, float)):
+                phrase = f" With a {'high near' if bool(period.get('isDaytime', True)) else 'low around'} {round(temperature)} degrees"
+                value += phrase
+            entries.append(f"{name}: {value}" if name else value)
+        return entries
+
+    async def _forecast_point_line(
+        self, lat: float, lon: float, label: str, field: str, max_periods: int, per_group: int, point_max: int
+    ) -> str | None:
+        try:
+            periods = await self.api.point_forecast_periods(lat, lon)
+            entries = self._forecast_point_entries(periods, field, max_periods)
+            return self._forecast_line(label, entries, per_group, point_max)
+        except Exception:
+            return None
+
+    async def build_fcst_segment(self, request: SegmentBuildInput) -> SegmentCandidate | None:
+        ctx = request.context
+        max_points, field, max_periods, per_group, point_max, zones = self._forecast_settings(ctx)
+        now = dt.datetime.now(tz=self.tz)
+        fc_lines = (
+            await self._forecast_zone_lines(zones, now, max_points, max_periods, per_group, point_max)
+            if zones
+            else await self._forecast_point_lines(
+                list(self.points), now, max_points, field, max_periods, per_group, point_max
+            )
+        )
+        if not fc_lines or not self._registry.enabled("fcst"):
+            return None
+        prefix = (
+            "This is the summarized forecast section for our area. "
+            if ctx.mode == "heightened"
+            else "This is the overall forecast section for our area from the National Weather Service. "
+        )
+        return SegmentCandidate.from_cycle_segment(
+            CycleSegment(key="fcst", title=self._registry.title_for("fcst"), text=prefix + " ".join(fc_lines)),
+            source_name="nws",
+            product_type="forecast",
+        )
+
+    async def build_cwf_segment(self, request: SegmentBuildInput) -> SegmentCandidate | None:
+        built = await self._build_cwf_text_with_evidence(request.context)
+        if not built or not self._registry.enabled("cwf"):
+            return None
+        text, evidence = built
+        return SegmentCandidate.from_cycle_segment(
+            CycleSegment(
+                key="cwf",
+                title=self._registry.title_for("cwf"),
+                text="And now for the coastal and marine weather forecast for our area. " + text,
+            ),
+            evidence=evidence,
+        )
+
+    async def build_obs_segment(self, request: SegmentBuildInput) -> SegmentCandidate | None:
+        built = await self._build_obs_rwr_segment(request.context)
+        text: str | None
+        evidence: SegmentSourceEvidence | None
+        if isinstance(built, _ObservationSourceResult):
+            text, evidence = built.text, built.evidence
+        elif len(built) >= 3:
+            text, _product, evidence = built
+        else:
+            text, evidence = built[0], None
+        if not text or not self._registry.enabled("obs"):
+            return None
+        return SegmentCandidate.from_cycle_segment(
+            CycleSegment(key="obs", title=self._registry.title_for("obs"), text=text),
+            evidence=evidence,
+            source_name="nws" if evidence is None else None,
+            product_type="RWR" if evidence is None else None,
+        )
+
+    async def build_marine_obs_segment(self, request: SegmentBuildInput) -> SegmentCandidate | None:
+        acquired = await self._acquire_rwr_source(request.context)
+        product = acquired[0] if acquired else None
+        evidence = acquired[1] if acquired else None
+        text = await self._build_marine_obs_segment(request.context, product)
+        if not text or not self._registry.enabled("marine_obs"):
+            return None
+        return SegmentCandidate.from_cycle_segment(
+            CycleSegment(
+                key="marine_obs",
+                title=self._registry.title_for("marine_obs"),
+                text="And now for the marine observations in the service area. " + text,
+            ),
+            evidence=evidence,
+            source_name="nws" if evidence is None else None,
+            product_type="RWR" if evidence is None else None,
+        )
+
+    async def build_outro_segment(self, request: SegmentBuildInput) -> SegmentCandidate:
+        return SegmentCandidate.from_cycle_segment(
+            CycleSegment(
+                key="outro",
+                title=self._registry.title_for("outro"),
+                text="This is the end of the current broadcast cycle. Updated information will follow on the next rotation.",
+            ),
+            source_name="controller",
+            product_type="outro",
+        )
+
     async def build_segments(
         self,
         station_name: str,
@@ -1394,351 +1823,54 @@ class CycleBuilder:
         disclaimer: str,
         ctx: CycleContext,
     ) -> List[CycleSegment]:
-        now = dt.datetime.now(tz=self.tz)
-        # time_str / tz_short removed — time is now spoken by CycleConductor's
-        # live 'time' segment and no longer embedded in the station ID.
-
-        # In detached/dead-feed mode, do not synthesize normal programming from
-        # potentially stale upstream products.  The conductor will keep looping
-        # this explicit service notice until source health recovers.
+        """Compatibility composer over the canonical independent builders."""
+        request = SegmentBuildInput(
+            key="",
+            context=ctx,
+            station_name=station_name,
+            service_area_name=service_area_name,
+            disclaimer=disclaimer,
+        )
         if getattr(ctx, "health_detached_loop_only", False):
-            notice = (getattr(ctx, "health_notice", None) or "SeasonalWeather is temporarily unable to receive current National Weather Service information. Please use another weather information source or visit weather.gov for the latest information.").strip()
+            notice = (
+                getattr(ctx, "health_notice", None)
+                or "SeasonalWeather is temporarily unable to receive current National Weather Service information. Please use another weather information source or visit weather.gov for the latest information."
+            ).strip()
             return [
                 CycleSegment(key="id", title=self._registry.title_for("id"), text=notice),
                 CycleSegment(key="health", title=self._registry.title_for("health"), text=notice),
             ]
 
-        # --- Latest HWO (best-effort) ---
-        hwo_text: Optional[str] = None
-        try:
-            pid = await self.api.latest_product_id("HWO", "LWX")
-            if pid:
-                prod = await self.api.get_product(pid)
-                if prod and prod.product_text:
-                    raw = prod.product_text.replace("\r", "")
-                    issued = _hwo_issued_phrase(raw)
+        station_id = station_id_text(ctx, station_name, service_area_name, disclaimer)
 
-                    lines = raw.splitlines()
-
-                    def norm(s: str) -> str:
-                        return (s or "").lstrip("\ufeff").strip()
-
-                    def is_blank(i: int) -> bool:
-                        return i >= len(lines) or not norm(lines[i])
-
-                    i = 0
-                    while i < len(lines) and is_blank(i):
-                        i += 1
-
-                    # Find the "Hazardous Weather Outlook" banner anywhere (skip WMO/AWIPS junk above it)
-                    j = i
-                    while j < len(lines) and "hazardous weather outlook" not in norm(lines[j]).lower():
-                        j += 1
-                    if j < len(lines):
-                        i = j + 1  # drop banner line itself
-
-                        while i < len(lines) and is_blank(i):
-                            i += 1
-                        if i < len(lines) and norm(lines[i]).lower().startswith("national weather service"):
-                            i += 1
-
-                        while i < len(lines) and is_blank(i):
-                            i += 1
-                        if i < len(lines) and _HWO_ISSUED_RE.match(norm(lines[i])):
-                            i += 1
-
-                        while i < len(lines) and is_blank(i):
-                            i += 1
-
-                    body = "\n".join(lines[i:]).strip()
-                    if issued:
-                        body = f"{issued}\n{body}" if body else issued
-
-                    # Keep normal cleanup only (no content filtering)
-                    body = _scrub_nws_product_text(clean_for_tts(body))
-                    hwo_text = _trim_chars(body, self._product_max_chars("HWO", ctx.mode))
-        except Exception:
-            hwo_text = None
-
-        # --- Synopsis (NOT full ZFP) ---
-        synopsis_text = await self._build_synopsis_text(ctx)
-
-        # --- Forecast snippets (gridpoint) ---
-        fc_lines: List[str] = []
-        max_points = 1 if ctx.mode == "heightened" else (self._cycle_cfg.fc.max_points_normal if self._cycle_cfg else 6)
-        field = "shortForecast" if (self._cycle_cfg.fc.use_short if self._cycle_cfg else True) else "detailedForecast"
-
-        # 7-day style = ~14 periods (day/night)
-        max_periods = 1 if ctx.mode == "heightened" else (self._cycle_cfg.fc.periods_normal if self._cycle_cfg else 14)
-
-        # If you're reading lots of periods, reduce points automatically
-        if max_periods >= 10:
-            max_points = min(max_points, self._cycle_cfg.fc.max_points_7day if self._cycle_cfg else 2)
-        elif max_periods >= 6:
-            max_points = min(max_points, 3)
-
-        # How many periods to speak before inserting a pause/newline
-        per_group = self._cycle_cfg.fc.periods_per_group if self._cycle_cfg else 4
-
-        # Per-point safety trim (keep generous; avoid "Tuesday…" mid-cut)
-        point_max = (self._cycle_cfg.fc.point_max_chars if self._cycle_cfg else 1600)
-
-        # --- ZFP zone-aware forecast ---
-        # When forecast_zones are configured in cycle.fc, use the NWS
-        # /zones/forecast/{zoneId}/forecast endpoint (ZFP human-authored
-        # broadcast prose, same as real NWR reads).  Falls back to the
-        # legacy gridpoint path when zones list is empty or all fetches fail.
-        #
-        # ZFP differences vs gridpoint:
-        #   - Always uses detailedForecast (temps embedded in prose text)
-        #   - No temperature phrase appended (already in text: 'highs near 65')
-        #   - No isDaytime / temperature fields on zone periods
-        forecast_zones = list(self._cycle_cfg.fc.forecast_zones) if self._cycle_cfg else []
-
-        if forecast_zones:
-            # Rotate through configured zones using the same rhythm as gridpoint.
-            rot_period_z = self._cycle_cfg.fc.rotate_period_s if self._cycle_cfg else 300
-            rot_step_z = (self._cycle_cfg.fc.rotate_step or max_points) if self._cycle_cfg else max_points
-            slot_z = int(now.timestamp() // max(rot_period_z, 1))
-            offset_z = (slot_z * max(rot_step_z, 1)) % len(forecast_zones)
-            zones_rot = forecast_zones[offset_z:] + forecast_zones[:offset_z]
-
-            for zone_id, label in zones_rot[:max_points]:
-                try:
-                    periods = await self.api.zone_forecast_periods(zone_id)
-                    if not periods:
-                        continue
-
-                    entries: List[str] = []
-                    for p in periods[:max_periods]:
-                        name = (p.get("name") or "").strip()
-                        # ZFP always has detailedForecast prose; temps are
-                        # embedded -- no separate temp_phrase needed.
-                        val = (p.get("detailedForecast") or "").strip()
-                        if not val:
-                            continue
-                        name = name.replace("—", "-")
-                        val = val.replace("—", "-")
-                        name = _SPACE_RE.sub(" ", name).strip()
-                        val = _SPACE_RE.sub(" ", val).strip()
-                        entry = f"{name}: {val}" if name else val
-                        # ZFP prose already ends with '.'; the group joiner
-                        # adds its own sentence boundary, so strip the trailing
-                        # period to avoid 'mph.. Sunday:' speed-reads.
-                        entry = re.sub(r'\.\s*$', '', entry.strip())
-                        entries.append(entry)
-
-                    if not entries:
-                        continue
-
-                    groups: List[str] = []
-                    for i in range(0, len(entries), max(1, per_group)):
-                        chunk = entries[i:i + max(1, per_group)]
-                        groups.append(". ".join(chunk) + ".")
-
-                    line = f"The forecast for {label}.\n" + "\n".join(groups)
-                    line = _scrub_nws_product_text(line)
-                    line = _trim_chars(line, point_max)
-                    if line:
-                        fc_lines.append(line)
-                except Exception:
-                    continue
-
-        else:
-            # Legacy gridpoint path -- used when no forecast_zones are configured.
-            pts = list(self.points)
-            if pts:
-                rot_period = self._cycle_cfg.fc.rotate_period_s if self._cycle_cfg else 300
-                rot_step = (self._cycle_cfg.fc.rotate_step or max_points) if self._cycle_cfg else max_points
-                slot = int(now.timestamp() // max(rot_period, 1))
-                offset = (slot * max(rot_step, 1)) % len(pts)
-                pts = pts[offset:] + pts[:offset]
-
-            for lat, lon, label in pts[:max_points]:
-                try:
-                    periods = await self.api.point_forecast_periods(lat, lon)
-                    if not periods:
-                        continue
-
-                    entries: List[str] = []
-                    for p in periods[:max_periods]:
-                        name = (p.get("name") or "").strip()
-                        val = (p.get(field) or "").strip()
-                        if not val:
-                            continue
-
-                        # Temperature high/low from gridpoint forecast.
-                        # The gridpoint endpoint already returns Fahrenheit for CONUS --
-                        # no conversion needed (unlike observations, which return Celsius).
-                        # NOTE: no trailing period here -- the group joiner joins with
-                        # ". " and appends ".". A trailing period in the entry produces
-                        # a double period ("degrees.. Tonight") which Paul skips over.
-                        temp_raw = p.get("temperature")
-                        is_day = bool(p.get("isDaytime", True))
-                        temp_phrase = ""
-                        if isinstance(temp_raw, (int, float)):
-                            temp_rounded = round(temp_raw)
-                            temp_phrase = (
-                                f" With a high near {temp_rounded} degrees"
-                                if is_day
-                                else f" With a low around {temp_rounded} degrees"
-                            )
-
-                        # DECTalk pacing: kill em-dash and collapse odd whitespace
-                        name = name.replace("—", "-")
-                        val = val.replace("—", "-")
-                        name = _SPACE_RE.sub(" ", name).strip()
-                        val = _SPACE_RE.sub(" ", val).strip()
-
-                        entry = f"{name}: {val}{temp_phrase}" if name else f"{val}{temp_phrase}"
-                        entries.append(entry.strip())
-
-                    if not entries:
-                        continue
-
-                    groups: List[str] = []
-                    for i in range(0, len(entries), max(1, per_group)):
-                        chunk = entries[i:i + max(1, per_group)]
-                        # Sentence-ish pacing
-                        groups.append(". ".join(chunk) + ".")
-
-                    # Newlines create audible pauses; keep it compact but not crunched
-                    line = f"The forecast for {label}.\n" + "\n".join(groups)
-                    line = _scrub_nws_product_text(line)
-                    line = _trim_chars(line, point_max)
-
-                    if line:
-                        fc_lines.append(line)
-                except Exception:
-                    continue
-
-        # --- CWF fetch (assembled into segments below, after `segments` is defined) ---
-        cwf_text = await self._build_cwf_text(ctx)
-
-        # --- Observations (RWR primary / ASOS fallback) ---
-        # obs_text is assembled here but appended to segments below,
-        # after the forecast + CWF segments (correct NWR cycle order).
-        obs_text_rwr, _rwr_product = await self._build_obs_rwr_segment(ctx)
-        marine_obs_text = await self._build_marine_obs_segment(ctx, _rwr_product)
-
-        # --- Station ID ---
-        # --- Station ID ---
-        health_notice = (getattr(ctx, "health_notice", None) or "").strip()
-
-        if ctx.mode == "heightened":
-            station_id = (
-                f"This is the SeasonalNet I P Weather Radio Station, {station_name}, "
-                f"with station programming and streaming facilities originating from SeasonalNet, "
-                f"providing weather information for {service_area_name}. "
-                f"Due to severe weather affecting the service area, normal broadcasts have been curtailed to bring you the latest severe weather information. "
-                f"{disclaimer}"
-                # Time is announced by the live 'time' segment in CycleConductor,
-                # synthesised at push time so it is always accurate.
-            )
-        else:
-            station_id = (
-                f"This is the SeasonalNet I P Weather Radio Station, {station_name}, "
-                f"with station programming and streaming facilities originating from SeasonalNet, "
-                f"providing weather information for {service_area_name}. "
-                f"{disclaimer}"
-                # Time is announced by the live 'time' segment in CycleConductor,
-                # synthesised at push time so it is always accurate.
-            )
-        # --- Status ---
-        status_text = self.build_status_text(ctx)
-
-        segments: List[CycleSegment] = [
+        segments: list[CycleSegment] = [
             CycleSegment(key="id", title=self._registry.title_for("id"), text=station_id),
         ]
-        if health_notice:
-            segments.append(CycleSegment(key="health", title=self._registry.title_for("health"), text=health_notice))
-        segments.append(CycleSegment(key="status", title=self._registry.title_for("status"), text=status_text))
-
-        # --- HWO ---
-        if hwo_text and self._registry.enabled("hwo"):
-            segments.append(
-                CycleSegment(
-                    key="hwo",
-                    title=self._registry.title_for("hwo"),
-                    text="And now for the hazardous weather outlook for the service area. " + hwo_text,
-                )
-            )
-        else:
-            fallback = self._hwo_unavailable_segment()
-            if fallback is not None:
-                segments.append(fallback)
-
-        # --- SPC Convective Outlook (optional) ---
-        spc_text = await self._build_spc_outlook_text(ctx, now)
-        if spc_text:
-            segments.append(
-                CycleSegment(
-                    key="spc",
-                    title=self._registry.title_for("spc"),
-                    text=spc_text,
-                )
-            )
-
-
-
-        # --- “ZFP” key retained, but it’s now SYNOPSIS only (to avoid 1GB WAVs) ---
-        if synopsis_text and self._registry.enabled("zfp"):
-            segments.append(
-                CycleSegment(
-                    key="zfp",
-                    title=self._registry.title_for("zfp"),
-                    text=("This is the weather synopsis for our area. And now for the weather features affecting our region over the next several days. " + synopsis_text),
-                )
-            )
-
-        # --- Forecast ---
-        if fc_lines:
-            if ctx.mode == "heightened":
-                forecast_text = "This is the summarized forecast section for our area. " + " ".join(fc_lines)
-            else:
-                forecast_text = "This is the overall forecast section for our area from the National Weather Service. " + " ".join(fc_lines)
-            if self._registry.enabled("fcst"):
-                segments.append(CycleSegment(key="fcst", title=self._registry.title_for("fcst"), text=forecast_text))
-
-        # --- Coastal Waters Forecast ---
-        if cwf_text and self._registry.enabled("cwf"):
-            segments.append(
-                CycleSegment(
-                    key="cwf",
-                    title=self._registry.title_for("cwf"),
-                    text=(
-                        "And now for the coastal and marine weather forecast for our area. "
-                        + cwf_text
-                    ),
-                )
-            )
-
-        # --- Observations ---
-        if obs_text_rwr:
-            if self._registry.enabled("obs"):
-                segments.append(CycleSegment(key="obs", title=self._registry.title_for("obs"), text=obs_text_rwr))
-
-        # --- Marine Observations ---
-        if marine_obs_text and self._registry.enabled("marine_obs"):
-            segments.append(
-                CycleSegment(
-                    key="marine_obs",
-                    title=self._registry.title_for("marine_obs"),
-                    text=(
-                        "And now for the marine observations in the service area. "
-                        + marine_obs_text
-                    ),
-                )
-            )
-
+        health = await self.build_health_segment(request)
+        if health is not None:
+            segments.append(CycleSegment(health.key, health.title, health.text))
         segments.append(
             CycleSegment(
-                key="outro",
-                title=self._registry.title_for("outro"),
-                text="This is the end of the current broadcast cycle. Updated information will follow on the next rotation.",
+                key="status",
+                title=self._registry.title_for("status"),
+                text=self.build_status_text(ctx),
             )
         )
 
+        builders = (
+            self.build_hwo_segment,
+            self.build_spc_segment,
+            self.build_zfp_segment,
+            self.build_fcst_segment,
+            self.build_cwf_segment,
+            self.build_obs_segment,
+            self.build_marine_obs_segment,
+            self.build_outro_segment,
+        )
+        for builder in builders:
+            candidate = await builder(request)
+            if candidate is not None:
+                segments.append(CycleSegment(candidate.key, candidate.title, candidate.text))
         return segments
 
     def _hwo_unavailable_segment(self) -> CycleSegment | None:

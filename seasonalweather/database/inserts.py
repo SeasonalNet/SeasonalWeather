@@ -112,8 +112,10 @@ class CycleInsertRepository:
         now_iso: str,
         active_alert_focus: bool,
         limit: int = 3,
+        expire: bool = True,
     ) -> list[dict[str, Any]]:
-        self.expire_due(now_iso)
+        if expire:
+            self.expire_due(now_iso)
         limit = max(1, min(int(limit), 10))
         with self.db.connect() as conn:
             rows = conn.execute(

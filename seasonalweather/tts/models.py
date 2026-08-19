@@ -74,6 +74,10 @@ class SynthesisFailure(StrEnum):
     REDIRECT_REJECTED = "redirect_rejected"
 
 
+class FinalizationCallbackError(RuntimeError):
+    """A finalization callback owns the exact meaning of this exception."""
+
+
 class TtsModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
 

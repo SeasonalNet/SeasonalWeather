@@ -17,6 +17,7 @@ from seasonalweather import __version__
 
 from ..artifacts.composition import build_controller_artifact_composition
 from ..auth import AuthenticationRepository, AuthenticationService
+from ..broadcast.segment_service import SegmentApplicationService
 from ..commands import CommandStore
 from ..config import AuthMode, load_config
 from ..configuration_reload.candidate_store import CandidateStore
@@ -328,7 +329,17 @@ async def _run_api_server_impl(
         lifecycle=lifecycle,
         supervisor=supervisor,
     )
-    control = OrchestratorControl(orch, config_path=config_path)
+    segment_service = None
+    if all(hasattr(orch, name) for name in ("segment_registry", "_seg_store", "refresher", "conductor")):
+        segment_service = SegmentApplicationService(
+            registry=lambda: orch.segment_registry,
+            store=orch._seg_store,
+            refresher=orch.refresher,
+            mode=lambda: orch.mode,
+            supervisor=supervisor,
+            runtime_snapshot=orch.conductor.inspection_snapshot,
+        )
+    control = OrchestratorControl(orch, config_path=config_path, segment_service=segment_service)
     db = bootstrap_database_from_config(cfg) if getattr(cfg.database, "enabled", True) else None
     diagnostic_service, context = _prepare_runtime_diagnostics(
         database=db,
@@ -353,6 +364,11 @@ async def _run_api_server_impl(
         database=db,
         lifecycle=lifecycle,
     )
+    segment_store = getattr(orch, "_seg_store", None)
+    if segment_store is not None:
+        await segment_store.reconcile_committed_refresh_commands(command_store)
+    if segment_service is not None:
+        await segment_service.reconcile_orphaned_refreshes(command_store)
     await _initialize_job_service(
         job_service,
         command_store,

@@ -20,7 +20,9 @@ HWO is always enabled when a real HWO product is available. Its
 policy only; it suppresses or permits the synthetic unavailable speech and is
 not base HWO enablement.
 
-Builder references identify current execution seams. Most static content uses
-the shared `CycleBuilder.build_segments` path; status and station ID retain
-their existing refresher paths, and live time remains conductor-owned. P1-20
-independent builders are not introduced here.
+Builder references identify the exact execution seam. Station status and ID
+retain their existing refresher paths, live time remains conductor-owned, and
+the remaining static definitions point to one independent `CycleBuilder`
+method each. A per-segment refresh therefore cannot invoke
+`CycleBuilder.build_segments` or rebuild unrelated content. Dynamic alert and
+scheduled-insert keys remain runtime-owned.

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: (
@@ -295,5 +295,21 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
         "ALTER TABLE configuration_reload_attempts ADD COLUMN retirement_json TEXT",
         "ALTER TABLE configuration_reload_attempts ADD COLUMN retirement_evidence_json TEXT",
         "ALTER TABLE configuration_reload_attempts ADD COLUMN recovery_json TEXT",
+    ),
+    10: (
+        "ALTER TABLE cycle_segments ADD COLUMN max_age_s INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE cycle_segments ADD COLUMN source_name TEXT",
+        "ALTER TABLE cycle_segments ADD COLUMN product_identifier TEXT",
+        "ALTER TABLE cycle_segments ADD COLUMN product_type TEXT",
+        "ALTER TABLE cycle_segments ADD COLUMN issuing_office TEXT",
+        "ALTER TABLE cycle_segments ADD COLUMN issuance_time TEXT",
+        "ALTER TABLE cycle_segments ADD COLUMN fetch_time TEXT",
+        "ALTER TABLE cycle_segments ADD COLUMN last_successful_synthesis TEXT",
+        "ALTER TABLE cycle_segments ADD COLUMN content_hash TEXT",
+        "ALTER TABLE cycle_segments ADD COLUMN source_reference TEXT",
+        "ALTER TABLE cycle_segments ADD COLUMN last_error TEXT",
+        "ALTER TABLE cycle_segments ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE cycle_segments ADD COLUMN last_aired TEXT",
+        "ALTER TABLE cycle_segments ADD COLUMN next_eligible_airtime TEXT",
     ),
 }

@@ -48,30 +48,30 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from collections.abc import Callable
 from typing import AsyncContextManager
 from zoneinfo import ZoneInfo
 
 from ..alerts.active import AlertTracker
 from ..tts.tts import TTS
-from .cycle import CycleBuilder, CycleContext, CycleSegment
+from .cycle import CycleBuilder, CycleContext, CycleSegment, station_id_text
+from .segment_builders import SegmentBuildInput, sanitize_error
 from .segment_registry import (
     DEFAULT_SEGMENT_REGISTRY,
     ResolvedSegmentRegistry,
     SegmentBuilderKind,
     SegmentFailurePolicy,
 )
-from .segment_store import SegmentStore
+from .segment_store import SegmentCommitAmbiguousError, SegmentStore
 
 log = logging.getLogger("seasonalweather.segment_refresher")
 
 # How often the refresher polls for stale segments (regardless of events).
 _TICK_S: float = 30.0
 
-# Reuse a recent full build_segments() result to amortise API calls when
-# multiple segments are stale at the same time (e.g. cold start).
-_BUILD_CACHE_TTL_S: float = 20.0
+
+class SegmentRefreshCancelled(Exception):
+    """A command cancellation won before candidate publication."""
 
 
 class SegmentRefresher:
@@ -83,9 +83,8 @@ class SegmentRefresher:
     has passed its refresh interval.  External callers can request an
     immediate out-of-band refresh via ``trigger_immediate(*keys)``.
 
-    Internally, ``build_segments()`` results are cached for a short
-    window (*_BUILD_CACHE_TTL_S*) so that when several segments are
-    stale simultaneously the NWS API is only hit once.
+    Each refresh resolves one registry-declared builder method and synthesizes
+    only that target key.
     """
 
     def __init__(
@@ -125,10 +124,12 @@ class SegmentRefresher:
 
         # Immediate-refresh request queue
         self._pending: set[str] = set()
+        self._deferred_ambiguities: set[str] = set()
         self._pending_alert_sync: bool = False
         self._wake_event: asyncio.Event = asyncio.Event()
 
-        # build_segments() result cache (amortises API calls on multi-stale ticks)
+        # Retained as reload-compatible state; independent builders do not use
+        # a shared whole-cycle result cache.
         self._seg_cache: list[CycleSegment] | None = None
         self._seg_cache_ts: float = 0.0
         self._seg_cache_mode: str = ""
@@ -154,6 +155,18 @@ class SegmentRefresher:
         self._pending_alert_sync = True
         self._wake_event.set()
 
+    async def refresh_one(
+        self, key: str, *, commit_guard=None, commit_won=None, commit_aborted=None, commit_identity=None
+    ) -> None:
+        """Run one registry-admitted target refresh for an application service."""
+        await self._refresh_one(
+            key,
+            commit_guard=commit_guard,
+            commit_won=commit_won,
+            commit_aborted=commit_aborted,
+            commit_identity=commit_identity,
+        )
+
     # ------------------------------------------------------------------
     #  Main loop
     # ------------------------------------------------------------------
@@ -166,21 +179,23 @@ class SegmentRefresher:
 
         while True:
             self._wake_event.clear()
+            await self._retry_deferred_ambiguities()
 
             # Process immediately-triggered keys first
             if self._pending:
                 pending = set(self._pending)
                 self._pending.clear()
                 for key in pending:
-                    await self._refresh_one(key)
+                    if key not in self._deferred_ambiguities:
+                        await self._refresh_commandless_key(key)
 
             alert_sync_requested = self._pending_alert_sync
             self._pending_alert_sync = False
 
             # Regular stale-check pass
             for key in self._registry.refresh_keys():
-                if self._store.is_stale(key):
-                    await self._refresh_one(key)
+                if key not in self._deferred_ambiguities and self._store.is_stale(key):
+                    await self._refresh_commandless_key(key)
 
             # Sync alert-tracker voice segments.  This runs every tick, and
             # notify_alerts_changed() wakes it immediately after tracker changes.
@@ -200,28 +215,94 @@ class SegmentRefresher:
     # ------------------------------------------------------------------
 
     async def _populate_all(self) -> None:
-        """Perform initial synthesis of all content segments."""
+        """Populate only missing or stale content segments at startup."""
         log.info("SegmentRefresher: cold-start population beginning")
         for key in self._registry.refresh_keys():
-            try:
-                await self._refresh_one(key)
-            except Exception:
-                log.exception("SegmentRefresher: cold-start refresh failed key=%s", key)
+            existing = getattr(self._store, "get", lambda _key: None)(key)
+            if existing is not None and not self._store.is_stale(key):
+                continue
+            await self._refresh_commandless_key(key)
         log.info("SegmentRefresher: cold-start population complete")
+
+    async def _refresh_commandless_key(self, key: str) -> None:
+        """Own one background ambiguity without entering ordinary failure policy."""
+        try:
+            await self._refresh_one(key)
+        except SegmentCommitAmbiguousError:
+            await self._handle_commandless_ambiguity(key)
+
+    async def _handle_commandless_ambiguity(self, key: str) -> None:
+        self._deferred_ambiguities.add(key)
+        reconcile = getattr(self._store, "reconcile_commandless_refresh", None)
+        outcome = None
+        if callable(reconcile):
+            try:
+                outcome = await reconcile(key)
+            except Exception:
+                log.exception("SegmentRefresher: commandless ambiguity reconciliation failed key=%s", key)
+        outcome_value = getattr(outcome, "value", outcome)
+        if outcome_value is None or outcome_value == "still_unresolved":
+            log.warning("SegmentRefresher: deferred ambiguous background publication key=%s", key)
+        else:
+            log.warning(
+                "SegmentRefresher: isolated ambiguous background publication key=%s outcome=%s",
+                key,
+                outcome_value,
+            )
+
+    async def _synthesize_commandless_key(self, key: str, **kwargs) -> bool:
+        if key in self._deferred_ambiguities:
+            return False
+        try:
+            await self._synth(key=key, **kwargs)
+        except SegmentCommitAmbiguousError:
+            await self._handle_commandless_ambiguity(key)
+            return False
+        return True
+
+    async def _retry_deferred_ambiguities(self) -> None:
+        """Recheck deferred keys once per loop, then let normal refresh resume."""
+        reconcile = getattr(self._store, "reconcile_commandless_refresh", None)
+        if not callable(reconcile):
+            return
+        for key in tuple(self._deferred_ambiguities):
+            try:
+                outcome = await reconcile(key)
+            except Exception:
+                log.exception("SegmentRefresher: deferred ambiguity retry failed key=%s", key)
+                continue
+            if getattr(outcome, "value", outcome) != "still_unresolved":
+                self._deferred_ambiguities.discard(key)
 
     # ------------------------------------------------------------------
     #  Segment refresh dispatch
     # ------------------------------------------------------------------
 
-    async def _refresh_one(self, key: str) -> None:
+    async def _refresh_one(
+        self, key: str, *, commit_guard=None, commit_won=None, commit_aborted=None, commit_identity=None
+    ) -> None:
         """Fetch fresh text and re-synthesise audio for *key*."""
         if self._activity_context is not None:
             async with self._activity_context():
-                await self._refresh_one_untracked(key)
+                await self._refresh_one_untracked(
+                    key,
+                    commit_guard=commit_guard,
+                    commit_won=commit_won,
+                    commit_aborted=commit_aborted,
+                    commit_identity=commit_identity,
+                )
             return
-        await self._refresh_one_untracked(key)
+        await self._refresh_one_untracked(
+            key,
+            commit_guard=commit_guard,
+            commit_won=commit_won,
+            commit_aborted=commit_aborted,
+            commit_identity=commit_identity,
+        )
 
-    async def _refresh_one_untracked(self, key: str) -> None:
+    async def _refresh_one_untracked(
+        self, key: str, *, commit_guard=None, commit_won=None, commit_aborted=None, commit_identity=None
+    ) -> None:
         log.debug("SegmentRefresher: refreshing key=%s", key)
         definition = self._registry.get(key)
         if definition is None:
@@ -231,15 +312,30 @@ class SegmentRefresher:
             log.debug("SegmentRefresher: disabled key=%s, skipping", key)
             return
         try:
-            if definition.builder.kind is SegmentBuilderKind.REFRESHER_ID:
-                await self._refresh_id()
-            elif definition.builder.kind is SegmentBuilderKind.REFRESHER_STATUS:
-                await self._refresh_status()
-            elif definition.builder.kind is SegmentBuilderKind.CYCLE_BUILDER_SEGMENTS:
-                await self._refresh_via_build(key)
-            else:
-                log.warning("SegmentRefresher: unsupported builder seam=%s key=%s", definition.builder, key)
-        except Exception:
+            await self._dispatch_refresh(
+                definition.builder.kind,
+                key,
+                commit_guard=commit_guard,
+                commit_won=commit_won,
+                commit_aborted=commit_aborted,
+                commit_identity=commit_identity,
+            )
+        except SegmentRefreshCancelled:
+            raise
+        except SegmentCommitAmbiguousError:
+            # Publication ambiguity is authoritative SegmentStore evidence,
+            # not an ordinary builder/source failure.  The application
+            # service or startup reconciliation must resolve it first.
+            raise
+        except Exception as exc:
+            if hasattr(self._store, "record_failure"):
+                await self._store.record_failure(
+                    key,
+                    sanitize_error(exc) or "segment refresh failed",
+                    title=self._registry.title_for(key, key),
+                    refresh_interval_s=self._registry.refresh_cadence(key),
+                    max_age_s=self._registry.max_age(key),
+                )
             if definition.failure_policy.value == SegmentFailurePolicy.RETAIN_LAST_KNOWN_GOOD.value:
                 log.exception("SegmentRefresher: refresh failed key=%s; retaining last known good", key)
             else:
@@ -251,38 +347,42 @@ class SegmentRefresher:
                 )
                 log.exception("SegmentRefresher: refresh failed key=%s; marked placeholder", key)
 
+    async def _dispatch_refresh(
+        self, kind, key: str, *, commit_guard=None, commit_won=None, commit_aborted=None, commit_identity=None
+    ) -> None:
+        guarded = commit_guard is not None or commit_won is not None or commit_aborted is not None
+        kwargs = {
+            "commit_guard": commit_guard,
+            "commit_won": commit_won,
+            "commit_aborted": commit_aborted,
+            "commit_identity": commit_identity,
+        }
+        if kind is SegmentBuilderKind.REFRESHER_ID:
+            await self._refresh_id(**kwargs) if guarded else await self._refresh_id()
+        elif kind is SegmentBuilderKind.REFRESHER_STATUS:
+            await self._refresh_status(**kwargs) if guarded else await self._refresh_status()
+        elif kind is SegmentBuilderKind.INDEPENDENT_SEGMENT:
+            await self._refresh_via_build(key, **kwargs) if guarded else await self._refresh_via_build(key)
+        else:
+            definition = self._registry.get(key)
+            log.warning(
+                "SegmentRefresher: unsupported builder seam=%s key=%s", definition.builder if definition else key, key
+            )
+
     # ------------------------------------------------------------------
     #  Per-segment builders
     # ------------------------------------------------------------------
 
-    async def _refresh_id(self) -> None:
+    async def _refresh_id(
+        self, *, commit_guard=None, commit_won=None, commit_aborted=None, commit_identity=None
+    ) -> None:
         """
         Rebuild the station ID segment.  The time sentence is intentionally
         omitted — the conductor synthesises the "time" segment live at push
         time so the spoken time is always accurate.
         """
         ctx = self._ctx_fn()
-        if getattr(ctx, "health_detached_loop_only", False):
-            text = (
-                getattr(ctx, "health_notice", None)
-                or "SeasonalWeather is temporarily unable to receive current National Weather Service information. Please use another weather information source or visit weather.gov for the latest information."
-            ).strip()
-        elif ctx.mode == "heightened":
-            text = (
-                f"This is the SeasonalNet I P Weather Radio Station, {self._station_name}, "
-                f"with station programming and streaming facilities originating from SeasonalNet, "
-                f"providing weather information for {self._service_area_name}. "
-                f"Due to severe weather affecting the service area, normal broadcasts have been "
-                f"curtailed to bring you the latest severe weather information. "
-                f"{self._disclaimer}"
-            )
-        else:
-            text = (
-                f"This is the SeasonalNet I P Weather Radio Station, {self._station_name}, "
-                f"with station programming and streaming facilities originating from SeasonalNet, "
-                f"providing weather information for {self._service_area_name}. "
-                f"{self._disclaimer}"
-            )
+        text = station_id_text(ctx, self._station_name, self._service_area_name, self._disclaimer)
 
         await self._synth(
             key="id",
@@ -290,9 +390,15 @@ class SegmentRefresher:
             title=self._registry.title_for("id"),
             interval=self._registry.refresh_cadence("id"),
             max_age=self._registry.max_age("id"),
+            publication_fence=commit_guard,
+            publication_committed=commit_won,
+            publication_aborted=commit_aborted,
+            commit_identity=commit_identity,
         )
 
-    async def _refresh_status(self) -> None:
+    async def _refresh_status(
+        self, *, commit_guard=None, commit_won=None, commit_aborted=None, commit_identity=None
+    ) -> None:
         """Rebuild station status without making an upstream NWS API request."""
         ctx = self._ctx_fn()
         if getattr(ctx, "health_detached_loop_only", False):
@@ -310,69 +416,69 @@ class SegmentRefresher:
             title=self._registry.title_for("status"),
             interval=self._registry.refresh_cadence("status"),
             max_age=self._registry.max_age("status"),
+            publication_fence=commit_guard,
+            publication_committed=commit_won,
+            publication_aborted=commit_aborted,
+            commit_identity=commit_identity,
         )
 
-    async def _refresh_via_build(self, key: str) -> None:
+    async def _refresh_via_build(
+        self, key: str, *, commit_guard=None, commit_won=None, commit_aborted=None, commit_identity=None
+    ) -> None:
         """
-        Refresh a segment whose text comes from CycleBuilder.build_segments().
-        Uses a short-lived result cache to amortise API calls when several
-        segments are stale in the same tick.
+        Refresh one segment through its registry-declared independent method.
         """
         ctx = self._ctx_fn()
-        segs = await self._get_segments(ctx)
-
-        # Admit the unavailable alias only when the registry enables fallback.
-        aliases = {key}
-        if key == "hwo" and self._registry.fallback_enabled("hwo"):
-            aliases.add("hwo-unavailable")
-        seg = next((s for s in segs if s.key in aliases), None)
-
-        if seg is None or not seg.text.strip():
-            await self._store.mark_placeholder(
-                key,
-                self._registry.title_for(key, key),
-                self._registry.refresh_cadence(key),
-                max_age_s=self._registry.max_age(key),
+        definition = self._registry.get(key)
+        if definition is None:
+            raise RuntimeError(f"independent builder is unavailable for {key}")
+        operation = definition.builder.operation.rsplit(".", 1)[-1]
+        method = getattr(self._builder, operation, None)
+        if method is None:
+            raise RuntimeError(f"independent builder is unavailable for {key}")
+        candidate = await method(
+            SegmentBuildInput(
+                key=key,
+                context=ctx,
+                station_name=self._station_name,
+                service_area_name=self._service_area_name,
+                disclaimer=self._disclaimer,
             )
-            log.debug("SegmentRefresher: key=%s not available — marked placeholder", key)
+        )
+
+        if candidate is None:
+            record_failure = getattr(self._store, "record_failure", None)
+            if callable(record_failure):
+                await record_failure(
+                    key,
+                    "independent builder returned no candidate",
+                    title=self._registry.title_for(key, key),
+                    refresh_interval_s=self._registry.refresh_cadence(key),
+                    max_age_s=self._registry.max_age(key),
+                )
+            else:
+                await self._store.mark_placeholder(
+                    key,
+                    self._registry.title_for(key, key),
+                    self._registry.refresh_cadence(key),
+                    max_age_s=self._registry.max_age(key),
+                    error="independent builder returned no candidate",
+                )
+            log.debug("SegmentRefresher: key=%s unavailable — recorded failure evidence", key)
             return
 
         await self._synth(
             key=key,
-            text=seg.text,
-            title=self._registry.title_for(key, seg.title or key),
+            text=candidate.text,
+            title=self._registry.title_for(key, candidate.title or key),
             interval=self._registry.refresh_cadence(key),
             max_age=self._registry.max_age(key),
+            provenance=candidate.provenance,
+            publication_fence=commit_guard,
+            publication_committed=commit_won,
+            publication_aborted=commit_aborted,
+            commit_identity=commit_identity,
         )
-
-    # ------------------------------------------------------------------
-    #  build_segments() cache
-    # ------------------------------------------------------------------
-
-    async def _get_segments(self, ctx: CycleContext) -> list[CycleSegment]:
-        """
-        Return a recent CycleBuilder.build_segments() result, re-fetching
-        only when the cache has expired or the mode has changed.
-        """
-        now = time.time()
-        cache_mode = f"{ctx.mode}|{getattr(ctx, 'health_mode', 'normal')}|{bool(getattr(ctx, 'health_detached_loop_only', False))}"
-        if (
-            self._seg_cache is not None
-            and (now - self._seg_cache_ts) < _BUILD_CACHE_TTL_S
-            and self._seg_cache_mode == cache_mode
-        ):
-            return self._seg_cache
-
-        segs = await self._builder.build_segments(
-            station_name=self._station_name,
-            service_area_name=self._service_area_name,
-            disclaimer=self._disclaimer,
-            ctx=ctx,
-        )
-        self._seg_cache = segs
-        self._seg_cache_ts = now
-        self._seg_cache_mode = cache_mode
-        return segs
 
     # ------------------------------------------------------------------
     #  Alert-tracker segment sync
@@ -404,13 +510,13 @@ class SegmentRefresher:
                             ae.id,
                             ae.event,
                         )
-                        await self._synth(
+                        if await self._synthesize_commandless_key(
                             key=store_key,
                             text=ae.script_text,
                             title=f"{ae.event}." if ae.event else "Active alert.",
                             interval=0,  # on-demand only; tracker owns expiry
-                        )
-                        changed = True
+                        ):
+                            changed = True
                     else:
                         await self._store.mark_placeholder(
                             store_key,
@@ -433,13 +539,13 @@ class SegmentRefresher:
                         "SegmentRefresher: alert script changed, re-synthesising id=%s",
                         ae.id,
                     )
-                    await self._synth(
+                    if await self._synthesize_commandless_key(
                         key=store_key,
                         text=ae.script_text,
                         title=f"{ae.event}." if ae.event else "Active alert.",
                         interval=0,
-                    )
-                    changed = True
+                    ):
+                        changed = True
 
             # Mark departed entries as placeholders
             departed = self._known_alert_ids - active_ids
@@ -481,6 +587,11 @@ class SegmentRefresher:
         title: str,
         interval: int,
         max_age: int = 0,
+        provenance=None,
+        publication_fence=None,
+        publication_committed=None,
+        publication_aborted=None,
+        commit_identity=None,
     ) -> None:
         """
         Synthesise *text* for *key* and update the store.
@@ -498,6 +609,11 @@ class SegmentRefresher:
             max_age_s=max_age,
             sample_rate=self._sample_rate,
             seg_gap_s=self._seg_gap_s,
+            provenance=provenance,
+            publication_fence=publication_fence,
+            publication_committed=publication_committed,
+            publication_aborted=publication_aborted,
+            command_id=commit_identity,
         )
         log.info(
             "SegmentRefresher: synthesised key=%s dur=%.1fs title=%r",

@@ -18,6 +18,7 @@ import logging
 import sys
 import time
 from pathlib import Path
+from typing import cast
 from zoneinfo import ZoneInfo
 
 from .config import AppConfig, load_config
@@ -339,6 +340,7 @@ class Orchestrator:
             work_dir=Path(cfg.paths.work_dir),
             audio_dir=Path(cfg.paths.audio_dir),
             database=self.database,
+            static_key_predicate=self.segment_registry.is_managed,
         )
         self._seg_store.load()
 
@@ -377,7 +379,9 @@ class Orchestrator:
             mode_fn=lambda: self.mode,
             alert_focus_policy=cfg.cycle.alert_focus,
             scheduled_inserts_fn=self._cycle_due_inserts,
+            scheduled_inserts_snapshot_fn=self._cycle_due_inserts_snapshot,
             mark_insert_aired_fn=self._mark_cycle_insert_aired,
+            mark_segment_aired_fn=self._mark_segment_aired,
             activity_context=lambda: self.reload_activities.async_activity(RELOAD_CONDUCTOR_ACTIVITY),
         )
         self.alert_tracker.set_change_callback(self._on_alert_tracker_changed)
@@ -386,15 +390,34 @@ class Orchestrator:
         when = value or dt.datetime.now(dt.UTC)
         return when.astimezone(dt.UTC).replace(microsecond=0).isoformat()
 
-    def _cycle_due_inserts(self, placement: str, rotation_count: int, focus: bool) -> list[dict]:
+    def _cycle_due_inserts(
+        self, placement: str, rotation_count: int, focus: bool, now_iso: str | None = None
+    ) -> list[dict]:
         repo = getattr(self, "cycle_insert_repo", None)
         if repo is None:
             return []
         return repo.list_due(
             placement=placement,
             rotation_count=rotation_count,
-            now_iso=self._utc_iso(),
+            now_iso=now_iso or self._utc_iso(),
             active_alert_focus=focus,
+        )
+
+    def _cycle_due_inserts_snapshot(
+        self, placement: str, rotation_count: int, focus: bool, now_iso: str | None = None
+    ) -> list[dict]:
+        repo = getattr(self, "cycle_insert_repo", None)
+        if repo is None:
+            return []
+        return cast(
+            list[dict],
+            repo.list_due(
+                placement=placement,
+                rotation_count=rotation_count,
+                now_iso=now_iso or self._utc_iso(),
+                active_alert_focus=focus,
+                expire=False,
+            ),
         )
 
     def _mark_cycle_insert_aired(self, insert_id: str, rotation_count: int) -> None:
@@ -406,6 +429,11 @@ class Orchestrator:
             aired_at=self._utc_iso(),
             rotation_count=rotation_count,
         )
+
+    def _mark_segment_aired(self, key: str) -> None:
+        now = dt.datetime.now(dt.UTC).replace(microsecond=0)
+        next_eligible = now + dt.timedelta(seconds=self.segment_registry.minimum_air_interval(key))
+        self._seg_store.mark_aired(key, now.isoformat(), next_eligible.isoformat())
 
     def _on_alert_tracker_changed(self, reason: str) -> None:
         """Wake audio synthesis and reset rotation after active-alert state changes."""

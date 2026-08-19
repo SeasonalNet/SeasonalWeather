@@ -328,6 +328,7 @@ segment_registry_canonical_keys = [
   "cwf",
   "obs",
   "marine_obs",
+  "outro",
 ]
 segment_registry_owner_roots = ["seasonalweather/broadcast/segment_registry.py"]
 segment_registry_forbidden_imports = [
@@ -348,6 +349,39 @@ segment_registry_forbidden_imports = [
   "seasonalweather.workers",
 ]
 api_runtime_diagnostics_allowed = ["seasonalweather/api/server.py"]
+
+# P1-20 segment execution and inspection boundaries.  These rules are
+# intentionally narrow: the API route layer and application service may use
+# their typed collaborators, but they do not acquire runtime mutation owners;
+# CycleBuilder remains a source/assembly boundary and never promotes audio.
+segment_api_roots = ["seasonalweather/api/api.py"]
+segment_api_forbidden_imports = [
+  "seasonalweather.database",
+  "seasonalweather.tts",
+  "seasonalweather.liquidsoap_telnet",
+  "seasonalweather.broadcast.conductor",
+]
+segment_builder_roots = ["seasonalweather/broadcast/cycle.py"]
+segment_builder_forbidden_imports = [
+  "seasonalweather.broadcast.segment_store",
+  "seasonalweather.liquidsoap_telnet",
+  "seasonalweather.broadcast.conductor",
+]
+segment_builder_forbidden_calls = [
+  "os.replace",
+  "os.rename",
+  "Path.replace",
+  "Path.rename",
+  "SegmentStore",
+]
+segment_service_roots = ["seasonalweather/broadcast/segment_service.py"]
+segment_service_forbidden_imports = [
+  "seasonalweather.database",
+  "seasonalweather.tts",
+  "seasonalweather.liquidsoap_telnet",
+  "seasonalweather.broadcast.conductor",
+]
+segment_control_forbidden_calls = ["SegmentApplicationService"]
 api_diagnostics_forbidden_imports = [
   "seasonalweather.diagnostics.compiler",
   "seasonalweather.diagnostics.exporter",

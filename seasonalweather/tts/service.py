@@ -33,6 +33,7 @@ from .models import (
     ArtifactEvidence,
     BackendId,
     FallbackMetadata,
+    FinalizationCallbackError,
     FinalizationContext,
     LastKnownGoodCandidate,
     SynthesisDisposition,
@@ -324,6 +325,11 @@ class SynthesisService:
                     started,
                     disposition=disposition,
                 )
+            except FinalizationCallbackError:
+                # Controller publication callbacks may carry exact durable
+                # ambiguity evidence. Preserve that callback-owned result
+                # across the generic media/output translation boundary.
+                raise
             except (IndexError, OSError, RuntimeError, ValueError):
                 return self._failed(
                     request,

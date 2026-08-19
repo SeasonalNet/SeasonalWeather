@@ -30,7 +30,8 @@ import asyncio
 import datetime as dt
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncContextManager
 from zoneinfo import ZoneInfo
@@ -42,7 +43,7 @@ from ..tts.async_bridge import FinalizationEvidence, synthesize_completed_wav_as
 from ..tts.audio import concat_wavs, wav_duration_seconds, write_silence_wav
 from ..tts.tts import TTS
 from .segment_registry import DEFAULT_SEGMENT_REGISTRY, ResolvedSegmentRegistry, SegmentBuilderKind
-from .segment_store import SegmentStore
+from .segment_store import SegmentStore, segment_entry_eligible_to_air
 
 log = logging.getLogger("seasonalweather.conductor")
 
@@ -67,6 +68,57 @@ _MAX_PUSHES_PER_TICK: int = 30
 # avoids opening a telnet connection every few hundred milliseconds throughout
 # long alerts, while the final status check covers queued/preempted alerts.
 _INTERRUPT_STATUS_POLL_S: float = 0.5
+
+
+def focus_mode_from_inputs(alerts: Iterable[Any], policy: AlertFocusPolicy, mode: object) -> bool:
+    """Pure focus projection shared by mutation and read-only inspection."""
+    try:
+        if any(alert_holds_focus(alert, policy) for alert in alerts):
+            return True
+    except Exception:
+        pass
+    try:
+        return str(mode or "").strip().lower() == "heightened"
+    except Exception:
+        return False
+
+
+def deferred_focus_projection(
+    registry: ResolvedSegmentRegistry,
+    *,
+    now: float,
+    last_pushed_at: dict[str, float],
+    focus: bool,
+    previously_focused: bool,
+) -> tuple[dict[str, float], tuple[str, ...]]:
+    """Purely project focus-entry timer reset and deferred due order."""
+    projected = dict(last_pushed_at)
+    if focus and not previously_focused:
+        for key in registry.deferred_focus_keys():
+            projected[key] = now
+    due = tuple(
+        key
+        for key in registry.deferred_focus_keys()
+        if focus and now - projected.get(key, now) >= registry.minimum_air_interval(key)
+    )
+    return projected, due
+
+
+@dataclass(frozen=True)
+class CycleOrderProjection:
+    """One pure, internally consistent projection of the next rotation."""
+
+    registry: ResolvedSegmentRegistry
+    focus: bool
+    projected_timers: dict[str, float]
+    due_deferred_keys: tuple[str, ...]
+    static_order: tuple[str, ...]
+    alert_order: tuple[str, ...]
+    scheduled_insert_placements: tuple[tuple[str, tuple[str, ...]], ...]
+    order: tuple[str, ...]
+    runtime_items: tuple[dict[str, Any], ...]
+    insert_cache: dict[str, dict[str, Any]]
+
 
 # ---------------------------------------------------------------------------
 #  Time formatting (mirrors cycle.py — kept local to avoid a circular import)
@@ -98,6 +150,10 @@ def _fmt_time(now: dt.datetime) -> str:
 def _short_tz(now: dt.datetime) -> str:
     tok = (now.tzname() or "").strip()
     return _TZ_NAME_MAP.get(tok.upper(), tok or "local")
+
+
+def _rotation_now_iso(now: float) -> str:
+    return dt.datetime.fromtimestamp(now, dt.UTC).replace(microsecond=0).isoformat()
 
 
 # ---------------------------------------------------------------------------
@@ -134,8 +190,10 @@ class CycleConductor:
         active_alerts_fn: Callable[[], int] | None = None,
         mode_fn: Callable[[], str] | None = None,
         alert_focus_policy: AlertFocusPolicy | None = None,
-        scheduled_inserts_fn: Callable[[str, int, bool], list[dict[str, Any]]] | None = None,
+        scheduled_inserts_fn: Callable[[str, int, bool, str], list[dict[str, Any]]] | None = None,
+        scheduled_inserts_snapshot_fn: Callable[[str, int, bool, str], list[dict[str, Any]]] | None = None,
         mark_insert_aired_fn: Callable[[str, int], Any] | None = None,
+        mark_segment_aired_fn: Callable[[str], Any] | None = None,
         activity_context: Callable[[], AsyncContextManager[None]] | None = None,
     ) -> None:
         """
@@ -178,7 +236,9 @@ class CycleConductor:
         self._mode_fn = mode_fn
         self._alert_focus_policy = alert_focus_policy or AlertFocusPolicy()
         self._scheduled_inserts_fn = scheduled_inserts_fn
+        self._scheduled_inserts_snapshot_fn = scheduled_inserts_snapshot_fn
         self._mark_insert_aired_fn = mark_insert_aired_fn
+        self._mark_segment_aired_fn = mark_segment_aired_fn
         self._activity_context = activity_context
         self._seg_gap_s = seg_gap_s
         self._lookahead_s = lookahead_s
@@ -277,6 +337,51 @@ class CycleConductor:
         """Estimated seconds of audio buffered ahead in Liquidsoap."""
         consumed = time.time() - self._push_start_ts
         return max(0.0, self._total_pushed_s - consumed)
+
+    def inspection_snapshot(self) -> dict[str, Any]:
+        """Return one immutable runtime/order projection without mutation."""
+        now = time.time()
+        try:
+            alerts = tuple(self._alert_tracker.get_cycle_alerts())
+        except Exception:
+            alerts = ()
+        try:
+            mode = self._mode_fn() if self._mode_fn else ""
+        except Exception:
+            mode = ""
+        projection = self._project_next_rotation(
+            now=now,
+            alerts=alerts,
+            mode=mode,
+            rotation_count=self._rotation_count + 1,
+            read_only=True,
+        )
+        due_set = set(projection.due_deferred_keys)
+        deferred: list[dict[str, Any]] = []
+        for key in self._registry.deferred_focus_keys():
+            entry = self._store.get(key)
+            provenance = entry.provenance if entry is not None else None
+            deferred.append(
+                {
+                    "key": key,
+                    "due": key in due_set,
+                    "last_aired": provenance.last_aired if provenance is not None else None,
+                    "next_eligible": provenance.next_eligible_airtime if provenance is not None else None,
+                }
+            )
+        return {
+            "mode": mode,
+            "focus": projection.focus,
+            "deferred": tuple(deferred),
+            "deferred_keys": tuple(item["key"] for item in deferred),
+            "deferred_due_keys": tuple(item["key"] for item in deferred if item["due"]),
+            "order": projection.order,
+            "runtime_items": projection.runtime_items,
+            "projected_timers": tuple(sorted(projection.projected_timers.items())),
+            # Internal-only identity consumed by SegmentApplicationService;
+            # it is removed before any public response is returned.
+            "_registry": projection.registry,
+        }
 
     # ------------------------------------------------------------------
     #  Main async loop
@@ -377,55 +482,205 @@ class CycleConductor:
     #  Segment push orchestration
     # ------------------------------------------------------------------
 
-    def _focus_mode_enabled(self, now: float) -> bool:
-        active = False
-        try:
-            active = any(alert_holds_focus(a, self._alert_focus_policy) for a in self._alert_tracker.get_cycle_alerts())
-        except Exception:
-            active = False
-        try:
-            if self._mode_fn and (self._mode_fn() or "").strip().lower() == "heightened":
-                active = True
-        except Exception:
-            pass
-
-        if active and not self._focus_mode_active:
-            # Entering heightened/alert focus: postpone routine products from
-            # this point so the next several rotations are severe-weather first.
-            for key in self._registry.deferred_focus_keys():
-                self._last_pushed_at[key] = now
-            log.info("CycleConductor: alert-focus mode entered — routine segments deferred")
-        elif not active and self._focus_mode_active:
-            log.info("CycleConductor: alert-focus mode cleared — normal segment cadence restored")
-
-        self._focus_mode_active = active
-        return active
-
-    def _deferred_focus_segments_due(self, now: float) -> list[str]:
-        due: list[str] = []
-        for key in self._registry.deferred_focus_keys():
-            min_gap_s = self._registry.minimum_air_interval(key)
-            last = self._last_pushed_at.get(key, now)
-            if now - last >= min_gap_s:
-                due.append(key)
-        return due
-
-    def _insert_keys_for(self, placement: str, *, rotation_count: int, focus: bool) -> list[str]:
-        if not self._scheduled_inserts_fn:
+    def _scheduled_insert_items_for(
+        self,
+        placement: str,
+        *,
+        rotation_count: int,
+        focus: bool,
+        read_only: bool,
+        now_iso: str,
+    ) -> list[dict[str, Any]]:
+        callback = self._scheduled_inserts_snapshot_fn if read_only else self._scheduled_inserts_fn
+        if callback is None:
             return []
-        keys: list[str] = []
+        items: list[dict[str, Any]] = []
         try:
-            for item in self._scheduled_inserts_fn(placement, rotation_count, focus) or []:
+            for item in callback(placement, rotation_count, focus, now_iso) or []:
                 insert_id = str(item.get("insert_id") or "").strip()
                 audio_path = str(item.get("audio_path") or "").strip()
                 if not insert_id or not audio_path:
                     continue
-                key = f"_insert_{insert_id}"
-                self._insert_cache[key] = dict(item)
-                keys.append(key)
+                items.append(dict(item))
         except Exception:
             log.exception("CycleConductor: could not fetch scheduled inserts placement=%s", placement)
-        return keys
+        return items
+
+    def _project_alert_items(self, alerts: tuple[Any, ...]) -> tuple[list[str], list[dict[str, Any]]]:
+        keys: list[str] = []
+        runtime_items: list[dict[str, Any]] = []
+        for alert in alerts:
+            alert_id = str(getattr(alert, "id", "")).strip()
+            if not alert_id:
+                continue
+            key = f"_alert_{alert_id}"
+            keys.append(key)
+            entry = self._store.get(key)
+            runtime_items.append(
+                {
+                    "key": key,
+                    "kind": "alert",
+                    "alert_id": alert_id,
+                    "title": entry.title if entry is not None else "Active alert",
+                    "ready": segment_entry_eligible_to_air(entry),
+                }
+            )
+        return keys, runtime_items
+
+    def _project_insert_items(
+        self,
+        placement: str,
+        *,
+        rotation_count: int,
+        focus: bool,
+        read_only: bool,
+        now_iso: str,
+    ) -> tuple[list[str], dict[str, dict[str, Any]], list[dict[str, Any]]]:
+        keys: list[str] = []
+        insert_cache: dict[str, dict[str, Any]] = {}
+        runtime_items: list[dict[str, Any]] = []
+        for item in self._scheduled_insert_items_for(
+            placement,
+            rotation_count=rotation_count,
+            focus=focus,
+            read_only=read_only,
+            now_iso=now_iso,
+        ):
+            insert_id = str(item["insert_id"]).strip()
+            key = f"_insert_{insert_id}"
+            keys.append(key)
+            if not read_only:
+                insert_cache[key] = item
+            runtime_items.append(
+                {
+                    "key": key,
+                    "kind": "scheduled_insert",
+                    "insert_id": insert_id,
+                    "title": str(item.get("title") or "Scheduled announcement."),
+                    "placement": placement,
+                    "ready": Path(str(item.get("audio_path") or "")).is_file(),
+                }
+            )
+        return keys, insert_cache, runtime_items
+
+    def _project_cycle_order(
+        self,
+        *,
+        now: float,
+        focus: bool,
+        rotation_count: int,
+        alerts: tuple[Any, ...],
+        read_only: bool,
+        now_iso: str,
+        static_order: tuple[str, ...] | None = None,
+        due_deferred_keys: tuple[str, ...] = (),
+    ) -> tuple[list[str], dict[str, dict[str, Any]], list[dict[str, Any]]]:
+        """Project the next order without changing conductor state."""
+        order: list[str] = []
+        insert_cache: dict[str, dict[str, Any]] = {}
+        runtime_items: list[dict[str, Any]] = []
+
+        for static_key in static_order if static_order is not None else self._registry.static_order(focus=focus):
+            order.append(static_key)
+            runtime_items.append({"key": static_key, "kind": "static"})
+            if static_key == "time":
+                alert_keys, alert_items = self._project_alert_items(alerts)
+                order.extend(alert_keys)
+                runtime_items.extend(alert_items)
+                insert_keys, inserts, insert_items = self._project_insert_items(
+                    "after_time",
+                    rotation_count=rotation_count,
+                    focus=focus,
+                    read_only=read_only,
+                    now_iso=now_iso,
+                )
+                order.extend(insert_keys)
+                insert_cache.update(inserts)
+                runtime_items.extend(insert_items)
+            elif static_key == "status":
+                insert_keys, inserts, insert_items = self._project_insert_items(
+                    "after_status",
+                    rotation_count=rotation_count,
+                    focus=focus,
+                    read_only=read_only,
+                    now_iso=now_iso,
+                )
+                order.extend(insert_keys)
+                insert_cache.update(inserts)
+                runtime_items.extend(insert_items)
+
+        if focus:
+            for key in due_deferred_keys:
+                if key not in order:
+                    order.append(key)
+                    runtime_items.append({"key": key, "kind": "static"})
+
+        insert_keys, inserts, insert_items = self._project_insert_items(
+            "end_of_rotation",
+            rotation_count=rotation_count,
+            focus=focus,
+            read_only=read_only,
+            now_iso=now_iso,
+        )
+        order.extend(insert_keys)
+        insert_cache.update(inserts)
+        runtime_items.extend(insert_items)
+        return order, insert_cache, runtime_items
+
+    def _project_next_rotation(
+        self,
+        *,
+        now: float,
+        alerts: tuple[Any, ...],
+        mode: object,
+        rotation_count: int,
+        read_only: bool,
+    ) -> CycleOrderProjection:
+        """Capture one pure projection for inspection or mutation."""
+        focus = focus_mode_from_inputs(alerts, self._alert_focus_policy, mode)
+        projected_timers, due_deferred_keys = deferred_focus_projection(
+            self._registry,
+            now=now,
+            last_pushed_at=self._last_pushed_at,
+            focus=focus,
+            previously_focused=self._focus_mode_active,
+        )
+        static_order = tuple(self._registry.static_order(focus=focus))
+        now_iso = _rotation_now_iso(now)
+        order, insert_cache, runtime_items = self._project_cycle_order(
+            now=now,
+            focus=focus,
+            rotation_count=rotation_count,
+            alerts=alerts,
+            read_only=read_only,
+            static_order=static_order,
+            due_deferred_keys=due_deferred_keys,
+            now_iso=now_iso,
+        )
+        alert_order = tuple(item["key"] for item in runtime_items if item.get("kind") == "alert")
+        placements = tuple(
+            (
+                placement,
+                tuple(
+                    item["key"]
+                    for item in runtime_items
+                    if item.get("kind") == "scheduled_insert" and item.get("placement") == placement
+                ),
+            )
+            for placement in ("after_time", "after_status", "end_of_rotation")
+        )
+        return CycleOrderProjection(
+            registry=self._registry,
+            focus=focus,
+            projected_timers=projected_timers,
+            due_deferred_keys=tuple(due_deferred_keys),
+            static_order=static_order,
+            alert_order=alert_order,
+            scheduled_insert_placements=placements,
+            order=tuple(order),
+            runtime_items=tuple(runtime_items),
+            insert_cache=insert_cache,
+        )
 
     def _rebuild_cycle_order(self) -> None:
         """
@@ -475,33 +730,31 @@ class CycleConductor:
         self._rotation_seg_count = 0
         self._rotation_start_ts = now
 
-        focus = self._focus_mode_enabled(now)
-        static_order = self._registry.static_order(focus=focus)
-        order: list[str] = []
-        self._insert_cache = {}
-
-        for static_key in static_order:
-            order.append(static_key)
-            if static_key == "time":
-                try:
-                    for ae in self._alert_tracker.get_cycle_alerts():
-                        order.append(f"_alert_{ae.id}")
-                except Exception:
-                    log.exception("CycleConductor: could not fetch cycle alerts")
-                order.extend(self._insert_keys_for("after_time", rotation_count=self._rotation_count, focus=focus))
-            elif static_key == "status":
-                order.extend(self._insert_keys_for("after_status", rotation_count=self._rotation_count, focus=focus))
-
-        if focus:
-            due = self._deferred_focus_segments_due(now)
-            if due:
-                order.extend(due)
-                log.info(
-                    "CycleConductor: deferred routine segments due in focus mode: %s",
-                    ",".join(due),
-                )
-
-        order.extend(self._insert_keys_for("end_of_rotation", rotation_count=self._rotation_count, focus=focus))
+        try:
+            alerts = tuple(self._alert_tracker.get_cycle_alerts())
+        except Exception:
+            alerts = ()
+            log.exception("CycleConductor: could not fetch cycle alerts")
+        try:
+            mode = self._mode_fn() if self._mode_fn else ""
+        except Exception:
+            mode = ""
+        projection = self._project_next_rotation(
+            now=now,
+            rotation_count=self._rotation_count,
+            alerts=alerts,
+            mode=mode,
+            read_only=False,
+        )
+        self._focus_mode_active = projection.focus
+        self._last_pushed_at = projection.projected_timers
+        self._insert_cache = projection.insert_cache
+        order = list(projection.order)
+        if projection.focus and projection.due_deferred_keys:
+            log.info(
+                "CycleConductor: deferred routine segments due in focus mode: %s",
+                ",".join(projection.due_deferred_keys),
+            )
         previous_order = list(self._last_cycle_order)
         self._cycle_order = order
         self._last_cycle_order = list(order)
@@ -520,13 +773,13 @@ class CycleConductor:
             self._rotation_count,
             len(order),
             alert_count,
-            focus,
+            projection.focus,
         )
         try:
             if self._discord_fn and previous_order and (added or removed):
                 self._discord_fn(
                     reason="order-rebuild",
-                    mode="focus" if focus else "normal",
+                    mode="focus" if projection.focus else "normal",
                     interval=0,
                     seq_dur=0.0,
                     segments=len(order),
@@ -625,19 +878,13 @@ class CycleConductor:
         so a temporarily unavailable product never stops the broadcast.
         """
         entry = self._store.get(key)
-        if entry is None or entry.is_placeholder:
+        if not segment_entry_eligible_to_air(entry):
             log.debug("CycleConductor: skipping unavailable segment key=%s", key)
+            return 0.0
+        if entry is None:
             return 0.0
 
         audio = Path(entry.audio_path)
-        if not audio.exists():
-            log.warning(
-                "CycleConductor: audio file missing key=%s path=%s",
-                key,
-                audio,
-            )
-            return 0.0
-
         title = self._registry.title_for(key, entry.title or key)
         meta = self._np_meta_fn(
             title=title,
@@ -652,6 +899,11 @@ class CycleConductor:
 
         self._rotation_seg_count += 1
         self._last_pushed_at[key] = time.time()
+        if self._mark_segment_aired_fn is not None:
+            try:
+                self._mark_segment_aired_fn(key)
+            except Exception:
+                log.exception("CycleConductor: failed to persist airing evidence key=%s", key)
         log.info("CycleConductor: → %s (%.1fs)", key, entry.duration_s)
         return entry.duration_s
 
@@ -664,11 +916,13 @@ class CycleConductor:
         store_key = f"_alert_{alert_id}"
         entry = self._store.get(store_key)
 
-        if entry is None or entry.is_placeholder:
+        if not segment_entry_eligible_to_air(entry):
             log.debug(
                 "CycleConductor: alert segment not ready id=%s",
                 alert_id,
             )
+            return 0.0
+        if entry is None:
             return 0.0
 
         audio = Path(entry.audio_path)

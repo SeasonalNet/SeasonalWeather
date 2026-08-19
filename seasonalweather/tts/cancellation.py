@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable
 from enum import StrEnum
-from typing import Callable
 
 
 class StopCause(StrEnum):
@@ -19,24 +19,21 @@ class SynthesisStop:
     def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
         self._lock = threading.Lock()
         self._clock = clock
-        self._decision_lock: threading.Lock | None = None
         self._cause: StopCause | None = None
         self._requested_at: float | None = None
+        self._publication_decided = False
         self._cancelled = threading.Event()
         self._deadline = threading.Event()
 
     def set_decision_lock(self, lock: threading.Lock) -> None:
-        """Serialize stop requests with one final publication decision."""
-
-        self._decision_lock = lock
+        """Retain the compatibility seam; stop requests never wait on it."""
+        del lock
 
     def _request(self, cause: StopCause) -> None:
-        decision_lock = self._decision_lock
-        if decision_lock is None:
-            self._set_cause(cause)
-            return
-        with decision_lock:
-            self._set_cause(cause)
+        # The bridge's caller-visible publication callback can be arbitrarily
+        # slow.  Cancellation records a late cause through the short state
+        # lock and never waits on the worker's publication lock.
+        self._set_cause(cause)
 
     def _set_cause(self, cause: StopCause) -> None:
         with self._lock:
@@ -47,6 +44,18 @@ class SynthesisStop:
                     self._cancelled.set()
                 else:
                     self._deadline.set()
+
+    def try_commit_publication(self) -> bool:
+        """Atomically win the bridge decision against a stop request."""
+        with self._lock:
+            if self._cause is not None:
+                return False
+            self._publication_decided = True
+            return True
+
+    def clear_publication_decision(self) -> None:
+        with self._lock:
+            self._publication_decided = False
 
     def cancel(self) -> None:
         self._request(StopCause.CANCELLED)

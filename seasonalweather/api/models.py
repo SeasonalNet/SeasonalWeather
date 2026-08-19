@@ -273,6 +273,42 @@ class CommandSnapshot(ApiModel):
     error: dict[str, Any] | None = None
 
 
+class SegmentSnapshot(ApiModel):
+    key: str
+    title: str
+    enabled: bool
+    build_role: str
+    builder: str
+    refreshable: bool
+    refresh_cadence_seconds: int
+    maximum_age_seconds: int
+    minimum_air_interval_seconds: int
+    freshness: Literal["fresh", "stale", "placeholder"]
+    stale: bool
+    placeholder: bool
+    ready: bool
+    failure: dict[str, Any]
+    provenance: dict[str, Any]
+
+
+class SegmentListResponse(ApiModel):
+    segments: list[SegmentSnapshot]
+
+
+class CyclePlanResponse(ApiModel):
+    mode: str
+    normal: list[dict[str, str]]
+    focus: list[dict[str, str]]
+    dynamic: dict[str, bool]
+
+
+class CyclePreviewResponse(ApiModel):
+    mode: str
+    focus: bool
+    segments: list[dict[str, Any]]
+    read_only: Literal[True] = True
+
+
 class AudioUploadAccepted(ApiModel):
     asset_id: str
     filename: str

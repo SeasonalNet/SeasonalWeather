@@ -32,6 +32,7 @@ class SegmentBuilderKind(StrEnum):
     REFRESHER_ID = "refresher_id"
     REFRESHER_STATUS = "refresher_status"
     CYCLE_BUILDER_SEGMENTS = "cycle_builder_segments"
+    INDEPENDENT_SEGMENT = "independent_segment"
     CONDUCTOR_LIVE_TIME = "conductor_live_time"
 
 
@@ -73,6 +74,40 @@ _BUILDER_SEAM_CONTRACT = MappingProxyType(
                 }
             ),
         ),
+        SegmentBuilderKind.INDEPENDENT_SEGMENT: (
+            "seasonalweather.broadcast.cycle",
+            "CycleBuilder independent segment methods",
+            frozenset(
+                {
+                    "health",
+                    "hwo",
+                    "spc",
+                    "zfp",
+                    "fcst",
+                    "cwf",
+                    "obs",
+                    "marine_obs",
+                    "outro",
+                }
+            ),
+        ),
+    }
+)
+
+# P1-19's independent-builder seam is finite.  The operation is part of the
+# definition's executable identity; a naming convention is not a substitute
+# for validating the exact target method.
+_INDEPENDENT_BUILDER_OPERATIONS = MappingProxyType(
+    {
+        "health": "CycleBuilder.build_health_segment",
+        "hwo": "CycleBuilder.build_hwo_segment",
+        "spc": "CycleBuilder.build_spc_segment",
+        "zfp": "CycleBuilder.build_zfp_segment",
+        "fcst": "CycleBuilder.build_fcst_segment",
+        "cwf": "CycleBuilder.build_cwf_segment",
+        "obs": "CycleBuilder.build_obs_segment",
+        "marine_obs": "CycleBuilder.build_marine_obs_segment",
+        "outro": "CycleBuilder.build_outro_segment",
     }
 )
 
@@ -128,8 +163,9 @@ class SegmentCapabilityRequirement:
 class SegmentBuilderReference:
     """Stable identity for an existing builder/adapter boundary.
 
-    P1-19 records the existing implementation identity.  It does not change
-    the P1-20 builder result or provenance architecture.
+    The registry records the exact independent execution method.  The
+    refresher resolves this declaration and never regenerates an unrelated
+    whole cycle for a single target.
     """
 
     owner: str
@@ -287,6 +323,24 @@ class ResolvedSegmentRegistry:
         definition = self.get(key)
         return definition.refresh_cadence_seconds if definition else 0
 
+    def refreshable(self, key: str) -> bool:
+        """Return the registry-owned one-target refresh capability."""
+        item = self._by_key.get(_ALIASES.get(key, key))
+        if item is None or not item.enabled:
+            return False
+        definition = item.definition
+        return (
+            definition.key not in {"time", "outro"}
+            and definition.refresh_cadence_seconds > 0
+            and definition.focus_policy is not SegmentFocusPolicy.NOT_AIRABLE
+            and definition.builder.kind
+            in {
+                SegmentBuilderKind.REFRESHER_ID,
+                SegmentBuilderKind.REFRESHER_STATUS,
+                SegmentBuilderKind.INDEPENDENT_SEGMENT,
+            }
+        )
+
     def max_age(self, key: str) -> int:
         definition = self.get(key)
         return definition.max_age_seconds if definition else 0
@@ -366,31 +420,46 @@ def _validate_definition_identity(definition: SegmentDefinition, key: str) -> No
 
 
 def _validate_definition_builder(definition: SegmentDefinition, key: str) -> None:
-    builder = definition.builder
-    if not isinstance(builder, SegmentBuilderReference):
-        _invalid_definition(key, f"Authoritative segment builder reference is malformed: {key}.")
-    if (
-        not isinstance(builder.owner, str)
-        or not builder.owner.strip()
-        or not isinstance(builder.operation, str)
-        or not builder.operation.strip()
-        or not isinstance(builder.kind, SegmentBuilderKind)
-    ):
-        _invalid_definition(key, f"Authoritative segment builder reference is invalid: {key}.")
+    builder = _validated_builder(definition.builder, key)
     expected = _BUILDER_SEAM_CONTRACT.get(builder.kind)
     if expected is None:
         _invalid_definition(key, f"Authoritative segment builder kind is unavailable: {key}.")
     expected_owner, expected_operation, allowed_keys = expected
-    if (builder.owner, builder.operation) != (expected_owner, expected_operation):
-        _invalid_definition(
-            key,
-            f"Authoritative segment builder does not resolve to an existing P1-19 seam: {key}.",
-        )
+    if builder.owner != expected_owner:
+        _invalid_definition(key, f"Authoritative segment builder does not resolve to an existing P1-19 seam: {key}.")
+    _validate_builder_operation(builder, expected_operation, key)
     if key not in allowed_keys:
         _invalid_definition(
             key,
             f"Authoritative segment builder seam is unavailable for this segment role: {key}.",
         )
+
+
+def _validated_builder(value: object, key: str) -> SegmentBuilderReference:
+    if not isinstance(value, SegmentBuilderReference):
+        _invalid_definition(key, f"Authoritative segment builder reference is malformed: {key}.")
+    if (
+        not isinstance(value.owner, str)
+        or not value.owner.strip()
+        or not isinstance(value.operation, str)
+        or not value.operation.strip()
+        or not isinstance(value.kind, SegmentBuilderKind)
+    ):
+        _invalid_definition(key, f"Authoritative segment builder reference is invalid: {key}.")
+    return value
+
+
+def _validate_builder_operation(builder: SegmentBuilderReference, expected_operation: str, key: str) -> None:
+    if builder.kind is SegmentBuilderKind.INDEPENDENT_SEGMENT:
+        _validate_independent_builder(builder, key)
+    elif builder.operation != expected_operation:
+        _invalid_definition(key, f"Authoritative segment builder does not resolve to an existing P1-19 seam: {key}.")
+
+
+def _validate_independent_builder(builder: SegmentBuilderReference, key: str) -> None:
+    if builder.operation == _INDEPENDENT_BUILDER_OPERATIONS.get(key):
+        return
+    _invalid_definition(key, f"Authoritative independent segment builder operation is invalid: {key}.")
 
 
 def _validate_definition_policies(definition: SegmentDefinition, key: str) -> None:
@@ -523,6 +592,10 @@ class SegmentRegistry:
     def get(self, key: str) -> SegmentDefinition | None:
         return self._by_key.get(_ALIASES.get(key, key))
 
+    def is_managed(self, key: str) -> bool:
+        """Return whether the canonical registry owns this static identity."""
+        return _ALIASES.get(key, key) in self._by_key
+
     def resolve(
         self,
         config: object | None = None,
@@ -616,8 +689,8 @@ DEFAULT_SEGMENT_REGISTRY = SegmentRegistry(
             "health",
             "Data feed status.",
             "seasonalweather.broadcast.cycle",
-            "CycleBuilder.build_segments",
-            SegmentBuilderKind.CYCLE_BUILDER_SEGMENTS,
+            "CycleBuilder.build_health_segment",
+            SegmentBuilderKind.INDEPENDENT_SEGMENT,
             10,
             10,
             60,
@@ -636,8 +709,8 @@ DEFAULT_SEGMENT_REGISTRY = SegmentRegistry(
             "hwo",
             "Hazardous weather outlook for the service area.",
             "seasonalweather.broadcast.cycle",
-            "CycleBuilder.build_segments",
-            SegmentBuilderKind.CYCLE_BUILDER_SEGMENTS,
+            "CycleBuilder.build_hwo_segment",
+            SegmentBuilderKind.INDEPENDENT_SEGMENT,
             30,
             30,
             3600,
@@ -647,8 +720,8 @@ DEFAULT_SEGMENT_REGISTRY = SegmentRegistry(
             "spc",
             "Severe weather outlook for the service area.",
             "seasonalweather.broadcast.cycle",
-            "CycleBuilder.build_segments",
-            SegmentBuilderKind.CYCLE_BUILDER_SEGMENTS,
+            "CycleBuilder.build_spc_segment",
+            SegmentBuilderKind.INDEPENDENT_SEGMENT,
             40,
             40,
             1800,
@@ -658,8 +731,8 @@ DEFAULT_SEGMENT_REGISTRY = SegmentRegistry(
             "zfp",
             "Weather synopsis for the area.",
             "seasonalweather.broadcast.cycle",
-            "CycleBuilder.build_segments",
-            SegmentBuilderKind.CYCLE_BUILDER_SEGMENTS,
+            "CycleBuilder.build_zfp_segment",
+            SegmentBuilderKind.INDEPENDENT_SEGMENT,
             50,
             60,
             3600,
@@ -670,8 +743,8 @@ DEFAULT_SEGMENT_REGISTRY = SegmentRegistry(
             "fcst",
             "The forecast for the service area.",
             "seasonalweather.broadcast.cycle",
-            "CycleBuilder.build_segments",
-            SegmentBuilderKind.CYCLE_BUILDER_SEGMENTS,
+            "CycleBuilder.build_fcst_segment",
+            SegmentBuilderKind.INDEPENDENT_SEGMENT,
             60,
             70,
             1800,
@@ -682,8 +755,8 @@ DEFAULT_SEGMENT_REGISTRY = SegmentRegistry(
             "cwf",
             "Coastal and marine weather forecast.",
             "seasonalweather.broadcast.cycle",
-            "CycleBuilder.build_segments",
-            SegmentBuilderKind.CYCLE_BUILDER_SEGMENTS,
+            "CycleBuilder.build_cwf_segment",
+            SegmentBuilderKind.INDEPENDENT_SEGMENT,
             70,
             90,
             7200,
@@ -695,8 +768,8 @@ DEFAULT_SEGMENT_REGISTRY = SegmentRegistry(
             "obs",
             "Current conditions in our area.",
             "seasonalweather.broadcast.cycle",
-            "CycleBuilder.build_segments",
-            SegmentBuilderKind.CYCLE_BUILDER_SEGMENTS,
+            "CycleBuilder.build_obs_segment",
+            SegmentBuilderKind.INDEPENDENT_SEGMENT,
             80,
             50,
             900,
@@ -705,8 +778,8 @@ DEFAULT_SEGMENT_REGISTRY = SegmentRegistry(
             "marine_obs",
             "Marine observations for the service area.",
             "seasonalweather.broadcast.cycle",
-            "CycleBuilder.build_segments",
-            SegmentBuilderKind.CYCLE_BUILDER_SEGMENTS,
+            "CycleBuilder.build_marine_obs_segment",
+            SegmentBuilderKind.INDEPENDENT_SEGMENT,
             90,
             80,
             900,
@@ -718,8 +791,8 @@ DEFAULT_SEGMENT_REGISTRY = SegmentRegistry(
             "outro",
             "End of the current broadcast cycle.",
             "seasonalweather.broadcast.cycle",
-            "CycleBuilder.build_segments",
-            SegmentBuilderKind.CYCLE_BUILDER_SEGMENTS,
+            "CycleBuilder.build_outro_segment",
+            SegmentBuilderKind.INDEPENDENT_SEGMENT,
             None,
             None,
             0,
