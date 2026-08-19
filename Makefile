@@ -18,7 +18,7 @@ typecheck:
 
 architecture-check:
 	$(PYTHON) -m tools.quality.architecture_check
-	$(PYTHON) -m pytest -q tests/test_architecture_check.py tests/test_quality_tooling.py
+	$(PYTHON) -m pytest -q tests/test_architecture_check.py tests/test_quality_tooling.py tests/test_p1_23_decomposition.py
 
 dependency-check:
 	$(PYTHON) -m tools.quality.run_check dependency

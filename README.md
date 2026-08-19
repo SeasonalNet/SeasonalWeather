@@ -102,6 +102,7 @@ Freeze products are supported natively. `FZ.W` maps to SAME `FZW` (**Freeze Warn
 - Public handled-alerts feed API (`/v1/handled-alerts`) for external UI consumption, backed by SQLite.
   Persisted station-feed rows remain authoritative across restarts; startup does not synthesize degraded public records from AlertTracker state.
 - Transactional configuration reload behavior and operator boundaries are documented in [docs/configuration-reload.md](docs/configuration-reload.md).
+- Phase 1 integration validation, ownership boundaries, representative comparisons, and the exit review are documented in [docs/phase-1-exit-gate.md](docs/phase-1-exit-gate.md).
 
 ---
 
@@ -119,7 +120,8 @@ tools/              — standalone dev/debug utilities
 systemd/            — systemd service unit files
 seasonalweather/    — Python application
   main.py           — Orchestrator (hub, stays at root of package)
-  control.py        — API → Orchestrator bridge
+  control.py        — Thin API compatibility facade and service composition
+  application/      — Controller-side read models and stable application errors
   config.py         — config loader
   discord_log.py    — Discord embed logger
   logging_config.py — central runtime/systemd logging policy
@@ -127,7 +129,7 @@ seasonalweather/    — Python application
   cli/              — CLI tools (inject)
   same/             — SAME/EAS subsystem (encoder, decoder, event codes, listeners)
   alerts/           — alert lifecycle (CAP, NWWS products, VTEC, active registry)
-  broadcast/        — cycle content generation (cycle, RWR, RWT/RMT, ERN, station feed)
+  broadcast/        — cycle content generation and owned broadcast application services
   tts/              — speech synthesis (TTS engine, audio utils, VoiceText Paul VTML)
   api/              — HTTP control API (routes, models, auth, server entrypoint)
   nwws/             — NWWS-OI XMPP client and smoke-test

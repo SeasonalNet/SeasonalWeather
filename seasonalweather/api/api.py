@@ -15,9 +15,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from ..application.errors import ControlError
 from ..auth.service import AuthenticationError, AuthenticationService
 from ..configuration_reload.models import ReloadRequest, WarningAcknowledgment
-from ..control import ControlError, OrchestratorControl
+from ..control import OrchestratorControl
 from ..diagnostics import load_catalog
 from ..diagnostics.representations import detail_representation, list_representation
 from ..health_service import (
