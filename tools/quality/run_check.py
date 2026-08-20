@@ -45,6 +45,22 @@ def _radon_count(output: str) -> int:
     )
 
 
+def _compact_failure_output(output: str, *, limit: int = 24) -> str:
+    lines = output.splitlines()
+    if len(lines) <= limit:
+        return output
+    head = 4
+    tail = limit - head - 1
+    omitted = len(lines) - head - tail
+    return "\n".join(
+        [
+            *lines[:head],
+            f"... {omitted} diagnostic lines suppressed; inspect the local tool log for the full report ...",
+            *lines[-tail:],
+        ]
+    )
+
+
 def checks() -> dict[str, Check]:
     python = sys.executable
     return {
@@ -93,7 +109,7 @@ def run(name: str, *, update: bool = False) -> int:
         findings = check.count(count_output)
     except (TypeError, ValueError) as exc:
         if output:
-            print(output)
+            print(_compact_failure_output(output))
         print(f"{name}: unable to parse tool output: {exc}")
         return 2
 
@@ -103,12 +119,12 @@ def run(name: str, *, update: bool = False) -> int:
     print(f"{name}: {findings} finding(s), governed maximum {maximum}")
     if result.returncode not in {0, 1}:
         if output:
-            print(output)
+            print(_compact_failure_output(output))
         print(f"{name}: tool failed with unexpected exit code {result.returncode}")
         return result.returncode
     if result.returncode == 1 and findings == 0:
         if output:
-            print(output)
+            print(_compact_failure_output(output))
         print(f"{name}: tool failed without a recognized finding")
         return 1
     if update:
@@ -116,7 +132,7 @@ def run(name: str, *, update: bool = False) -> int:
         return 0
     if findings > maximum:
         if output:
-            print(output)
+            print(_compact_failure_output(output))
         print(f"{name}: baseline exceeded by {findings - maximum} finding(s)")
         return 1
     return 0

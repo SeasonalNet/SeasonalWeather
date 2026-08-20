@@ -1,7 +1,5 @@
 {
   "$schema": "https://raw.githubusercontent.com/DetachHead/basedpyright/main/packages/pyright-internal/src/schemas/pyrightconfig.schema.json",
-  "venvPath": ".",
-  "venv": ".venv",
   "exclude": [
     ".venv",
     ".venv-ci",

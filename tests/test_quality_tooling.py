@@ -1,7 +1,7 @@
 import pytest
 
 from tools.quality.governance import validate_governed_record
-from tools.quality.run_check import checks
+from tools.quality.run_check import _compact_failure_output, checks
 
 
 def test_ruff_format_output_is_counted_for_current_and_legacy_formats():
@@ -30,6 +30,15 @@ def test_basedpyright_errors_are_counted_from_stdout():
 
     assert check.count_stream == "stdout"
     assert check.count("file.py:1:1 - error: type mismatch\n") == 1
+
+
+def test_quality_failure_output_is_bounded():
+    output = "\n".join(f"diagnostic {index}" for index in range(100))
+
+    compact = _compact_failure_output(output)
+
+    assert len(compact.splitlines()) == 24
+    assert "diagnostic lines suppressed" in compact
 
 
 def test_governed_record_rejects_expired_review_date():
