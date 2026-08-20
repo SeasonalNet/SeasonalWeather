@@ -3,6 +3,7 @@
   "exclude": [
     ".venv",
     ".venv-ci",
+    "build",
     "tests/architecture/fixtures/invalid"
   ],
   "ignore": [

@@ -15,9 +15,11 @@ make release
 test suite. CI calls the same target. `make image` and `make images` invoke the
 declarative `docker-bake.hcl` matrix through the thin
 `tools.build_interface` wrapper. Each image target generates its own
-profile-specific build record before the target is built. The controller and
-worker Dockerfiles remain owned by P2-02 and P2-03; until those packets add
-them, image execution fails closed at Docker's missing-definition boundary.
+profile-specific build record before the target is built. P2-02 owns the
+non-root controller Dockerfile and its controller-only dependency lock;
+worker Dockerfiles and profiles remain owned by P2-03. The controller
+Dockerfile rejects non-controller profiles until those worker definitions are
+implemented.
 `compose-check` remains a bounded placeholder until the Phase 3 Compose packet
 introduces a topology.
 
