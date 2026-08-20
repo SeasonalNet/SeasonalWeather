@@ -29,7 +29,7 @@ review_date = "2026-10-23"
 removal_condition = "Reduce as package boundaries gain complete annotations."
 
 [checks.basedpyright]
-maximum = 1091
+maximum = 1090
 owner = "SeasonalWeather maintainers"
 rationale = "Initial basedpyright repository debt; new findings are not permitted above this ceiling."
 scope = "Repository Python source analyzed by pyrightconfig.json."

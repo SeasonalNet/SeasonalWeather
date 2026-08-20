@@ -1,9 +1,10 @@
 # Dynamic worker capabilities
 
 P1-09 implements dynamic capability interpretation and qualification for
-SWWP/1 simulated workers. It is controller operational state only: there is no
-production listener, worker process, handler execution, or capability
-database.
+SWWP/1 workers. It remains controller operational state only: the worker
+reports truthful local facts, while authorization, compatibility, qualification,
+capacity, leasing, and job state stay controller-owned. P2-03 consumes these
+contracts from real worker processes but does not add a capability database.
 
 ## Authority and record model
 
@@ -188,9 +189,10 @@ peers. Simulations cover proactive changes, capacity, duplicate/dropped/
 reordered updates, gaps, digest corruption, probes, staleness, degradation,
 recovery, reconnect, and rejection races.
 
-Deferred work includes live WSS transport, worker processes and handlers,
-real dependency checks, production worker health servers, capability
-persistence, and container operation. Artifact staging, media validation,
+Deferred work includes the controller-side live WSS endpoint, production worker
+health servers, capability persistence, and container operation. P2-03 adds
+bounded worker dependency probes and handler dispatch but does not move
+artifact staging, media validation,
 hash/identity/generation fences, promotion, result acceptance, Liquidsoap, and
 publication use the P1-10 controller artifact boundary when integrated.
 Capability qualification and capacity accounting do not make a result

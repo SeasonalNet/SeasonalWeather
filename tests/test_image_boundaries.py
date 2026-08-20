@@ -28,6 +28,30 @@ def test_controller_dockerfile_rejects_worker_profiles() -> None:
     assert "USER seasonalweather" in dockerfile
 
 
+def test_worker_dockerfile_owns_only_worker_profiles() -> None:
+    dockerfile = (ROOT / "Dockerfile.worker").read_text(encoding="utf-8").lower()
+
+    for profile in ("routine-worker", "piper", "legacy-tts", "maintenance", "development"):
+        assert profile in dockerfile
+    assert 'entrypoint ["python", "-m", "seasonalweather", "worker"]' in dockerfile
+    assert "expose" not in dockerfile
+    for forbidden in ("requirements-controller.txt", "slixmpp", "sqlalchemy", "fastapi", "uvicorn"):
+        assert forbidden not in dockerfile
+
+
+def test_worker_dependency_locks_exclude_controller_runtime() -> None:
+    for name in (
+        "requirements-worker-standard.txt",
+        "requirements-worker-piper.txt",
+        "requirements-worker-legacy-tts.txt",
+        "requirements-worker-maintenance.txt",
+        "requirements-worker-development.txt",
+    ):
+        lock = (ROOT / name).read_text(encoding="utf-8").lower()
+        for forbidden in ("slixmpp", "sqlalchemy", "fastapi", "uvicorn"):
+            assert forbidden not in lock
+
+
 def test_controller_build_context_excludes_secrets_and_worker_locks() -> None:
     dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
 

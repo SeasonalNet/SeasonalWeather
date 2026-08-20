@@ -181,10 +181,19 @@ def test_control_and_api_have_no_artifact_publication_authority():
 def test_worker_boundary_declares_artifact_promotion_as_controller_authority():
     authorities = set(CONFIG["controller_authority_imports"])
     assert {
+        "seasonalweather.api",
         "seasonalweather.artifacts.integration",
         "seasonalweather.artifacts.promotion",
         "seasonalweather.artifacts.service",
         "seasonalweather.artifacts.staging",
+        "seasonalweather.commands",
+        "seasonalweather.control",
+        "seasonalweather.database",
+        "seasonalweather.discord_log",
+        "seasonalweather.health_service",
+        "seasonalweather.lifecycle",
+        "seasonalweather.nwws",
+        "seasonalweather.same",
     } <= authorities
 
 

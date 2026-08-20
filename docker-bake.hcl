@@ -83,25 +83,40 @@ target "controller" {
 
 target "routine-worker" {
   inherits = ["common"]
+  dockerfile = "Dockerfile.worker"
+  args = { SW_IMAGE_PROFILE = "routine-worker" }
+  labels = { "io.seasonalweather.build.profile" = "routine-worker" }
   tags = ["seasonalweather-worker:standard"]
 }
 
 target "piper" {
   inherits = ["common"]
+  dockerfile = "Dockerfile.worker"
+  args = { SW_IMAGE_PROFILE = "piper" }
+  labels = { "io.seasonalweather.build.profile" = "piper" }
   tags = ["seasonalweather-worker:piper"]
 }
 
 target "legacy-tts" {
   inherits = ["common"]
+  dockerfile = "Dockerfile.worker"
+  args = { SW_IMAGE_PROFILE = "legacy-tts" }
+  labels = { "io.seasonalweather.build.profile" = "legacy-tts" }
   tags = ["seasonalweather-worker:legacy-tts"]
 }
 
 target "maintenance" {
   inherits = ["common"]
+  dockerfile = "Dockerfile.worker"
+  args = { SW_IMAGE_PROFILE = "maintenance" }
+  labels = { "io.seasonalweather.build.profile" = "maintenance" }
   tags = ["seasonalweather-worker:maintenance"]
 }
 
 target "development" {
   inherits = ["common"]
+  dockerfile = "Dockerfile.worker"
+  args = { SW_IMAGE_PROFILE = "development" }
+  labels = { "io.seasonalweather.build.profile" = "development" }
   tags = ["seasonalweather:development"]
 }

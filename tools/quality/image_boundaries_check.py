@@ -95,6 +95,36 @@ def _check_active(config: dict[str, Any]) -> list[str]:
     return errors
 
 
+def _check_workers(config: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    definition = ROOT / str(config.get("worker_definition", ""))
+    if not definition.is_file():
+        return [f"missing worker image definition: {definition.relative_to(ROOT)}"]
+    dockerfile = _text(definition).lower()
+    for token in config.get("required_worker_dockerfile_tokens", []):
+        if str(token).lower() not in dockerfile:
+            errors.append(f"worker Dockerfile missing required boundary: {token}")
+    for token in config.get("forbidden_worker_dockerfile_tokens", []):
+        if str(token).lower() in dockerfile:
+            errors.append(f"worker Dockerfile contains controller-only or exposed content: {token}")
+
+    requirement_names = {str(item) for item in config.get("worker_requirements", [])}
+    for name in sorted(requirement_names):
+        path = ROOT / name
+        if not path.is_file():
+            errors.append(f"missing worker dependency lock: {name}")
+            continue
+        lock = _text(path).lower()
+        for token in config.get("forbidden_worker_dependency_tokens", []):
+            if str(token).lower() in lock:
+                errors.append(f"worker dependency lock contains controller-only package: {name}: {token}")
+    profiles = tuple(str(item) for item in config.get("worker_profiles", []))
+    for profile in profiles:
+        if profile not in dockerfile:
+            errors.append(f"worker Dockerfile does not declare profile: {profile}")
+    return errors
+
+
 def main() -> int:
     config = load_toml(ROOT / "quality/image-boundaries.toml")
     try:
@@ -109,13 +139,13 @@ def main() -> int:
         print("image-boundaries-check: active controller declaration is required once image definitions exist")
         return 1
 
-    errors = _check_active(config)
+    errors = [*_check_active(config), *_check_workers(config)]
     if errors:
-        print("image-boundaries-check: controller boundary failed")
+        print("image-boundaries-check: controller or worker boundary failed")
         for error in errors:
             print(f"- {error}")
         return 1
-    print("image-boundaries-check: controller image boundary satisfied")
+    print("image-boundaries-check: controller and worker image boundaries satisfied")
     return 0
 
 

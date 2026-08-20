@@ -12,21 +12,29 @@ worker_only_imports = [
 ]
 
 controller_authority_imports = [
+  "seasonalweather.api",
   "seasonalweather.alerts",
   "seasonalweather.artifacts.integration",
   "seasonalweather.artifacts.promotion",
   "seasonalweather.artifacts.service",
   "seasonalweather.artifacts.staging",
   "seasonalweather.broadcast",
+  "seasonalweather.commands",
   "seasonalweather.config",
+  "seasonalweather.control",
   "seasonalweather.configuration_reload.resources",
   "seasonalweather.configuration_reload.service",
   "seasonalweather.database.configuration_reload",
   "seasonalweather.database",
+  "seasonalweather.discord_log",
+  "seasonalweather.health_service",
+  "seasonalweather.lifecycle",
   "seasonalweather.job_store",
   "seasonalweather.liquidsoap_telnet",
+  "seasonalweather.nwws",
   "seasonalweather.runtime_diagnostics.repository",
   "seasonalweather.runtime_diagnostics.service",
+  "seasonalweather.same",
 ]
 
 sqlite_owner_roots = [
@@ -41,6 +49,7 @@ job_store_forbidden_imports = [
   "seasonalweather.broadcast",
   "seasonalweather.liquidsoap_telnet",
   "seasonalweather.nwws",
+  "seasonalweather.same",
   "seasonalweather.tts",
   "seasonalweather.worker",
   "seasonalweather.workers",

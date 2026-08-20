@@ -11,10 +11,11 @@ WebSocket subprotocol token: seasonalweather.worker.v1
 ```
 
 P1-08 implements schemas, deterministic state machines, a durable scheduler
-adapter, and in-memory simulated peers only. It does not provide a WebSocket
-listener or client, worker process, credential loader, handler, or production
-execution mode. Real authenticated outbound worker connections remain Phase 2
-work.
+adapter, and in-memory simulated peers. P2-03 adds the worker-side process,
+typed handler dispatch, capability-profile registration, and outbound
+WebSocket client seam. The controller-side live session endpoint, complete
+end-to-end operation, and removal of the transitional embedded executor remain
+P2-08 work.
 
 ## Authority
 

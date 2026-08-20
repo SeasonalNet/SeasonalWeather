@@ -1,8 +1,8 @@
 version = 2
 status = "active"
 owner = "SeasonalWeather maintainers"
-rationale = "P2-02 introduces the controller Dockerfile and must keep worker execution dependencies outside the control-plane image."
-scope = "P2-02 controller image only; worker image profiles remain deferred to P2-03."
+rationale = "P2-02 and P2-03 define separate controller and worker image ownership with negative dependency and package-boundary checks."
+scope = "P2-02 controller image and P2-03 worker image profiles only; deployment hardening remains deferred to later packets."
 review_date = "2026-10-23"
 removal_condition = "Replace these rules only when the controller image ownership or profile boundary is deliberately revised."
 controller_definition = "Dockerfile"
@@ -55,3 +55,33 @@ forbidden_controller_packages = [
   "espeak",
 ]
 required_context_ignore_tokens = [".git", ".venv", "requirements-piper.txt", "*.env"]
+
+worker_definition = "Dockerfile.worker"
+worker_profiles = ["routine-worker", "piper", "legacy-tts", "maintenance", "development"]
+worker_requirements = [
+  "requirements-worker-standard.txt",
+  "requirements-worker-piper.txt",
+  "requirements-worker-legacy-tts.txt",
+  "requirements-worker-maintenance.txt",
+  "requirements-worker-development.txt",
+]
+required_worker_dockerfile_tokens = [
+  "ENTRYPOINT [\"python\", \"-m\", \"seasonalweather\", \"worker\"]",
+  "USER seasonalweather",
+  "seasonalweather diagnostics export --output /usr/share/seasonalweather/diagnostics",
+  "/usr/share/seasonalweather/build-info.json",
+]
+forbidden_worker_dockerfile_tokens = [
+  "EXPOSE",
+  "requirements-controller.txt",
+  "slixmpp",
+  "SQLAlchemy",
+  "fastapi",
+  "uvicorn",
+]
+forbidden_worker_dependency_tokens = [
+  "slixmpp",
+  "sqlalchemy",
+  "fastapi",
+  "uvicorn",
+]

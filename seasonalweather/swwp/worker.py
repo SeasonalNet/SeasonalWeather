@@ -32,6 +32,7 @@ from .messages import (
     JobRejected,
     JobResult,
     LeaseRef,
+    Payload,
     ProtocolErrorPayload,
     Reconcile,
     ReconcileItem,
@@ -56,10 +57,12 @@ class WorkerSession(SessionMachine):
         id_factory: Callable[[str], str],
         clock: Callable[[], dt.datetime],
         accept_assignments: bool = True,
+        assignment_acceptor: Callable[[JobAssignmentPayload], bool] | None = None,
     ) -> None:
         super().__init__(clock=clock, id_factory=id_factory)
         self.registration = registration
         self.accept_assignments = accept_assignments
+        self.assignment_acceptor = assignment_acceptor
         self.state = WorkerState.DISCONNECTED
         self.session_id: str | None = None
         self.controller_epoch: int | None = None
@@ -71,9 +74,9 @@ class WorkerSession(SessionMachine):
         self.diagnostic_acknowledgments: OrderedDict[str, WorkerDiagnosticAck] = OrderedDict()
         self.diagnostic_occurrences: dict[str, str] = {}
 
-    def _out(self, payload: object) -> Envelope:
+    def _out(self, payload: Payload) -> Envelope:
         return self.envelope(
-            payload,  # type: ignore[arg-type]
+            payload,
             session_id=self.session_id,
             worker_id=self.registration.worker_id,
             worker_instance_id=self.registration.worker_instance_id,
@@ -197,13 +200,23 @@ class WorkerSession(SessionMachine):
         prior = self.assignments.get(key)
         if prior is not None and prior != payload:
             raise ValueError("conflicting duplicate assignment")
-        if not self.accept_assignments:
+        if not self.accept_assignments or (
+            self.assignment_acceptor is not None and not self.assignment_acceptor(payload)
+        ):
             return (
                 self._out(
                     JobRejected(
                         lease=payload.lease,
-                        category=CapabilityRejectionCategory.CAPACITY_UNAVAILABLE,
-                        summary="simulated worker rejected assignment",
+                        category=(
+                            CapabilityRejectionCategory.CAPACITY_UNAVAILABLE
+                            if not self.accept_assignments
+                            else CapabilityRejectionCategory.CAPABILITY_UNAVAILABLE
+                        ),
+                        summary=(
+                            "simulated worker rejected assignment"
+                            if not self.accept_assignments
+                            else "worker profile cannot execute this assignment"
+                        ),
                         capabilities=payload.capability_requirements,
                     )
                 ),

@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 dynamic = ["dependencies", "version"]
 
 [project.scripts]
-seasonalweather = "seasonalweather.main:main"
+seasonalweather = "seasonalweather.__main__:_main"
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}

@@ -1,0 +1,183 @@
+# syntax=docker/dockerfile:1
+
+ARG PYTHON_BASE=python:3.11-slim-bookworm
+
+FROM ${PYTHON_BASE} AS builder
+
+ARG SW_PROJECT
+ARG SW_VERSION
+ARG SW_BUILD_ID
+ARG SW_BUILD_IDENTITY
+ARG SW_GIT_COMMIT
+ARG SW_GIT_DESCRIBE
+ARG SW_DIRTY_TREE
+ARG SW_BUILD_SOURCE_TIMESTAMP
+ARG SW_SOURCE_DATE_EPOCH
+ARG SW_IMAGE_PROFILE
+ARG SW_TARGET_PLATFORM
+ARG SW_PYTHON_VERSION
+ARG SW_SWWP_PROTOCOL_VERSIONS
+ARG SW_JOB_PAYLOAD_SCHEMA_VERSIONS
+ARG SW_JOB_RESULT_SCHEMA_VERSIONS
+ARG SW_VALIDATION_PROTOCOL_VERSIONS
+ARG SW_CONFIG_SCHEMA_MIN
+ARG SW_CONFIG_SCHEMA_MAX
+ARG SW_DIAGNOSTIC_SCHEMA_VERSION
+ARG SW_DIAGNOSTIC_CATALOG_VERSION
+ARG SW_CAPABILITY_MANIFEST_VERSION
+
+RUN case "${SW_IMAGE_PROFILE}" in \
+        routine-worker|piper|legacy-tts|maintenance|development) ;; \
+        *) echo "unsupported worker image profile: ${SW_IMAGE_PROFILE}" >&2; exit 1 ;; \
+    esac
+
+ENV PATH="/opt/venv/bin:${PATH}" \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    SW_PROJECT="${SW_PROJECT}" \
+    SW_VERSION="${SW_VERSION}" \
+    SW_BUILD_ID="${SW_BUILD_ID}" \
+    SW_BUILD_IDENTITY="${SW_BUILD_IDENTITY}" \
+    SW_GIT_COMMIT="${SW_GIT_COMMIT}" \
+    SW_GIT_DESCRIBE="${SW_GIT_DESCRIBE}" \
+    SW_DIRTY_TREE="${SW_DIRTY_TREE}" \
+    SW_BUILD_SOURCE_TIMESTAMP="${SW_BUILD_SOURCE_TIMESTAMP}" \
+    SW_SOURCE_DATE_EPOCH="${SW_SOURCE_DATE_EPOCH}" \
+    SW_IMAGE_PROFILE="${SW_IMAGE_PROFILE}" \
+    SW_TARGET_PLATFORM="${SW_TARGET_PLATFORM}" \
+    SW_PYTHON_VERSION="${SW_PYTHON_VERSION}" \
+    SW_SWWP_PROTOCOL_VERSIONS="${SW_SWWP_PROTOCOL_VERSIONS}" \
+    SW_JOB_PAYLOAD_SCHEMA_VERSIONS="${SW_JOB_PAYLOAD_SCHEMA_VERSIONS}" \
+    SW_JOB_RESULT_SCHEMA_VERSIONS="${SW_JOB_RESULT_SCHEMA_VERSIONS}" \
+    SW_VALIDATION_PROTOCOL_VERSIONS="${SW_VALIDATION_PROTOCOL_VERSIONS}" \
+    SW_CONFIG_SCHEMA_MIN="${SW_CONFIG_SCHEMA_MIN}" \
+    SW_CONFIG_SCHEMA_MAX="${SW_CONFIG_SCHEMA_MAX}" \
+    SW_DIAGNOSTIC_SCHEMA_VERSION="${SW_DIAGNOSTIC_SCHEMA_VERSION}" \
+    SW_DIAGNOSTIC_CATALOG_VERSION="${SW_DIAGNOSTIC_CATALOG_VERSION}" \
+    SW_CAPABILITY_MANIFEST_VERSION="${SW_CAPABILITY_MANIFEST_VERSION}"
+
+WORKDIR /build
+RUN python -m venv /opt/venv
+
+RUN case "${SW_IMAGE_PROFILE}" in \
+        routine-worker) apt-get update && apt-get install -y --no-install-recommends ffmpeg espeak-ng && rm -rf /var/lib/apt/lists/* ;; \
+        legacy-tts) apt-get update && apt-get install -y --no-install-recommends festival && rm -rf /var/lib/apt/lists/* ;; \
+        *) : ;; \
+    esac
+
+COPY requirements-worker-base.txt requirements-worker-standard.txt \
+    requirements-worker-piper.txt requirements-worker-legacy-tts.txt \
+    requirements-worker-maintenance.txt requirements-worker-development.txt ./
+RUN case "${SW_IMAGE_PROFILE}" in \
+        routine-worker) requirement=requirements-worker-standard.txt ;; \
+        piper) requirement=requirements-worker-piper.txt ;; \
+        legacy-tts) requirement=requirements-worker-legacy-tts.txt ;; \
+        maintenance) requirement=requirements-worker-maintenance.txt ;; \
+        development) requirement=requirements-worker-development.txt ;; \
+    esac \
+    && python -m pip install --no-cache-dir -r "${requirement}"
+
+COPY pyproject.toml README.md requirements.txt ./
+COPY seasonalweather ./seasonalweather
+RUN python -m pip install --no-cache-dir --no-deps --no-build-isolation .
+
+# Worker images do not carry controller-only authorities or source adapters.
+RUN python - <<'PY'
+import shutil
+import sysconfig
+from pathlib import Path
+
+package_root = Path(sysconfig.get_paths()["purelib"]) / "seasonalweather"
+for name in (
+    "alerts",
+    "api",
+    "artifacts",
+    "broadcast",
+    "commands",
+    "configuration_reload",
+    "database",
+    "job_store",
+    "nwws",
+    "same",
+    "config.py",
+    "control.py",
+    "discord_log.py",
+    "health_service.py",
+    "lifecycle.py",
+    "liquidsoap_telnet.py",
+    "main.py",
+):
+    target = package_root / name
+    if target.is_dir():
+        shutil.rmtree(target)
+    else:
+        target.unlink(missing_ok=True)
+PY
+
+RUN mkdir -p /usr/share/seasonalweather/diagnostics \
+    && seasonalweather diagnostics export --output /usr/share/seasonalweather/diagnostics
+
+RUN mkdir -p /usr/share/seasonalweather \
+    && python - <<'PY'
+import os
+from pathlib import Path
+
+from seasonalweather.build_metadata import BuildInfo
+
+
+def versions(name: str) -> tuple[int, ...]:
+    return tuple(int(item) for item in os.environ[name].split(",") if item)
+
+
+raw_epoch = os.environ["SW_SOURCE_DATE_EPOCH"]
+info = BuildInfo(
+    schema_version=1,
+    project=os.environ["SW_PROJECT"],
+    software_version=os.environ["SW_VERSION"],
+    git_commit=os.environ["SW_GIT_COMMIT"],
+    git_describe=os.environ["SW_GIT_DESCRIBE"],
+    dirty_tree=os.environ["SW_DIRTY_TREE"].lower() == "true",
+    build_source_timestamp=os.environ["SW_BUILD_SOURCE_TIMESTAMP"] or None,
+    source_date_epoch=int(raw_epoch) if raw_epoch else None,
+    build_id=os.environ["SW_BUILD_ID"],
+    image_profile=os.environ["SW_IMAGE_PROFILE"],
+    target_platform=os.environ["SW_TARGET_PLATFORM"],
+    python_version=os.environ["SW_PYTHON_VERSION"],
+    swwp_protocol_versions=versions("SW_SWWP_PROTOCOL_VERSIONS"),
+    job_payload_schema_versions=versions("SW_JOB_PAYLOAD_SCHEMA_VERSIONS"),
+    job_result_schema_versions=versions("SW_JOB_RESULT_SCHEMA_VERSIONS"),
+    validation_protocol_versions=versions("SW_VALIDATION_PROTOCOL_VERSIONS"),
+    configuration_schema=(int(os.environ["SW_CONFIG_SCHEMA_MIN"]), int(os.environ["SW_CONFIG_SCHEMA_MAX"])),
+    diagnostic_schema_version=int(os.environ["SW_DIAGNOSTIC_SCHEMA_VERSION"]),
+    diagnostic_catalog_version=int(os.environ["SW_DIAGNOSTIC_CATALOG_VERSION"]),
+    capability_manifest_version=int(os.environ["SW_CAPABILITY_MANIFEST_VERSION"]),
+)
+Path("/usr/share/seasonalweather/build-info.json").write_text(info.to_json() + "\n", encoding="utf-8")
+PY
+
+FROM ${PYTHON_BASE} AS worker
+
+ARG SW_IMAGE_PROFILE
+RUN case "${SW_IMAGE_PROFILE}" in \
+        routine-worker|piper|legacy-tts|maintenance|development) ;; \
+        *) exit 1 ;; \
+    esac
+
+ENV PATH="/opt/venv/bin:${PATH}" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder /usr/share/seasonalweather /usr/share/seasonalweather
+
+RUN groupadd --gid 10001 seasonalweather \
+    && useradd --uid 10001 --gid 10001 --home-dir /nonexistent --no-create-home \
+        --shell /usr/sbin/nologin seasonalweather \
+    && install -d -o 10001 -g 10001 /var/lib/seasonalweather
+
+WORKDIR /opt/seasonalweather
+USER seasonalweather
+
+ENTRYPOINT ["python", "-m", "seasonalweather", "worker"]

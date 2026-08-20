@@ -17,9 +17,11 @@ declarative `docker-bake.hcl` matrix through the thin
 `tools.build_interface` wrapper. Each image target generates its own
 profile-specific build record before the target is built. P2-02 owns the
 non-root controller Dockerfile and its controller-only dependency lock;
-worker Dockerfiles and profiles remain owned by P2-03. The controller
-Dockerfile rejects non-controller profiles until those worker definitions are
-implemented.
+P2-03 owns `Dockerfile.worker`, the worker dependency locks, the worker
+entrypoint, and the routine-worker, Piper, legacy-TTS, maintenance, and
+development profiles. The controller Dockerfile rejects non-controller
+profiles, while worker definitions reject controller-only profiles and
+dependencies.
 `compose-check` remains a bounded placeholder until the Phase 3 Compose packet
 introduces a topology.
 
