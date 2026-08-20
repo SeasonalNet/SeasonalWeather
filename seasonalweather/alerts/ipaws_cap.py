@@ -326,7 +326,7 @@ class IpawsCapPoller:
         poll_seconds: int = 90,
         user_agent: str = "SeasonalWeather (IPAWS monitor)",
         url: str | None = None,
-        ledger_path: str = "/var/lib/seasonalweather/ipaws_ledger.json",
+        ledger_path: str | None = None,
         ledger_max_age_days: int = 14,
         database: Any | None = None,
     ) -> None:
@@ -339,6 +339,9 @@ class IpawsCapPoller:
 
         # In-memory dedupe (fast path within one process lifetime)
         self._seen_keys: set[str] = set()
+
+        if not ledger_path:
+            raise ValueError("ledger_path must be supplied from the configured operational state root")
 
         # Persistent dedupe (restart-safe, DB-backed or JSON fallback)
         self._ledger = CapLedger(

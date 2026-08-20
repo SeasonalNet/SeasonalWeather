@@ -11,7 +11,7 @@ def bootstrap_database_from_config(cfg: Any) -> SeasonalDatabase:
     if raw_path:
         db_path = raw_path
     else:
-        db_path = str(Path(cfg.paths.work_dir) / "seasonalweather.sqlite3")
+        db_path = str(Path(cfg.paths.operational_state_dir) / "seasonalweather.sqlite3")
     db = SeasonalDatabase(
         path=db_path,
         busy_timeout_ms=int(getattr(cfg.database, "busy_timeout_ms", 5000) or 5000),

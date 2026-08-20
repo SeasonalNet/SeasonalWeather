@@ -15,8 +15,8 @@ from threading import Event
 
 from seasonalweather.capabilities.models import ParameterValue
 
-from .models import LocalEngineOptions, VoiceTextOptions
 from .cancellation import deadline_expired, explicit_cancellation
+from .models import LocalEngineOptions, VoiceTextOptions
 from .subprocess import ProcessFailure, resolve_trusted_executable, run_bounded
 
 
@@ -25,6 +25,13 @@ def _fence(deadline: float, cancellation: Event | None, stage: str) -> None:
         raise ProcessFailure("timed_out", f"synthesis deadline expired during {stage}")
     if explicit_cancellation(cancellation):
         raise ProcessFailure("cancelled", f"synthesis was cancelled during {stage}")
+
+
+def _data_base(value: str = "") -> Path:
+    """Resolve the configured engine state base with legacy standalone fallback."""
+
+    configured = value.strip()
+    return Path(configured or os.getenv("SEASONALWEATHER_DATA_BASE", "/var/lib/seasonalweather"))
 
 
 @contextmanager
@@ -298,7 +305,7 @@ def _synthesize_voicetext_paul(
         ],
     )
     _fence(deadline, cancellation, "VoiceText preprocessing")
-    state_base = Path(os.getenv("SEASONALWEATHER_DATA_BASE", "/var/lib/seasonalweather"))
+    state_base = _data_base(options.voicetext_paul.data_base)
     engine_root = Path(
         os.getenv("VOICETEXT_PAUL_ENGINE_ROOT", str(state_base / "voices/voicetext_paul/WeatherRadioSuite-LIB"))
     )
@@ -526,7 +533,7 @@ class LocalEngineRegistry:
         )
         if canonical != "voicetext_paul":
             return resources_ok
-        state_base = Path(os.getenv("SEASONALWEATHER_DATA_BASE", "/var/lib/seasonalweather"))
+        state_base = _data_base(options.voicetext_paul.data_base)
         engine_root = Path(
             os.getenv(
                 "VOICETEXT_PAUL_ENGINE_ROOT",

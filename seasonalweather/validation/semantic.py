@@ -622,8 +622,12 @@ def _job_issues(
     job_path = str(_get(value, ("jobs", "path"), "")).strip()
     database_path = str(_get(value, ("database", "path"), "")).strip()
     work_dir = str(_get(value, ("paths", "work_dir"), ""))
-    effective_database_path = database_path or posixpath.join(
+    operational_state_dir = str(_get(value, ("paths", "operational_state_dir"), "")) or posixpath.join(
         work_dir.replace("\\", "/"),
+        "state",
+    )
+    effective_database_path = database_path or posixpath.join(
+        operational_state_dir.replace("\\", "/"),
         "seasonalweather.sqlite3",
     )
     ack = int(cast(Any, _get(value, ("jobs", "assignment_ack_seconds"), 10)))
@@ -664,7 +668,7 @@ def _job_issues(
                 path=ConfigPath(("jobs", "path")),
                 related_paths=(
                     ConfigPath(("database", "path")),
-                    ConfigPath(("paths", "work_dir")),
+                    ConfigPath(("paths", "operational_state_dir")),
                 ),
                 message="The job repository and operational database must use separate paths.",
                 help_text="Choose a dedicated jobs.path outside the operational database file.",

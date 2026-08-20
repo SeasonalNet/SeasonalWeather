@@ -90,6 +90,9 @@ Freeze products are supported natively. `FZ.W` maps to SAME `FZW` (**Freeze Warn
   simulated peers and documented in
   [`docs/worker-capabilities.md`](docs/worker-capabilities.md). They do not add
   a live worker or execution path.
+- Deployment filesystem mounts, controller/worker state authority, and
+  parameterized service endpoints are documented in
+  [`docs/p2-04-filesystem-network.md`](docs/p2-04-filesystem-network.md).
 - The versioned read-only diagnostic namespace registry, stable configuration
   codes, curated explanations, deterministic catalog build/export, and
   `seasonalweather diagnostics list|explain` commands are documented in
@@ -184,7 +187,8 @@ for semantic, compatibility, advisory, stamp, policy, and probe contracts.
 | `dedupe` | Cross-source deduplication window |
 | `tts` | TTS backend selection and VoiceText Paul tuning |
 | `audio` | Sample rate, tone frequencies, silence durations |
-| `paths` | Working directories |
+| `network` | API, Liquidsoap, SWWP, PostgreSQL, and Redis endpoint policy |
+| `paths` | State, job, artifact, temporary, runtime, secret, and working directories |
 | `service_area` | Transmitter SAME/FIPS lists (the most important section) |
 
 TTS execution uses one backend-neutral synthesis boundary. The `local` block

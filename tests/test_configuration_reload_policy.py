@@ -101,7 +101,7 @@ def test_restart_required_mixed_candidate_is_wholly_report_only(tmp_path: Path) 
         1,
     )
     text = text.replace(
-        'path: "/var/lib/seasonalweather/seasonalweather.sqlite3"',
+        'path: "/var/lib/seasonalweather/state/seasonalweather.sqlite3"',
         'path: "/tmp/replacement.sqlite3"',
         1,
     )

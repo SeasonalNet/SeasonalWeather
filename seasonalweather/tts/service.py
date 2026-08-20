@@ -76,7 +76,9 @@ def _resource_available(resource: str) -> bool:
 
 
 def _voicetext_resources_available(request: SynthesisRequest) -> bool:
-    state_base = Path(os.getenv("SEASONALWEATHER_DATA_BASE", "/var/lib/seasonalweather"))
+    state_base = Path(
+        request.local.voicetext_paul.data_base or os.getenv("SEASONALWEATHER_DATA_BASE", "/var/lib/seasonalweather")
+    )
     engine_root = Path(
         os.getenv(
             "VOICETEXT_PAUL_ENGINE_ROOT",

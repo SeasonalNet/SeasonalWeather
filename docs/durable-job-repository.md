@@ -159,7 +159,7 @@ Readiness requires this component only when `jobs.required` is true.
 jobs:
   enabled: false
   required: false
-  path: "/var/lib/seasonalweather/jobs.sqlite3"
+  path: "/var/lib/seasonalweather/jobs/jobs.sqlite3"
   busy_timeout_ms: 5000
   lease_seconds: 60
   assignment_ack_seconds: 10

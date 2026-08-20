@@ -30,11 +30,6 @@ from seasonalweather.same.same import SameHeader, chunk_locations, render_same_b
 
 
 DEFAULT_CONFIG = "/etc/seasonalweather/config.yaml"
-DEFAULT_TELNET_HOST = "127.0.0.1"
-DEFAULT_TELNET_PORT = 1234
-
-OUT_DIR = pathlib.Path("/tmp/seasonalweather-inject-audio")
-OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _now_stamp() -> str:
@@ -250,14 +245,16 @@ def _render_alert_block_wav(
 ) -> pathlib.Path:
     cfg = load_config(cfg_path)
     sr = int(cfg.audio.sample_rate)
+    output_dir = pathlib.Path(cfg.paths.temporary_dir) / "seasonalweather-inject-audio"
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     base = f"inject_{_now_stamp()}"
-    same_hdr = OUT_DIR / f"{base}_same_header.wav"
-    same_eom = OUT_DIR / f"{base}_same_eom.wav"
-    gap = OUT_DIR / f"{base}_gap.wav"
-    tone = OUT_DIR / f"{base}_1050.wav"
-    voice = OUT_DIR / f"{base}_voice.wav"
-    out = OUT_DIR / f"{base}.wav"
+    same_hdr = output_dir / f"{base}_same_header.wav"
+    same_eom = output_dir / f"{base}_same_eom.wav"
+    gap = output_dir / f"{base}_gap.wav"
+    tone = output_dir / f"{base}_1050.wav"
+    voice = output_dir / f"{base}_voice.wav"
+    out = output_dir / f"{base}.wav"
 
     _write_silence_wav(gap, gap_seconds, sr)
     _write_sine_wav(tone, 1050.0, tone_seconds, sr, amplitude=0.22)
@@ -291,6 +288,7 @@ def _render_alert_block_wav(
         text_overrides=cfg.tts.text_overrides,
         vtp_cfg=cfg.tts.voicetext_paul,
         fallback_backend=cfg.tts.fallback_backend,
+        tts_data_base=cfg.paths.operational_state_dir,
     )
     tts.synth_to_wav(spoken_text, voice, purpose="administrative")
 
@@ -306,12 +304,17 @@ def _render_alert_block_wav(
     ]
 
     if post_seconds and post_seconds > 0:
-        post = OUT_DIR / f"{base}_post.wav"
+        post = output_dir / f"{base}_post.wav"
         _write_silence_wav(post, post_seconds, sr)
         parts.append(_ensure_pcm16_stereo_sr(post, sr))
 
     _concat_wavs(out, parts, sr)
     return out
+
+
+def _liquidsoap_endpoint(config_path: str, host: str | None, port: int | None) -> tuple[str, int]:
+    network = load_config(config_path).network.liquidsoap
+    return host or network.host, int(port if port is not None else network.port)
 
 
 def cmd_test_alert(args: argparse.Namespace) -> int:
@@ -333,10 +336,11 @@ def cmd_test_alert(args: argparse.Namespace) -> int:
     )
 
     if not args.dry_run:
+        host, port = _liquidsoap_endpoint(args.config, args.telnet_host, args.telnet_port)
         _push_alert(
             out,
-            host=args.telnet_host,
-            port=args.telnet_port,
+            host=host,
+            port=port,
             flush_alert=args.flush_alert,
             flush_cycle=args.flush_cycle,
         )
@@ -381,10 +385,11 @@ def cmd_inject_raw(args: argparse.Namespace) -> int:
     )
 
     if not args.dry_run:
+        host, port = _liquidsoap_endpoint(args.config, args.telnet_host, args.telnet_port)
         _push_alert(
             out,
-            host=args.telnet_host,
-            port=args.telnet_port,
+            host=host,
+            port=port,
             flush_alert=args.flush_alert,
             flush_cycle=args.flush_cycle,
         )
@@ -398,8 +403,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         prog="seasonalweather-inject", description="Inject SAME+1050Hz+audio into Liquidsoap alert queue"
     )
     ap.add_argument("--config", default=DEFAULT_CONFIG, help="Path to SeasonalWeather config.yaml")
-    ap.add_argument("--telnet-host", default=DEFAULT_TELNET_HOST)
-    ap.add_argument("--telnet-port", default=DEFAULT_TELNET_PORT, type=int)
+    ap.add_argument("--telnet-host", default=None)
+    ap.add_argument("--telnet-port", default=None, type=int)
 
     ap.add_argument("--flush-alert", action="store_true", help="Flush alert queue before pushing")
     ap.add_argument("--flush-cycle", action="store_true", help="Flush cycle queue (best-effort)")

@@ -19,7 +19,7 @@ import logging
 import sys
 import time
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 from zoneinfo import ZoneInfo
 
 from .build_metadata import current_build_info
@@ -110,6 +110,11 @@ from .tts.admission import (
 )
 from .tts.local import LocalEngineRegistry
 
+if TYPE_CHECKING:
+    from .alerts.cap_nws import CapAlertEvent
+    from .alerts.ipaws_cap import IpawsCapEvent
+    from .broadcast.ern_gwes import ErnSameEvent
+
 log = logging.getLogger("seasonalweather")
 
 from .broadcast.station_feed_runtime import (
@@ -176,8 +181,9 @@ class Orchestrator:
         )
         self.api = NWSApi()
         self.telnet = LiquidsoapTelnet(
-            host=cfg.secrets.liquidsoap_host,
-            port=cfg.secrets.liquidsoap_port,
+            host=cfg.network.liquidsoap.host,
+            port=cfg.network.liquidsoap.port,
+            timeout=cfg.network.liquidsoap.timeout_seconds,
         )
 
         self._tz = ZoneInfo(cfg.station.timezone)
@@ -219,6 +225,7 @@ class Orchestrator:
             execution_executor=self.tts_execution_port,
             seasonal_ttsd_config=cfg.tts.seasonal_ttsd,
             openai_compatible_config=cfg.tts.openai_compatible,
+            tts_data_base=cfg.paths.operational_state_dir,
         )
 
         self.mode = "normal"
@@ -240,6 +247,7 @@ class Orchestrator:
             same_fips_all=cfg.service_area.same_fips_all,
             cycle_cfg=cfg.cycle,
             registry=self.segment_registry,
+            work_dir=cfg.paths.operational_state_dir,
         )
 
         # Fast membership checks for "in-area" targeting
@@ -266,15 +274,15 @@ class Orchestrator:
         self.nwws_admission_fence = NwwsSourceAdmissionFence()
 
         # CAP queue (only used if CAP enabled and import succeeded)
-        self.cap_queue: asyncio.Queue["CapAlertEvent"] = asyncio.Queue(maxsize=200)  # type: ignore[name-defined]
+        self.cap_queue: asyncio.Queue[CapAlertEvent] = asyncio.Queue(maxsize=200)
         self._cap_voice_last_by_key: dict[tuple[str, str], dt.datetime] = {}
         self._cap_full_last_by_key: dict[tuple[str, str], dt.datetime] = {}
 
         # IPAWS queue (only used if IPAWS enabled and import succeeded)
-        self.ipaws_queue: asyncio.Queue["IpawsCapEvent"] = asyncio.Queue(maxsize=200)  # type: ignore[name-defined]
+        self.ipaws_queue: asyncio.Queue[IpawsCapEvent] = asyncio.Queue(maxsize=200)
 
         # ERN queue (only used if ERN enabled and import succeeded)
-        self.ern_queue: asyncio.Queue["ErnSameEvent"] = asyncio.Queue(maxsize=200)  # type: ignore[name-defined]
+        self.ern_queue: asyncio.Queue[ErnSameEvent] = asyncio.Queue(maxsize=200)
 
         # ERN relay cooldown (on-air)
         self._ern_relay_last_any_at: dt.datetime | None = None
@@ -306,7 +314,7 @@ class Orchestrator:
 
         # --- Persistent active alert tracker ---
         # Survives restarts: active watches/warnings are re-queued as cycle segments.
-        _tracker_path = Path(cfg.paths.work_dir) / "alert_state.json"
+        _tracker_path = Path(cfg.paths.operational_state_dir) / "alert_state.json"
         self.alert_tracker = AlertTracker(_tracker_path, database=self.database)
 
         # Discord webhook logger (fire-and-forget; starts its drain task in run())
@@ -339,7 +347,7 @@ class Orchestrator:
         # SegmentStore: persistent per-segment audio cache.
         # Placed last so alert_tracker and all other attributes are available.
         self._seg_store = SegmentStore(
-            work_dir=Path(cfg.paths.work_dir),
+            work_dir=Path(cfg.paths.operational_state_dir),
             audio_dir=Path(cfg.paths.audio_dir),
             database=self.database,
             static_key_predicate=self.segment_registry.is_managed,
@@ -512,7 +520,7 @@ class Orchestrator:
         return out
 
     def _paths(self) -> tuple[Path, Path, Path, Path]:
-        work = Path(self.cfg.paths.work_dir)
+        work = Path(self.cfg.paths.operational_state_dir)
         audio = Path(self.cfg.paths.audio_dir)
         cache = Path(self.cfg.paths.cache_dir)
         logs = Path(self.cfg.paths.log_dir)

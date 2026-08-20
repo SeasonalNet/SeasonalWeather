@@ -16,7 +16,7 @@ from pathlib import Path
 from threading import Event
 from typing import TYPE_CHECKING, Any, cast
 
-from .preprocess import clean_for_tts, normalize_nws_spoken_times, verbalize_url  # noqa: F401
+from .preprocess import clean_for_tts, normalize_nws_spoken_times, verbalize_url
 
 if TYPE_CHECKING:
     from .service import SynthesisService
@@ -84,6 +84,7 @@ class TTS:
     execution_executor: Executor | None = None
     seasonal_ttsd_config: object | None = None
     openai_compatible_config: object | None = None
+    tts_data_base: str | None = None
     _synthesis_service: SynthesisService | None = field(default=None, init=False, repr=False)
 
     def _request(self, text: str, *, purpose: str = "routine", deadline_at: dt.datetime | None = None):
@@ -139,6 +140,7 @@ class TTS:
         cfg = self.vtp_cfg
         return VoiceTextOptions(
             run_as=str(getattr(cfg, "run_as", "voicetext")),
+            data_base=self.tts_data_base or "",
             retries=int(getattr(cfg, "retries", 1)),
             retry_sleep_ms=int(getattr(cfg, "retry_sleep_ms", 150)),
             reset_every=int(getattr(cfg, "reset_every", 0)),
@@ -266,7 +268,11 @@ class TTS:
     def _voicetext_lock(self):
         if self._selected_local_engine() != "voicetext_paul":
             return nullcontext()
-        state_base = Path(os.getenv("SEASONALWEATHER_DATA_BASE", "/var/lib/seasonalweather"))
+        state_base_value: str = self.tts_data_base or cast(
+            str,
+            os.getenv("SEASONALWEATHER_DATA_BASE", "/var/lib/seasonalweather"),
+        )
+        state_base = Path(state_base_value)
         return _flock_path(state_base / ".voicetext_paul_tts.lock")
 
     def availability(self) -> tuple[bool, str]:
@@ -350,7 +356,11 @@ class TTS:
     ) -> None:
         """Recheck generation/admission immediately before caller replacement."""
 
-        self._service().finalization_fence(request, cancellation, capacity_reservation)  # type: ignore[arg-type]
+        from .models import SynthesisRequest
+
+        if not isinstance(request, SynthesisRequest):
+            raise TypeError("TTS finalization request must be a SynthesisRequest")
+        self._service().finalization_fence(request, cancellation, capacity_reservation)
 
     def synth_to_wav(
         self,

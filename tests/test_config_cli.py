@@ -134,10 +134,15 @@ def test_config_lint_preflight_is_explicit_read_only_and_does_not_create_databas
     text = EXAMPLE.read_text(encoding="utf-8")
     database = tmp_path / "must-not-be-created.sqlite3"
     text = text.replace(
-        'path: "/var/lib/seasonalweather/seasonalweather.sqlite3"',
+        'path: "/var/lib/seasonalweather/state/seasonalweather.sqlite3"',
         f'path: "{database}"',
     )
     for configured in (
+        "/var/lib/seasonalweather/artifacts/audio",
+        "/var/lib/seasonalweather/state/cache",
+        "/var/lib/seasonalweather/state",
+        "/var/lib/seasonalweather/jobs",
+        "/var/lib/seasonalweather/artifacts",
         "/var/lib/seasonalweather/audio",
         "/var/lib/seasonalweather/cache",
         "/etc/seasonalweather",

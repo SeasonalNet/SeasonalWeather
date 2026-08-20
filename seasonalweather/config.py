@@ -10,16 +10,18 @@ The only things that belong in the environment (seasonalweather.env) are:
   - ICECAST_RELAY_PASSWORD             — Icecast relay secret   (optional)
   - SEASONAL_API_TOKEN                 — API bearer token       (optional)
   - SEASONAL_API_TOKENS_JSON           — multi-token JSON blob  (optional)
-  - LIQUIDSOAP_TELNET_HOST             — deployment topology    (optional, default 127.0.0.1)
-  - LIQUIDSOAP_TELNET_PORT             — deployment topology    (optional, default 1234)
+  - LIQUIDSOAP_TELNET_HOST             — legacy deployment override (optional)
+  - LIQUIDSOAP_TELNET_PORT             — legacy deployment override (optional)
 
 Everything else lives in config.yaml.
 """
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import math
+import tempfile
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -48,6 +50,9 @@ from .configuration.semantic_rules import (
     remote_tts_configuration_errors,
 )
 from .lifecycle import LifecycleTimeouts
+
+_DEFAULT_SWWP_BIND_HOST = str(ipaddress.IPv4Address(0))
+_DEFAULT_TEMPORARY_DIR = tempfile.gettempdir()
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -102,6 +107,52 @@ class StreamConfig:
     icecast_host: str
     icecast_port: int
     icecast_mount: str
+
+
+@dataclass(frozen=True)
+class ApiNetworkConfig:
+    bind_host: str = "127.0.0.1"
+    port: int = 9080
+
+
+@dataclass(frozen=True)
+class LiquidsoapNetworkConfig:
+    host: str = "127.0.0.1"
+    port: int = 1234
+    timeout_seconds: float = 3.0
+
+
+@dataclass(frozen=True)
+class SwwpNetworkConfig:
+    bind_host: str = _DEFAULT_SWWP_BIND_HOST
+    controller_path: str = "/v1/workers/connect"
+    worker_controller_url: str = ""
+    verify_tls: bool = True
+    heartbeat_interval_seconds: int = 15
+    heartbeat_timeout_seconds: int = 45
+    lease_seconds: int = 60
+    assignment_ack_seconds: int = 10
+    max_message_bytes: int = 65536
+    capability_validity_seconds: int = 60
+
+
+@dataclass(frozen=True)
+class OptionalServiceNetworkConfig:
+    enabled: bool = False
+    address: str = ""
+    port: int = 0
+    database: str = ""
+    tls: bool = True
+    connect_timeout_seconds: float = 5.0
+
+
+@dataclass(frozen=True)
+class NetworkConfig:
+    api: ApiNetworkConfig = field(default_factory=ApiNetworkConfig)
+    liquidsoap: LiquidsoapNetworkConfig = field(default_factory=LiquidsoapNetworkConfig)
+    swwp: SwwpNetworkConfig = field(default_factory=SwwpNetworkConfig)
+    postgresql: OptionalServiceNetworkConfig = field(default_factory=lambda: OptionalServiceNetworkConfig(port=5432))
+    redis: OptionalServiceNetworkConfig = field(default_factory=lambda: OptionalServiceNetworkConfig(port=6379))
 
 
 # --- cycle sub-sections ---
@@ -821,6 +872,13 @@ class PathsConfig:
     cache_dir: str
     config_dir: str
     log_dir: str
+    operational_state_dir: str = ""
+    job_state_dir: str = ""
+    artifact_dir: str = ""
+    diagnostic_export_dir: str = "/usr/share/seasonalweather/diagnostics"
+    temporary_dir: str = _DEFAULT_TEMPORARY_DIR
+    runtime_dir: str = "/run/seasonalweather"
+    secret_dir: str = "/run/secrets"
 
 
 @dataclass(frozen=True)
@@ -952,6 +1010,7 @@ class AppConfig:
     # core
     station: StationConfig
     stream: StreamConfig
+    network: NetworkConfig
     cycle: CycleConfig
     observations: ObservationsConfig
     nwws: NWWSConfig
@@ -1001,6 +1060,133 @@ def _get(d: Dict[str, Any], *keys: str, default: Any = None) -> Any:
         if cur is None:
             return default
     return cur
+
+
+def _network_host(value: Any, name: str, default: str) -> str:
+    result = str(value if value is not None else default).strip()
+    if not result or any(ord(character) < 0x20 or ord(character) == 0x7F for character in result):
+        raise ValueError(f"network.{name} must be a non-empty host or address")
+    return result
+
+
+def _network_port(
+    value: Any,
+    name: str,
+    default: int,
+    *,
+    allow_zero: bool = False,
+    maximum: int = 65_535,
+) -> int:
+    try:
+        result = int(value if value is not None else default)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"network.{name} must be an integer port") from exc
+    minimum = 0 if allow_zero else 1
+    if not minimum <= result <= maximum:
+        raise ValueError(f"network.{name} must be between {minimum} and {maximum}")
+    return result
+
+
+def _network_timeout(value: Any, name: str, default: float) -> float:
+    try:
+        result = float(value if value is not None else default)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"network.{name} must be a finite positive number") from exc
+    if not math.isfinite(result) or result <= 0:
+        raise ValueError(f"network.{name} must be a finite positive number")
+    return result
+
+
+def _load_optional_service_network_config(
+    network_raw: dict[str, Any], name: str, default_port: int
+) -> OptionalServiceNetworkConfig:
+    service_raw = network_raw.get(name, {}) or {}
+    address = str(service_raw.get("address", "") or "").strip()
+    enabled = bool(service_raw.get("enabled", False))
+    if any(ord(character) < 0x20 or ord(character) == 0x7F for character in address):
+        raise ValueError(f"network.{name}.address contains control characters")
+    if enabled and not address:
+        raise ValueError(f"network.{name}.address is required when enabled")
+    return OptionalServiceNetworkConfig(
+        enabled=enabled,
+        address=address,
+        port=_network_port(service_raw.get("port", default_port), f"{name}.port", default_port),
+        database=str(service_raw.get("database", "") or "").strip(),
+        tls=bool(service_raw.get("tls", True)),
+        connect_timeout_seconds=_network_timeout(
+            service_raw.get("connect_timeout_seconds", 5.0),
+            f"{name}.connect_timeout_seconds",
+            5.0,
+        ),
+    )
+
+
+def _load_swwp_network_config(swwp_raw: dict[str, Any]) -> SwwpNetworkConfig:
+    worker_url = str(swwp_raw.get("worker_controller_url", "") or "").strip()
+    if worker_url and not worker_url.startswith(("ws://", "wss://")):
+        raise ValueError("network.swwp.worker_controller_url must use ws:// or wss://")
+    controller_path = str(swwp_raw.get("controller_path", "/v1/workers/connect") or "").strip()
+    if not controller_path.startswith("/") or any(
+        ord(character) < 0x20 or ord(character) == 0x7F for character in controller_path
+    ):
+        raise ValueError("network.swwp.controller_path must be an absolute path")
+    return SwwpNetworkConfig(
+        bind_host=_network_host(swwp_raw.get("bind_host"), "swwp.bind_host", _DEFAULT_SWWP_BIND_HOST),
+        controller_path=controller_path,
+        worker_controller_url=worker_url,
+        verify_tls=bool(swwp_raw.get("verify_tls", True)),
+        heartbeat_interval_seconds=_network_port(
+            swwp_raw.get("heartbeat_interval_seconds"),
+            "swwp.heartbeat_interval_seconds",
+            15,
+            maximum=300,
+        ),
+        heartbeat_timeout_seconds=_network_port(
+            swwp_raw.get("heartbeat_timeout_seconds"),
+            "swwp.heartbeat_timeout_seconds",
+            45,
+            maximum=900,
+        ),
+        lease_seconds=_network_port(swwp_raw.get("lease_seconds"), "swwp.lease_seconds", 60, maximum=3600),
+        assignment_ack_seconds=_network_port(
+            swwp_raw.get("assignment_ack_seconds"), "swwp.assignment_ack_seconds", 10, maximum=300
+        ),
+        max_message_bytes=_network_port(
+            swwp_raw.get("max_message_bytes"), "swwp.max_message_bytes", 65_536, maximum=1_048_576
+        ),
+        capability_validity_seconds=_network_port(
+            swwp_raw.get("capability_validity_seconds"),
+            "swwp.capability_validity_seconds",
+            60,
+            maximum=900,
+        ),
+    )
+
+
+def _load_network_config(raw: dict[str, Any]) -> NetworkConfig:
+    network_raw = raw.get("network", {}) or {}
+    api_raw = network_raw.get("api", {}) or {}
+    liquidsoap_raw = network_raw.get("liquidsoap", {}) or {}
+    swwp_raw = network_raw.get("swwp", {}) or {}
+
+    return NetworkConfig(
+        api=ApiNetworkConfig(
+            bind_host=_network_host(api_raw.get("bind_host"), "api.bind_host", "127.0.0.1"),
+            port=_network_port(api_raw.get("port"), "api.port", 9080),
+        ),
+        liquidsoap=LiquidsoapNetworkConfig(
+            host=_network_host(liquidsoap_raw.get("host"), "liquidsoap.host", "127.0.0.1"),
+            port=_network_port(liquidsoap_raw.get("port"), "liquidsoap.port", 1234),
+            timeout_seconds=_network_timeout(
+                liquidsoap_raw.get("timeout_seconds", 3.0),
+                "liquidsoap.timeout_seconds",
+                3.0,
+            ),
+        ),
+        swwp=_load_swwp_network_config(swwp_raw),
+        postgresql=_load_optional_service_network_config(network_raw, "postgresql", 5432),
+        redis=_load_optional_service_network_config(network_raw, "redis", 6379),
+    )
 
 
 def _upper_list(value: Any) -> List[str]:
@@ -1403,6 +1589,26 @@ def _build_app_config(
     # stream
     # ------------------------------------------------------------------
     stream = StreamConfig(**raw["stream"])
+    network = _load_network_config(raw)
+    paths_raw = raw["paths"]
+    work_dir = str(paths_raw["work_dir"]).strip()
+    state_dir = str(paths_raw.get("operational_state_dir", "") or "").strip() or str(Path(work_dir) / "state")
+    job_state_dir = str(paths_raw.get("job_state_dir", "") or "").strip() or str(Path(work_dir) / "jobs")
+    artifact_dir = str(paths_raw.get("artifact_dir", "") or "").strip() or str(Path(work_dir) / "artifacts")
+    paths = PathsConfig(
+        work_dir=work_dir,
+        audio_dir=str(paths_raw["audio_dir"]),
+        cache_dir=str(paths_raw["cache_dir"]),
+        config_dir=str(paths_raw["config_dir"]),
+        log_dir=str(paths_raw["log_dir"]),
+        operational_state_dir=state_dir,
+        job_state_dir=job_state_dir,
+        artifact_dir=artifact_dir,
+        diagnostic_export_dir=str(paths_raw.get("diagnostic_export_dir", "/usr/share/seasonalweather/diagnostics")),
+        temporary_dir=str(paths_raw.get("temporary_dir", _DEFAULT_TEMPORARY_DIR)),
+        runtime_dir=str(paths_raw.get("runtime_dir", "/run/seasonalweather")),
+        secret_dir=str(paths_raw.get("secret_dir", "/run/secrets")),
+    )
 
     # ------------------------------------------------------------------
     # cycle
@@ -1852,7 +2058,7 @@ def _build_app_config(
         poll_seconds=int(cap_raw.get("poll_seconds", 60)),
         user_agent=str(cap_raw.get("user_agent", "SeasonalWeather (CAP monitor)")),
         url=str(cap_raw.get("url", "")),
-        ledger_path=str(cap_raw.get("ledger_path", "/var/lib/seasonalweather/cap_ledger.json")),
+        ledger_path=str(cap_raw.get("ledger_path", Path(paths.operational_state_dir) / "cap_ledger.json")),
         ledger_max_age_days=int(cap_raw.get("ledger_max_age_days", 14)),
         full=CapFullConfig(
             enabled=bool(cap_full_raw.get("enabled", True)),
@@ -1878,7 +2084,7 @@ def _build_app_config(
         poll_seconds=int(ipaws_raw.get("poll_seconds", 90)),
         user_agent=str(ipaws_raw.get("user_agent", "SeasonalWeather (IPAWS monitor)")),
         url=str(ipaws_raw.get("url", "")),
-        ledger_path=str(ipaws_raw.get("ledger_path", "/var/lib/seasonalweather/ipaws_ledger.json")),
+        ledger_path=str(ipaws_raw.get("ledger_path", Path(paths.operational_state_dir) / "ipaws_ledger.json")),
         ledger_max_age_days=int(ipaws_raw.get("ledger_max_age_days", 14)),
         full_events=[str(e) for e in ipaws_raw.get("full_events", _ipaws_default_full)],
         voice_events=[str(e) for e in ipaws_raw.get("voice_events", [])],
@@ -2315,11 +2521,6 @@ def _build_app_config(
     audio = AudioConfig(**raw["audio"])
 
     # ------------------------------------------------------------------
-    # paths
-    # ------------------------------------------------------------------
-    paths = PathsConfig(**raw["paths"])
-
-    # ------------------------------------------------------------------
     # controller lifecycle
     # ------------------------------------------------------------------
     lifecycle_raw = raw.get("lifecycle", {}) or {}
@@ -2338,7 +2539,7 @@ def _build_app_config(
     # database
     # ------------------------------------------------------------------
     db_raw = raw.get("database", {})
-    db_path = str(db_raw.get("path", "")).strip() or str(Path(paths.work_dir) / "seasonalweather.sqlite3")
+    db_path = str(db_raw.get("path", "")).strip() or str(Path(paths.operational_state_dir) / "seasonalweather.sqlite3")
     db_hk_raw = db_raw.get("housekeeping", {})
     database = DatabaseConfig(
         enabled=bool(db_raw.get("enabled", True)),
@@ -2397,8 +2598,8 @@ def _build_app_config(
         icecast_relay_password=environment.optional("ICECAST_RELAY_PASSWORD"),
         api_token=environment.raw_optional("SEASONAL_API_TOKEN"),
         api_tokens_json=environment.raw_optional("SEASONAL_API_TOKENS_JSON"),
-        liquidsoap_host=environment.optional("LIQUIDSOAP_TELNET_HOST", "127.0.0.1"),
-        liquidsoap_port=environment.integer("LIQUIDSOAP_TELNET_PORT", 1234),
+        liquidsoap_host=environment.optional("LIQUIDSOAP_TELNET_HOST", network.liquidsoap.host),
+        liquidsoap_port=environment.integer("LIQUIDSOAP_TELNET_PORT", network.liquidsoap.port),
     )
 
     # ------------------------------------------------------------------
@@ -2456,6 +2657,7 @@ def _build_app_config(
     return AppConfig(
         station=station,
         stream=stream,
+        network=network,
         cycle=cycle,
         observations=observations,
         nwws=nwws,

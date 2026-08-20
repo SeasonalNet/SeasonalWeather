@@ -175,7 +175,7 @@ COPY --from=builder /usr/share/seasonalweather /usr/share/seasonalweather
 RUN groupadd --gid 10001 seasonalweather \
     && useradd --uid 10001 --gid 10001 --home-dir /nonexistent --no-create-home \
         --shell /usr/sbin/nologin seasonalweather \
-    && install -d -o 10001 -g 10001 /var/lib/seasonalweather
+    && install -d -o 10001 -g 10001 /var/lib/seasonalweather/artifacts /var/lib/seasonalweather/artifacts/audio
 
 WORKDIR /opt/seasonalweather
 USER seasonalweather

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-AUDIO="${SEASONALWEATHER_AUDIO_DIR:-/var/lib/seasonalweather/audio}"
+AUDIO="${SEASONALWEATHER_AUDIO_DIR:-/var/lib/seasonalweather/artifacts/audio}"
 MIN_FREE_MB="${SEASONALWEATHER_MIN_FREE_MB:-512}"
 
 free_mb() {

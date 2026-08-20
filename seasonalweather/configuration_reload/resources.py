@@ -416,6 +416,7 @@ class OrchestratorResourcePreparer:
                 execution_executor=getattr(self.orch, "tts_execution_port", None),
                 seasonal_ttsd_config=configuration.tts.seasonal_ttsd,
                 openai_compatible_config=configuration.tts.openai_compatible,
+                tts_data_base=configuration.paths.operational_state_dir,
             )
             if resource_plan.replace_tts
             else None
@@ -432,6 +433,7 @@ class OrchestratorResourcePreparer:
                 same_fips_all=configuration.service_area.same_fips_all,
                 cycle_cfg=configuration.cycle,
                 registry=builder_registry,
+                work_dir=configuration.paths.operational_state_dir,
             )
             if resource_plan.replace_cycle_builder
             else None

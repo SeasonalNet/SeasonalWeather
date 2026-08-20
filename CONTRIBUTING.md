@@ -5,6 +5,15 @@ small, reviewable, and operationally safe. Preserve alert correctness,
 deduplication, cooldowns, service-area targeting, and on-air behavior unless a
 change explicitly requires different semantics.
 
+All contributions made here, whether by machine or person, must follow the standards set out below.
+Autonomous agents, whether fully autonomous without human interaction, or under human operation must conform to the applicable governing [AGENTS.md](./AGENTS.md) files.
+
+Failure to follow rules defined here may result in disclipinary action, including but not limited to:
+
+- Bans or sanctions from pull requests
+- Refusal of contributions, or being ignored where applicable
+- And other sanctions as seen fit by repository maintainers.
+
 ## Development setup
 
 Create and activate a virtual environment, then install runtime and development
@@ -36,6 +45,10 @@ add a production dependency without a demonstrated need and explicit review.
 - Do not modify generated files except through the repository-defined workflow.
 - Review the final diff for unintended changes, debug output, local absolute
   paths, and secret material.
+- Do not weaken the quality guardrails set out in the repository, and do not
+  silence checks with inline suppressors. If you happen to have less quality tool hits than
+  the governed limit, feel free to ratchet them down to your actual recorded quality debt
+  level as long as you did not regress the codebase.
 
 Repository configuration under `config/` is an example/default. Live behavior
 normally comes from `/etc/seasonalweather/config.yaml`. When adding a config

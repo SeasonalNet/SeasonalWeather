@@ -51,6 +51,7 @@ from seasonalweather.validation import (
     validate_compiled,
     validate_wav_upload,
 )
+from seasonalweather.validation.admission import AdmissionField
 from seasonalweather.validation import (
     verify_report as _verify_report,
 )
@@ -406,7 +407,11 @@ def test_preflight_readiness_requires_a_completed_evaluation_in_typed_and_extern
     [
         ("      minimum_ttl_seconds: 60", "      minimum_ttl_seconds: 1000", "/api/auth/exchange/minimum_ttl_seconds"),
         ("  required: false", "  required: true", "/jobs/required"),
-        ("  assignment_ack_seconds: 10", "  assignment_ack_seconds: 60", "/jobs/assignment_ack_seconds"),
+        (
+            "\n  assignment_ack_seconds: 10\n",
+            "\n  assignment_ack_seconds: 60\n",
+            "/jobs/assignment_ack_seconds",
+        ),
         ("  total_seconds: 30.0", "  total_seconds: 4.0", "/lifecycle/total_seconds"),
     ],
 )
@@ -464,7 +469,8 @@ def test_lifecycle_fix_is_deterministic_fenced_and_never_applied() -> None:
 
     assert fix.to_dict() == next(item for item in second.issues if item.fixes).fixes[0].to_dict()
     assert fix.expected_old_value == 4.0
-    assert fix.expected_source_sha256 == compiled.source.digest  # type: ignore[union-attr]
+    assert compiled.source is not None
+    assert fix.expected_source_sha256 == compiled.source.digest
     assert fix.replacement == 10.0
     assert compiled.source is not None and compiled.source.text == before
 
@@ -757,7 +763,7 @@ def test_stamp_report_json_and_defensive_immutability_are_deterministic() -> Non
         expected_candidate_sha256=first.candidate.sha256,
     ).accepted
     with pytest.raises(FrozenInstanceError):
-        first.candidate.sha256 = "0" * 64  # type: ignore[misc]
+        setattr(first.candidate, "sha256", "0" * 64)
 
 
 def test_report_verification_rejects_hash_staleness_and_contradiction() -> None:
@@ -1241,7 +1247,10 @@ def test_external_report_verifier_requires_exact_integer_json_types(
     payload = json.loads(report.to_json())
     selected: dict[str, object] = payload
     for segment in path[:-1]:
-        selected = selected[segment]  # type: ignore[assignment]
+        child = selected.get(segment)
+        if not isinstance(child, dict):
+            raise AssertionError(f"expected mapping at {segment!r}")
+        selected = child
     selected[path[-1]] = value
 
     assert not _verify_report_mapping(
@@ -1684,7 +1693,7 @@ def test_current_job_auth_and_insert_owners_map_to_typed_admission_paths() -> No
         json_payload_field("/items/0/name"),
     ],
 )
-def test_reusable_admission_paths_are_bounded_and_machine_readable(field) -> None:
+def test_reusable_admission_paths_are_bounded_and_machine_readable(field: AdmissionField) -> None:
     issue = admission_error(
         field,
         message="The field is invalid.",
@@ -1693,5 +1702,5 @@ def test_reusable_admission_paths_are_bounded_and_machine_readable(field) -> Non
 
     payload = issue.to_dict()
     assert payload["code"] == "SWCFG1021"
-    assert payload["path"]["kind"] == field.kind.value  # type: ignore[index]
-    assert len(payload["path"]["pointer"]) < 512  # type: ignore[index]
+    assert payload["path"]["kind"] == field.kind.value
+    assert len(payload["path"]["pointer"]) < 512

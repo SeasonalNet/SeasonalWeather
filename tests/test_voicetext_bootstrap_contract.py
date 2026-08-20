@@ -30,7 +30,7 @@ def test_bootstrap_does_not_recursively_clobber_voicetext_owned_state() -> None:
     bootstrap = (REPO_ROOT / "scripts/00-bootstrap.sh").read_text()
 
     assert 'chown -R seasonalweather:seasonalweather /var/lib/seasonalweather /var/log/seasonalweather' not in bootstrap
-    assert 'chown seasonalweather:seasonalweather /var/lib/seasonalweather /var/lib/seasonalweather/audio /var/lib/seasonalweather/cache /var/log/seasonalweather' in bootstrap
+    assert 'chown seasonalweather:seasonalweather /var/lib/seasonalweather /var/lib/seasonalweather/state /var/lib/seasonalweather/state/cache /var/lib/seasonalweather/jobs /var/lib/seasonalweather/artifacts /var/lib/seasonalweather/artifacts/audio /var/log/seasonalweather' in bootstrap
 
 
 def test_bootstrap_installs_and_enables_voicetext_xvfb_service() -> None:

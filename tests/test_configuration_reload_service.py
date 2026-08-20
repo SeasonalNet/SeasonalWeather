@@ -330,7 +330,7 @@ def test_restart_required_and_dry_run_never_prepare_or_increment(tmp_path: Path,
     service, commands, preparer, _jobs = _service(tmp_path, monkeypatch)
     restart = _write_candidate(
         tmp_path,
-        'path: "/var/lib/seasonalweather/seasonalweather.sqlite3"',
+        'path: "/var/lib/seasonalweather/state/seasonalweather.sqlite3"',
         'path: "/tmp/replacement.sqlite3"',
         name="restart.yaml",
     )
@@ -369,7 +369,7 @@ def test_task_cancellation_prevents_every_report_only_success(
     elif case == "restart_required":
         source = _write_candidate(
             tmp_path,
-            'path: "/var/lib/seasonalweather/seasonalweather.sqlite3"',
+            'path: "/var/lib/seasonalweather/state/seasonalweather.sqlite3"',
             'path: "/tmp/cancelled-restart.sqlite3"',
         )
         dry_run = False
@@ -1636,7 +1636,7 @@ def test_terminal_audit_repairs_lost_successful_command_finalization(
     elif case == "restart":
         source = _write_candidate(
             tmp_path,
-            'path: "/var/lib/seasonalweather/seasonalweather.sqlite3"',
+            'path: "/var/lib/seasonalweather/state/seasonalweather.sqlite3"',
             'path: "/tmp/replay.sqlite3"',
         )
     elif case == "acknowledgment":

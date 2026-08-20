@@ -57,9 +57,11 @@ class DatabaseHousekeeper:
         self._commands = CommandRepository(db)
         self._segments = SegmentRepository(db)
         self._stop = asyncio.Event()
-        self._uploads_dir = Path(cfg.paths.work_dir) / "api" / "uploads"
+        artifact_root = str(getattr(cfg.paths, "artifact_dir", "") or "").strip() or cfg.paths.work_dir
+        temporary_root = str(getattr(cfg.paths, "temporary_dir", "") or "").strip()
+        self._uploads_dir = Path(artifact_root) / "api" / "uploads"
         self._audio_dir = Path(cfg.paths.audio_dir)
-        self._tmp_dir = Path(cfg.paths.work_dir) / "tmp"
+        self._tmp_dir = Path(temporary_root) / "seasonalweather" if temporary_root else Path(cfg.paths.work_dir) / "tmp"
 
     def stop(self) -> None:
         self._stop.set()
@@ -77,7 +79,10 @@ class DatabaseHousekeeper:
         return max(60, int(getattr(self.cfg.database.housekeeping, "audio_asset_grace_seconds", 900) or 900))
 
     def _generated_audio_retention_seconds(self) -> int:
-        return max(3600, int(getattr(self.cfg.database.housekeeping, "generated_audio_retention_seconds", 10800) or 86400))
+        return max(
+            3600,
+            int(getattr(self.cfg.database.housekeeping, "generated_audio_retention_seconds", 10800) or 86400),
+        )
 
     def _generated_audio_max_bytes(self) -> int:
         return max(0, int(getattr(self.cfg.database.housekeeping, "generated_audio_max_bytes", 1073741824) or 0))

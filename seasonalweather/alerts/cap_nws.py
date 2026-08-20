@@ -33,6 +33,11 @@ from ..same.locations import (
 
 log = logging.getLogger("seasonalweather.cap")
 
+def _required_ledger_path(value: str | None) -> str:
+    if not value:
+        raise ValueError("ledger_path must be supplied from the configured operational state root")
+    return value
+
 # Marine SAME FIPS "SS" (digits 1-2 of PSSCCC) that do not map to a state
 # abbreviation. These are translated into NWS marine UGC zone ids for ?zone=
 # requests. Do NOT feed these into ?area= — api.weather.gov rejects that with
@@ -238,7 +243,7 @@ class NwsCapPoller:
         poll_seconds: int = 60,
         user_agent: str = "SeasonalWeather (CAP monitor)",
         url: str | None = None,
-        ledger_path: str = "/var/lib/seasonalweather/cap_ledger.json",
+        ledger_path: str | None = None,
         ledger_max_age_days: int = 14,
         database: SeasonalDatabase | None = None,
     ) -> None:
@@ -273,7 +278,11 @@ class NwsCapPoller:
         self._seen_keys: set[str] = set()
 
         # Persistent dedupe (prevents restart spam)
-        self._ledger = CapLedger(path=Path(ledger_path), max_age_days=ledger_max_age_days, database=database)
+        self._ledger = CapLedger(
+            path=Path(_required_ledger_path(ledger_path)),
+            max_age_days=ledger_max_age_days,
+            database=database,
+        )
 
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(15.0, connect=10.0),

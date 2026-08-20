@@ -11,7 +11,7 @@ from .rwt_rmt import RwtRmtSchedule, RwtRmtScheduler
 from .station_feed_runtime import note_required_test as _station_feed_note_required_test
 from .tests import default_test_script_lines, format_test_presentation_template
 
-if TYPE_CHECKING:  # pragma: no cover
+if TYPE_CHECKING:
     from ..main import Orchestrator
 
 
@@ -35,7 +35,7 @@ class RequiredTestRuntime:
             return
 
         try:
-            state_path = str(Path(orch.cfg.paths.work_dir) / "rwt_rmt_state.json")
+            state_path = str(Path(orch.cfg.paths.operational_state_dir) / "rwt_rmt_state.json")
 
             sched = RwtRmtSchedule(
                 enabled=True,

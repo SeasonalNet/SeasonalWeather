@@ -94,6 +94,9 @@ def _production_config(tmp_path: Path, monkeypatch):
         paths=replace(
             cfg.paths,
             work_dir=str(tmp_path / "work"),
+            operational_state_dir=str(tmp_path / "state"),
+            job_state_dir=str(tmp_path / "jobs"),
+            artifact_dir=str(tmp_path / "artifacts"),
             audio_dir=str(tmp_path / "audio"),
             cache_dir=str(tmp_path / "cache"),
             config_dir=str(tmp_path / "config"),
@@ -153,7 +156,7 @@ def test_request_is_immutable_and_deterministically_serialized() -> None:
     assert first.canonical_json() == second.canonical_json()
     assert first.content_identity == second.content_identity
     with pytest.raises((AttributeError, TypeError, ValueError)):
-        first.text = "changed"  # type: ignore[misc]
+        setattr(first, "text", "changed")
     with pytest.raises(ValueError):
         SynthesisRequest.model_validate({**first.model_dump(), "unknown": True})
 
@@ -1314,16 +1317,24 @@ def test_controller_local_source_replacement_fence_blocks_overtaken_publication(
     release = threading.Event()
     original_fence = old_source.publication_fence
 
-    class GatedFence:
+    class GatedFence(ControllerLocalPublicationFence):
+        def __init__(self, original: ControllerLocalPublicationFence) -> None:
+            super().__init__()
+            self.original = original
+
+        @contextmanager
         def generation_publication(self, expected, current):
             entered.set()
             assert release.wait(1)
-            return original_fence.generation_publication(expected, current)
+            with self.original.generation_publication(expected, current) as eligible:
+                yield eligible
 
+        @contextmanager
         def hold(self):
-            return original_fence.hold()
+            with self.original.hold() as held:
+                yield held
 
-    old_source.publication_fence = GatedFence()
+    old_source.publication_fence = GatedFence(original_fence)
     old_result: list[object] = []
     thread = threading.Thread(target=lambda: old_result.append(old_source.refresh("espeak-ng")))
     thread.start()
@@ -1840,11 +1851,14 @@ def test_reservation_requalification_refreshes_p109_freshness_without_reacquirin
     )
     assert reservation is not None
     current[0] = t0 + dt.timedelta(seconds=61)
-    original_refresh = source.refresh
-    source.refresh = lambda _engine: None  # type: ignore[method-assign]
-    with pytest.raises(ProcessFailure, match="no longer qualified"):
-        adapter.for_reservation(owned_request, capability, reservation)
-    source.refresh = original_refresh  # type: ignore[method-assign]
+
+    def unavailable_refresh(_source: ControllerLocalQualificationSource, _engine: str) -> None:
+        return None
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ControllerLocalQualificationSource, "refresh", unavailable_refresh)
+        with pytest.raises(ProcessFailure, match="no longer qualified"):
+            adapter.for_reservation(owned_request, capability, reservation)
     refreshed = adapter.for_reservation(owned_request, capability, reservation)
     assert refreshed.disposition.value == "satisfied"
     snapshot = registry.snapshot(source.worker_id, current[0])

@@ -3,6 +3,7 @@ import wave
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Protocol, cast
 from seasonalweather.alerts.cap_nws import CapAlertEvent
 from seasonalweather.alerts.product import ParsedProduct
 from seasonalweather.config import load_config
@@ -144,6 +145,34 @@ class _FakeConductor:
         self.interrupt_calls.append((duration_s, reason))
 
 
+class _CapRuntime(Protocol):
+    async def air_full(self, event: CapAlertEvent) -> None: ...
+
+    async def air_voice(self, event: CapAlertEvent) -> None: ...
+
+
+class _NwwsRuntime(Protocol):
+    async def _handle_toneout(self, parsed: ParsedProduct) -> None: ...
+
+
+class _SmokeOrchestrator(Protocol):
+    audio_originator: _FakeAudioOriginator
+    cap_runtime: _CapRuntime
+    conductor: _FakeConductor
+    discord: _FakeDiscord
+    nwws_runtime: _NwwsRuntime
+    refresher: _FakeRefresher
+    target_resolver: _FakeTargetResolver
+    targeting: _FakeTargetResolver
+    telnet: _FakeTelnet
+
+    async def _push_interrupt_audio(self, wav_path: Path, *, full: bool) -> None: ...
+
+    def _schedule_cycle_refill(self, reason: str) -> None: ...
+
+    def _clear_liquidsoap_queues_on_startup(self) -> None: ...
+
+
 
 def _minimal_config(tmp_path, monkeypatch):
     monkeypatch.setenv("ICECAST_SOURCE_PASSWORD", "test-source")
@@ -155,6 +184,9 @@ def _minimal_config(tmp_path, monkeypatch):
         paths=replace(
             cfg.paths,
             work_dir=str(tmp_path / "work"),
+            operational_state_dir=str(tmp_path / "state"),
+            job_state_dir=str(tmp_path / "jobs"),
+            artifact_dir=str(tmp_path / "artifacts"),
             audio_dir=str(tmp_path / "audio"),
             cache_dir=str(tmp_path / "cache"),
             config_dir=str(tmp_path / "config"),
@@ -165,17 +197,21 @@ def _minimal_config(tmp_path, monkeypatch):
     )
 
 
-def _orchestrator(tmp_path, monkeypatch) -> Orchestrator:
+def _orchestrator(tmp_path, monkeypatch) -> _SmokeOrchestrator:
     orch = Orchestrator(_minimal_config(tmp_path, monkeypatch))
+    # The smoke fixture deliberately replaces production collaborators with
+    # stateful fakes whose assertion fields are not part of the production
+    # collaborator interfaces.
+    smoke_orch = cast(_SmokeOrchestrator, cast(object, orch))
     orch.lifecycle.mark_running()
-    orch.audio_originator = _FakeAudioOriginator(tmp_path / "audio")
-    orch.telnet = _FakeTelnet()
-    orch.discord = _FakeDiscord()
-    orch.target_resolver = _FakeTargetResolver(["024031"])
-    orch.targeting = orch.target_resolver
-    orch.refresher = _FakeRefresher()
-    orch.conductor = _FakeConductor()
-    return orch
+    smoke_orch.audio_originator = _FakeAudioOriginator(tmp_path / "audio")
+    smoke_orch.telnet = _FakeTelnet()
+    smoke_orch.discord = _FakeDiscord()
+    smoke_orch.target_resolver = _FakeTargetResolver(["024031"])
+    smoke_orch.targeting = smoke_orch.target_resolver
+    smoke_orch.refresher = _FakeRefresher()
+    smoke_orch.conductor = _FakeConductor()
+    return smoke_orch
 
 
 def _cap_event(*, event="Severe Thunderstorm Warning", vtec_action="NEW") -> CapAlertEvent:

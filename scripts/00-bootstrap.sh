@@ -388,8 +388,11 @@ if ! id -u seasonalweather >/dev/null 2>&1; then
 fi
 
 install -d -o seasonalweather -g seasonalweather /var/lib/seasonalweather
-install -d -o seasonalweather -g seasonalweather /var/lib/seasonalweather/audio
-install -d -o seasonalweather -g seasonalweather /var/lib/seasonalweather/cache
+install -d -o seasonalweather -g seasonalweather /var/lib/seasonalweather/state
+install -d -o seasonalweather -g seasonalweather /var/lib/seasonalweather/state/cache
+install -d -o seasonalweather -g seasonalweather /var/lib/seasonalweather/jobs
+install -d -o seasonalweather -g seasonalweather /var/lib/seasonalweather/artifacts
+install -d -o seasonalweather -g seasonalweather /var/lib/seasonalweather/artifacts/audio
 install -d -o seasonalweather -g seasonalweather /var/log/seasonalweather
 install -d -o root            -g root            /etc/seasonalweather
 
@@ -868,8 +871,8 @@ done
 # Permissions
 # -----------------------------------------------------------------------------------------
 log "Permissions"
-chown seasonalweather:seasonalweather /var/lib/seasonalweather /var/lib/seasonalweather/audio /var/lib/seasonalweather/cache /var/log/seasonalweather
-chmod 755 /var/lib/seasonalweather /var/lib/seasonalweather/audio /var/lib/seasonalweather/cache /var/log/seasonalweather
+chown seasonalweather:seasonalweather /var/lib/seasonalweather /var/lib/seasonalweather/state /var/lib/seasonalweather/state/cache /var/lib/seasonalweather/jobs /var/lib/seasonalweather/artifacts /var/lib/seasonalweather/artifacts/audio /var/log/seasonalweather
+chmod 755 /var/lib/seasonalweather /var/lib/seasonalweather/state /var/lib/seasonalweather/state/cache /var/lib/seasonalweather/jobs /var/lib/seasonalweather/artifacts /var/lib/seasonalweather/artifacts/audio /var/log/seasonalweather
 
 echo
 echo "======================================================="

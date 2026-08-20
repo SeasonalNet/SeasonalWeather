@@ -4,6 +4,7 @@ import datetime as dt
 import json
 import os
 import re
+import tempfile
 from dataclasses import dataclass, replace
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, cast
 from zoneinfo import ZoneInfo
@@ -811,7 +812,7 @@ class CycleBuilder:
         same_fips_all: List[str],
         cycle_cfg=None,
         registry: ResolvedSegmentRegistry | None = None,
-        work_dir: str = "/var/lib/seasonalweather",
+        work_dir: str | None = None,
     ) -> None:
         self.api = api
         self.tz = ZoneInfo(tz_name)
@@ -823,7 +824,8 @@ class CycleBuilder:
         # Pressure cache for RWR trend derivation (survives restarts)
         import os as _os
 
-        _cache_path = _os.path.join(work_dir, "obs_pressure_cache.json")
+        cache_root = work_dir or tempfile.gettempdir()
+        _cache_path = _os.path.join(cache_root, "obs_pressure_cache.json")
         _rwr = cycle_cfg.rwr if cycle_cfg else None
         self._pressure_cache = ObsPressureCache(
             path=_cache_path,

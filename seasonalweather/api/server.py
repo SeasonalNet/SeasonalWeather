@@ -13,7 +13,7 @@ from typing import Any
 
 import uvicorn
 
-from seasonalweather import __version__  # noqa: F401
+from seasonalweather import __version__
 
 from ..artifacts.composition import build_controller_artifact_composition
 from ..auth import AuthenticationRepository, AuthenticationService
@@ -48,6 +48,23 @@ from ..runtime_diagnostics.service import RuntimeDiagnosticService
 from .api import create_app
 
 log = logging.getLogger("seasonalweather.api")
+
+__all__ = ["__version__"]
+
+
+def _operational_state_root(cfg: Any) -> Path:
+    configured = str(getattr(cfg.paths, "operational_state_dir", "") or "").strip()
+    if configured:
+        return Path(configured)
+    database_path = str(getattr(cfg.database, "path", "") or "").strip()
+    if database_path:
+        return Path(database_path).parent
+    return Path(cfg.paths.work_dir)
+
+
+def _artifact_root(cfg: Any) -> Path:
+    configured = str(getattr(cfg.paths, "artifact_dir", "") or "").strip()
+    return Path(configured or cfg.paths.work_dir)
 
 
 class _ControllerOwnedUvicornServer(uvicorn.Server):
@@ -279,7 +296,7 @@ def _reload_diagnostic_promoter(
     return promote
 
 
-async def run_api_server(*, config_path: str, host: str, port: int) -> None:
+async def run_api_server(*, config_path: str, host: str | None = None, port: int | None = None) -> None:
     instance_id = f"controller_{uuid.uuid4().hex}"
     build_info = current_build_info()
     context = CorrelationContext(
@@ -310,14 +327,17 @@ async def run_api_server(*, config_path: str, host: str, port: int) -> None:
 async def _run_api_server_impl(
     *,
     config_path: str,
-    host: str,
-    port: int,
+    host: str | None,
+    port: int | None,
     instance_id: str,
     fatal: list[FatalBoundary],
     build_info: BuildInfo | None = None,
 ) -> None:
     build_info = build_info or current_build_info()
     cfg = load_config(config_path)
+    api_network = getattr(getattr(cfg, "network", None), "api", None)
+    effective_host = str(host or getattr(api_network, "bind_host", "127.0.0.1"))
+    effective_port = int(port if port is not None else getattr(api_network, "port", 9080))
     _setup_logging(cfg)
     log.info(
         "lifecycle_event=service_starting role=controller build=%s software=%s profile=%s target_platform=%s dirty_tree=%s",
@@ -327,7 +347,7 @@ async def _run_api_server_impl(
         build_info.target_platform,
         str(build_info.dirty_tree).lower(),
     )
-    state_root = Path(cfg.database.path).parent if str(cfg.database.path).strip() else Path(cfg.paths.work_dir)
+    state_root = _operational_state_root(cfg)
     marker_store = ProcessMarkerStore(state_root)
     marker_store.start(controller_marker(instance_id=instance_id))
     marker_integration = _MarkerLifecycleIntegration(
@@ -396,14 +416,14 @@ async def _run_api_server_impl(
         artifact_composition = build_controller_artifact_composition(
             orch,
             job_service.repository,
-            work_root=Path(cfg.paths.work_dir),
+            work_root=_artifact_root(cfg),
             maximum_bytes=cfg.jobs.result_max_bytes,
         )
         orch.artifact_service = artifact_composition.service
         orch.artifact_results = artifact_composition.results
     reload_service = None
     if db is not None and job_service is not None:
-        candidate_store = CandidateStore(Path(cfg.paths.work_dir) / "configuration-candidates")
+        candidate_store = CandidateStore(_operational_state_root(cfg) / "configuration-candidates")
         reload_service = ConfigurationReloadService(
             config_path=config_path,
             candidate_store=candidate_store,
@@ -440,8 +460,8 @@ async def _run_api_server_impl(
     server = _ControllerOwnedUvicornServer(
         uvicorn.Config(
             app,
-            host=host,
-            port=port,
+            host=effective_host,
+            port=effective_port,
             log_level="info",
             proxy_headers=False,
             forwarded_allow_ips="",
@@ -813,10 +833,10 @@ async def _shutdown_default_executor(
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=("Run the SeasonalWeather orchestrator with the localhost control API."))
+    ap = argparse.ArgumentParser(description=("Run the SeasonalWeather controller and configured control API."))
     ap.add_argument("--config", default="/etc/seasonalweather/config.yaml")
-    ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--port", type=int, default=9080)
+    ap.add_argument("--host", default=None)
+    ap.add_argument("--port", type=int, default=None)
     args = ap.parse_args(argv)
 
     try:

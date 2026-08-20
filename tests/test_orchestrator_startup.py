@@ -16,10 +16,17 @@ def _minimal_config(tmp_path, monkeypatch):
         paths=replace(
             cfg.paths,
             work_dir=str(tmp_path / "work"),
+            operational_state_dir=str(tmp_path / "state"),
+            job_state_dir=str(tmp_path / "jobs"),
+            artifact_dir=str(tmp_path / "artifacts"),
             audio_dir=str(tmp_path / "audio"),
             cache_dir=str(tmp_path / "cache"),
             config_dir=str(tmp_path / "config"),
             log_dir=str(tmp_path / "log"),
+        ),
+        network=replace(
+            cfg.network,
+            liquidsoap=replace(cfg.network.liquidsoap, host="liquidsoap.test", port=21234, timeout_seconds=4.5),
         ),
         database=replace(cfg.database, enabled=False),
         station_feed=replace(cfg.station_feed, enabled=False),
@@ -31,6 +38,10 @@ def test_orchestrator_initializes_runtime_wiring(tmp_path, monkeypatch):
 
     orch = Orchestrator(cfg)
 
+    assert orch.telnet.host == "liquidsoap.test"
+    assert orch.telnet.port == 21234
+    assert orch.telnet.timeout == 4.5
+    assert orch.alert_tracker._path == tmp_path / "state" / "alert_state.json"
     assert orch.cap_text._best_expiry_from_vtec is best_expiry_from_vtec
     assert orch.target_resolver is orch.targeting
     assert orch.cap_runtime.orchestrator is orch

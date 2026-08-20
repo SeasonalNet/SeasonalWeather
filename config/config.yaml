@@ -11,6 +11,42 @@ stream:
   icecast_port: 8000
   icecast_mount: "seasonalweather.ogg"
 
+# Deployment endpoints and transport policy. Optional PostgreSQL and Redis
+# remain disabled until a later packet explicitly activates them.
+network:
+  api:
+    bind_host: "127.0.0.1"
+    port: 9080
+  liquidsoap:
+    host: "127.0.0.1"
+    port: 1234
+    timeout_seconds: 3.0
+  swwp:
+    bind_host: "0.0.0.0"
+    controller_path: "/v1/workers/connect"
+    worker_controller_url: ""
+    verify_tls: true
+    heartbeat_interval_seconds: 15
+    heartbeat_timeout_seconds: 45
+    lease_seconds: 60
+    assignment_ack_seconds: 10
+    max_message_bytes: 65536
+    capability_validity_seconds: 60
+  postgresql:
+    enabled: false
+    address: ""
+    port: 5432
+    database: ""
+    tls: true
+    connect_timeout_seconds: 5.0
+  redis:
+    enabled: false
+    address: ""
+    port: 6379
+    database: "0"
+    tls: true
+    connect_timeout_seconds: 5.0
+
 # Two-mode cycle: normal vs heightened/focus mode
 cycle:
   normal_interval_seconds: 300
@@ -322,7 +358,7 @@ cap:
   poll_seconds: 60
   user_agent: "SeasonalWeather (CAP monitor)"
   url: ""                      # leave empty to use default NWS alerts endpoint
-  ledger_path: "/var/lib/seasonalweather/cap_ledger.json"
+  ledger_path: "/var/lib/seasonalweather/state/cap_ledger.json"
   ledger_max_age_days: 14
   full:
     enabled: true
@@ -598,10 +634,17 @@ audio:
 
 paths:
   work_dir: "/var/lib/seasonalweather"
-  audio_dir: "/var/lib/seasonalweather/audio"
-  cache_dir: "/var/lib/seasonalweather/cache"
+  operational_state_dir: "/var/lib/seasonalweather/state"
+  job_state_dir: "/var/lib/seasonalweather/jobs"
+  artifact_dir: "/var/lib/seasonalweather/artifacts"
+  audio_dir: "/var/lib/seasonalweather/artifacts/audio"
+  cache_dir: "/var/lib/seasonalweather/state/cache"
   config_dir: "/etc/seasonalweather"
   log_dir: "/var/log/seasonalweather"
+  diagnostic_export_dir: "/usr/share/seasonalweather/diagnostics"
+  temporary_dir: "/tmp"
+  runtime_dir: "/run/seasonalweather"
+  secret_dir: "/run/secrets"
 
 # Controller-owned graceful shutdown. Values are restart-time configuration.
 # The total deadline caps the complete drain; stage deadlines must not exceed it.
@@ -616,7 +659,7 @@ lifecycle:
 
 database:
   enabled: true
-  path: "/var/lib/seasonalweather/seasonalweather.sqlite3"  # also stores exchange clients, tokens, and auth audit
+  path: "/var/lib/seasonalweather/state/seasonalweather.sqlite3"  # also stores exchange clients, tokens, and auth audit
   busy_timeout_ms: 5000
   journal_mode: "WAL"
   housekeeping:
@@ -637,7 +680,7 @@ database:
 jobs:
   enabled: false
   required: false
-  path: "/var/lib/seasonalweather/jobs.sqlite3"
+  path: "/var/lib/seasonalweather/jobs/jobs.sqlite3"
   busy_timeout_ms: 5000
   lease_seconds: 60
   assignment_ack_seconds: 10

@@ -9,11 +9,13 @@ User=seasonalweather
 Group=seasonalweather
 EnvironmentFile=/etc/seasonalweather/seasonalweather.env
 WorkingDirectory=/opt/seasonalweather/app
-ExecStart=/opt/seasonalweather/venv/bin/python -m seasonalweather.api.server --config /etc/seasonalweather/config.yaml --host 127.0.0.1 --port 9080
+ExecStart=/opt/seasonalweather/venv/bin/python -m seasonalweather.api.server --config /etc/seasonalweather/config.yaml
 Restart=always
 RestartSec=2
 LimitNOFILE=65536
 NoNewPrivileges=false
+RuntimeDirectory=seasonalweather
+RuntimeDirectoryMode=0755
 
 [Install]
 WantedBy=multi-user.target

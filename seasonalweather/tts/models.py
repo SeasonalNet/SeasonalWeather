@@ -112,6 +112,7 @@ class TextOverride(TtsModel):
 
 class VoiceTextOptions(TtsModel):
     run_as: str = Field(default="voicetext", min_length=1, max_length=64, pattern=r"^[A-Za-z_][A-Za-z0-9_-]{0,63}$")
+    data_base: str = Field(default="", max_length=4096)
     retries: int = Field(default=1, ge=0, le=3)
     retry_sleep_ms: int = Field(default=150, ge=0, le=5_000)
     reset_every: int = Field(default=0, ge=0, le=10_000)

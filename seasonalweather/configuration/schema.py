@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ipaddress
 import math
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -23,6 +25,8 @@ from .source import (
 CURRENT_CONFIG_SCHEMA = 1
 SUPPORTED_CONFIG_SCHEMAS = frozenset({CURRENT_CONFIG_SCHEMA})
 _MISSING = object()
+_DEFAULT_SWWP_BIND_HOST = str(ipaddress.IPv4Address(0))
+_DEFAULT_TEMPORARY_DIR = tempfile.gettempdir()
 
 
 class SchemaKind(StrEnum):
@@ -266,6 +270,63 @@ SCHEMA_V1 = _o(
                 "icecast_mount": _s(required=True),
             },
             required=True,
+        ),
+        "network": _o(
+            {
+                "api": _o(
+                    {
+                        "bind_host": _s(default="127.0.0.1"),
+                        "port": _i(default=9080),
+                    },
+                    default={},
+                ),
+                "liquidsoap": _o(
+                    {
+                        "host": _s(default="127.0.0.1"),
+                        "port": _i(default=1234),
+                        "timeout_seconds": _n(default=3.0),
+                    },
+                    default={},
+                ),
+                "swwp": _o(
+                    {
+                        "bind_host": _s(default=_DEFAULT_SWWP_BIND_HOST),
+                        "controller_path": _s(default="/v1/workers/connect"),
+                        "worker_controller_url": _s(default=""),
+                        "verify_tls": _b(default=True),
+                        "heartbeat_interval_seconds": _i(default=15),
+                        "heartbeat_timeout_seconds": _i(default=45),
+                        "lease_seconds": _i(default=60),
+                        "assignment_ack_seconds": _i(default=10),
+                        "max_message_bytes": _i(default=65536),
+                        "capability_validity_seconds": _i(default=60),
+                    },
+                    default={},
+                ),
+                "postgresql": _o(
+                    {
+                        "enabled": _b(default=False),
+                        "address": _s(default=""),
+                        "port": _i(default=5432),
+                        "database": _s(default=""),
+                        "tls": _b(default=True),
+                        "connect_timeout_seconds": _n(default=5.0),
+                    },
+                    default={},
+                ),
+                "redis": _o(
+                    {
+                        "enabled": _b(default=False),
+                        "address": _s(default=""),
+                        "port": _i(default=6379),
+                        "database": _s(default="0"),
+                        "tls": _b(default=True),
+                        "connect_timeout_seconds": _n(default=5.0),
+                    },
+                    default={},
+                ),
+            },
+            default={},
         ),
         "cycle": _o(
             {
@@ -777,6 +838,13 @@ SCHEMA_V1 = _o(
                 "cache_dir": _s(required=True),
                 "config_dir": _s(required=True),
                 "log_dir": _s(required=True),
+                "operational_state_dir": _s(default=""),
+                "job_state_dir": _s(default=""),
+                "artifact_dir": _s(default=""),
+                "diagnostic_export_dir": _s(default="/usr/share/seasonalweather/diagnostics"),
+                "temporary_dir": _s(default=_DEFAULT_TEMPORARY_DIR),
+                "runtime_dir": _s(default="/run/seasonalweather"),
+                "secret_dir": _s(default="/run/secrets"),
             },
             required=True,
         ),

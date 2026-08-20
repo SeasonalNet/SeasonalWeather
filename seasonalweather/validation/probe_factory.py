@@ -32,7 +32,21 @@ def _path_probes(paths: object) -> tuple[PreflightProbe, ...]:
     if not isinstance(paths, dict):
         return ()
     probes: list[PreflightProbe] = []
-    for name in ("work_dir", "audio_dir", "cache_dir", "config_dir", "log_dir"):
+    optional = {"job_state_dir", "diagnostic_export_dir", "temporary_dir", "runtime_dir", "secret_dir"}
+    for name in (
+        "work_dir",
+        "operational_state_dir",
+        "job_state_dir",
+        "artifact_dir",
+        "audio_dir",
+        "cache_dir",
+        "config_dir",
+        "log_dir",
+        "diagnostic_export_dir",
+        "temporary_dir",
+        "runtime_dir",
+        "secret_dir",
+    ):
         path = paths.get(name)
         if isinstance(path, str) and path:
             probes.append(
@@ -40,7 +54,7 @@ def _path_probes(paths: object) -> tuple[PreflightProbe, ...]:
                     identifier=f"path.{name}",
                     owner="configuration",
                     path=path,
-                    required=True,
+                    required=name not in optional,
                     directory=True,
                 )
             )
@@ -71,8 +85,10 @@ def _operational_database_path(database: object, paths: object) -> object:
     selected = database.get("path") if isinstance(database, dict) else None
     if selected or not isinstance(paths, dict):
         return selected
-    work_dir = paths.get("work_dir")
-    return os.path.join(work_dir, "seasonalweather.sqlite3") if isinstance(work_dir, str) and work_dir else None
+    state_dir = paths.get("operational_state_dir") or paths.get("work_dir")
+    if not isinstance(state_dir, str) or not state_dir:
+        return None
+    return os.path.join(state_dir, "seasonalweather.sqlite3")
 
 
 def _tts_probes(tts: object) -> tuple[PreflightProbe, ...]:
