@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -28,9 +28,17 @@ class _ApiClient:
 
 
 class _CleanOrchestrator:
-    def __init__(self, _cfg: Any, *, lifecycle: Any, supervisor: Any) -> None:
+    def __init__(
+        self,
+        _cfg: Any,
+        *,
+        lifecycle: Any,
+        supervisor: Any,
+        lifecycle_records: Any = None,
+    ) -> None:
         self.lifecycle = lifecycle
         self.supervisor = supervisor
+        self.lifecycle_records = lifecycle_records
         self.alert_audio = _IdleFence()
         self.publication_fence = _IdleFence()
         self.api = _ApiClient()
@@ -64,8 +72,20 @@ class _HangingFence:
 
 
 class _TimeoutOrchestrator(_CleanOrchestrator):
-    def __init__(self, cfg: Any, *, lifecycle: Any, supervisor: Any) -> None:
-        super().__init__(cfg, lifecycle=lifecycle, supervisor=supervisor)
+    def __init__(
+        self,
+        cfg: Any,
+        *,
+        lifecycle: Any,
+        supervisor: Any,
+        lifecycle_records: Any = None,
+    ) -> None:
+        super().__init__(
+            cfg,
+            lifecycle=lifecycle,
+            supervisor=supervisor,
+            lifecycle_records=lifecycle_records,
+        )
         self.alert_audio = _HangingFence()
 
 
@@ -89,8 +109,20 @@ class _BrokenApiClient:
 
 
 class _RequiredFailureOrchestrator(_CleanOrchestrator):
-    def __init__(self, cfg: Any, *, lifecycle: Any, supervisor: Any) -> None:
-        super().__init__(cfg, lifecycle=lifecycle, supervisor=supervisor)
+    def __init__(
+        self,
+        cfg: Any,
+        *,
+        lifecycle: Any,
+        supervisor: Any,
+        lifecycle_records: Any = None,
+    ) -> None:
+        super().__init__(
+            cfg,
+            lifecycle=lifecycle,
+            supervisor=supervisor,
+            lifecycle_records=lifecycle_records,
+        )
         self.api = _BrokenApiClient()
 
     async def run(self) -> None:
@@ -403,7 +435,7 @@ def test_draining_marker_failure_sets_shutdown_event_and_does_not_hang(tmp_path:
         marker = _DrainingUpdateFailureMarker(tmp_path)
         marker.start(SimpleNamespace(lifecycle_stage="starting"))
         secondary = SecondaryFailureLedger()
-        integration = api_server._MarkerLifecycleIntegration(marker, secondary)  # type: ignore[arg-type]
+        integration = api_server._MarkerLifecycleIntegration(cast(api_server.ProcessMarkerStore, marker), secondary)
         lifecycle = Lifecycle(transition_callback=integration.transition)
         lifecycle.mark_running()
         assert lifecycle.request_shutdown()
@@ -421,6 +453,7 @@ def test_draining_marker_failure_sets_shutdown_event_and_does_not_hang(tmp_path:
 def test_required_failure_remains_primary_across_cleanup_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     _install_server_seams(
         tmp_path,
@@ -454,6 +487,7 @@ def test_required_failure_remains_primary_across_cleanup_failure(
     assert caught.value.__cause__ is REQUIRED_CAUSE
     assert caught.value.__context__ is REQUIRED_CONTEXT
     assert isinstance(caught.value.exceptions[0], ValueError)
+    assert '"event":"service_started_degraded"' in capsys.readouterr().out
     traceback_names: list[str] = []
     current = caught.value.__traceback__
     while current is not None:

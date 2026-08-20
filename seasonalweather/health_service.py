@@ -439,13 +439,16 @@ def build_runtime_health_service(
     lifecycle = runtime.lifecycle
 
     async def lifecycle_probe() -> HealthComponent:
-        running = lifecycle.ready
+        running = bool(getattr(lifecycle, "startup_ready", lifecycle.ready))
         return _component(
             "lifecycle",
             ComponentState.HEALTHY if running else ComponentState.UNAVAILABLE,
             True,
-            "running" if running else "not_running",
-            details={"state": lifecycle.state.value},
+            "running" if running else "initialization_incomplete",
+            details={
+                "state": lifecycle.state.value,
+                "startup_ready": running,
+            },
         )
 
     probes.append(ComponentProbe("lifecycle", True, lifecycle_probe))
@@ -534,9 +537,9 @@ def build_runtime_health_service(
         if capability_registry is None:
             return _component(
                 "workers",
-                ComponentState.NOT_APPLICABLE,
+                ComponentState.UNAVAILABLE if required_capability_names else ComponentState.NOT_APPLICABLE,
                 bool(required_capability_names),
-                "simulated_only",
+                "required_worker_registry_unavailable" if required_capability_names else "simulated_only",
             )
         now = _utc_now()
         summary = capability_registry.health(now)

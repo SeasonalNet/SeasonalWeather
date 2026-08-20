@@ -104,6 +104,7 @@ class SegmentRefresher:
         seg_gap_s: float = 0.45,
         tick_s: float = _TICK_S,
         on_alert_segments_changed: Callable[[str], None] | None = None,
+        on_warmup_complete: Callable[[], None] | None = None,
         activity_context: Callable[[], AsyncContextManager[None]] | None = None,
     ) -> None:
         self._store = store
@@ -120,6 +121,7 @@ class SegmentRefresher:
         self._seg_gap_s = seg_gap_s
         self._tick_s = tick_s
         self._on_alert_segments_changed = on_alert_segments_changed
+        self._on_warmup_complete = on_warmup_complete
         self._activity_context = activity_context
 
         # Immediate-refresh request queue
@@ -176,6 +178,8 @@ class SegmentRefresher:
 
         # Cold start: populate every segment before the conductor begins
         await self._populate_all()
+        if self._on_warmup_complete is not None:
+            self._on_warmup_complete()
 
         while True:
             self._wake_event.clear()

@@ -31,6 +31,15 @@ profile also publishes `implemented=false` and zero capacity until a real
 deployment handler factory is supplied. The worker never changes controller
 compatibility or authorization decisions.
 
+P2-06 publishes a bounded local health record (by default at
+`/tmp/seasonalweather-worker-health.json`, or the
+`SEASONALWEATHER_WORKER_HEALTH_FILE` override) and exposes it through the
+exec-friendly command `seasonalweather health worker`. The worker's startup
+identity and lifecycle records are structured JSON stdout records. Its SWWP
+registration and heartbeat also carry bounded readiness, lifecycle, and
+new-job-admission state; the controller remains the authority for scheduling
+and lease reconciliation.
+
 ## Runtime boundary
 
 The worker initiates an outbound SWWP/1 connection using the exact
@@ -46,6 +55,7 @@ closed when a deployment has not supplied its controller-owned input/artifact
 resolver; they never fabricate a successful result from an opaque reference.
 
 P2-03 does not implement the controller WebSocket endpoint, complete live
-controller/worker cutover, health servers, container hardening, mount/network
-parameterization, or removal of the transitional embedded executor. Those
-boundaries remain owned by P2-04 through P2-08 as specified by Revision 10.
+controller/worker cutover, or removal of the transitional embedded executor.
+Those boundaries remain owned by later Phase 2 packets as specified by
+Revision 10. P2-06 adds process health and lifecycle reporting without adding
+a worker-facing HTTP health server.

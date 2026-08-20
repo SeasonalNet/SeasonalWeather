@@ -23,6 +23,13 @@ def test_dockerfiles_declare_runtime_hardening_labels() -> None:
         assert 'io.seasonalweather.security.secrets="read-only-per-service"' in text
 
 
+def test_controller_uses_operational_readiness_and_worker_uses_exec_health() -> None:
+    controller = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    worker = (ROOT / "Dockerfile.worker").read_text(encoding="utf-8")
+    assert '"health", "controller", "--mode", "readiness"' in controller
+    assert '"health", "worker", "--mode", "liveness"' in worker
+
+
 def test_build_context_excludes_secret_and_database_material() -> None:
     dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
     for pattern in ("*.env", "*.pem", "*.key", "*.p12", "*.sqlite3"):

@@ -111,6 +111,7 @@ class Lifecycle:
         self.timeouts.validate()
         self.transition_callback = transition_callback
         self._state = LifecycleState.STARTING
+        self._startup_ready = False
         self._shutdown_requested = asyncio.Event()
         self._force_requested = asyncio.Event()
         self._state_changed = asyncio.Condition()
@@ -135,6 +136,11 @@ class Lifecycle:
     @property
     def ready(self) -> bool:
         return self._state is LifecycleState.RUNNING
+
+    @property
+    def startup_ready(self) -> bool:
+        """Whether broadcast-critical startup has completed."""
+        return self.ready and self._startup_ready
 
     def allows(self, work_class: WorkClass) -> bool:
         del work_class
@@ -165,8 +171,14 @@ class Lifecycle:
             log.error("lifecycle_event=service_failed state=failed")
         self._notify_state_change()
 
-    def mark_running(self) -> None:
+    def mark_running(self, *, startup_complete: bool = True) -> None:
         self.transition(LifecycleState.RUNNING)
+        self._startup_ready = startup_complete
+
+    def mark_startup_complete(self) -> None:
+        if self._state is not LifecycleState.RUNNING:
+            raise LifecycleTransitionError("startup can complete only while running")
+        self._startup_ready = True
 
     def request_shutdown(self) -> bool:
         if self._state in {LifecycleState.STARTING, LifecycleState.RUNNING}:
@@ -179,9 +191,11 @@ class Lifecycle:
         return False
 
     def mark_stopping(self) -> None:
+        self._startup_ready = False
         self.transition(LifecycleState.STOPPING)
 
     def mark_stopped(self) -> None:
+        self._startup_ready = False
         self.transition(LifecycleState.STOPPED)
 
     def mark_failed(self) -> None:
@@ -189,6 +203,7 @@ class Lifecycle:
             return
         if self._state is LifecycleState.STOPPED:
             raise LifecycleTransitionError("a stopped lifecycle cannot fail")
+        self._startup_ready = False
         self.transition(LifecycleState.FAILED)
         self._shutdown_requested.set()
 
@@ -206,6 +221,7 @@ class Lifecycle:
         return {
             "state": self._state.value,
             "ready": self.ready,
+            "startup_ready": self.startup_ready,
             "admission_open": self._state is LifecycleState.RUNNING,
         }
 

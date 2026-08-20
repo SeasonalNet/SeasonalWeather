@@ -25,6 +25,7 @@ from .constants import (
     ControllerState,
     ProtocolErrorCategory,
     ProtocolLimits,
+    WorkerReadinessState,
 )
 from .messages import (
     Cancel,
@@ -45,6 +46,7 @@ from .messages import (
     JobRejected,
     JobResult,
     LeaseRef,
+    Payload,
     Reconcile,
     ReconcileResult,
     Register,
@@ -180,10 +182,13 @@ class ControllerSession(SessionMachine):
         self.selected_versions: SelectedVersions | None = None
         self.assignments: dict[tuple[str, str, str, int], str] = {}
         self.last_heartbeat_at: dt.datetime | None = None
+        self.worker_lifecycle_state = WorkerReadinessState.STARTING
+        self.worker_ready = False
+        self.worker_accepting_new_jobs = False
 
-    def _out(self, payload: object) -> Envelope:
+    def _out(self, payload: Payload) -> Envelope:
         return self.envelope(
-            payload,  # type: ignore[arg-type]
+            payload,
             session_id=self.session_id,
             worker_id=self.worker_id,
             worker_instance_id=self.worker_instance_id,
@@ -299,6 +304,9 @@ class ControllerSession(SessionMachine):
         self.worker_id = registration.worker_id
         self.worker_instance_id = registration.worker_instance_id
         self.worker_epoch = registration.worker_epoch
+        self.worker_lifecycle_state = registration.lifecycle_state
+        self.worker_ready = registration.ready
+        self.worker_accepting_new_jobs = registration.accepting_new_jobs
         self.accepted_queues = tuple(sorted(queues, key=lambda item: item.value))
         self.authorized_job_types = tuple(sorted(authorized_jobs, key=lambda item: item.value))
         self.authorized_capabilities = tuple(sorted(capabilities))
@@ -481,6 +489,9 @@ class ControllerSession(SessionMachine):
             except (KeyError, ValueError, RuntimeError):
                 reconcile.append(lease)
         self.last_heartbeat_at = self.clock()
+        self.worker_lifecycle_state = payload.lifecycle_state
+        self.worker_ready = payload.ready
+        self.worker_accepting_new_jobs = payload.accepting_new_jobs
         if (
             self.capabilities is not None
             and self.worker_id is not None
@@ -500,6 +511,15 @@ class ControllerSession(SessionMachine):
             self._out(HeartbeatAck(renewed=tuple(renewed), reconcile=tuple(reconcile))),
             *self._capability_probe_frames(),
         )
+
+    def readiness_snapshot(self) -> dict[str, bool | str]:
+        """Return bounded worker readiness observed over SWWP."""
+        return {
+            "state": self.worker_lifecycle_state.value,
+            "ready": self.worker_ready,
+            "accepting_new_jobs": self.worker_accepting_new_jobs,
+            "heartbeat_current": self.last_heartbeat_at is not None,
+        }
 
     def _job_accepted(self, payload: JobAccepted) -> tuple[Envelope, ...]:
         key = self._lease_key(payload.lease)
@@ -659,8 +679,8 @@ class ControllerSession(SessionMachine):
         )
 
     @staticmethod
-    def _lease_key(lease: object) -> tuple[str, str, str, int]:
-        return (lease.job_id, lease.lease_id, lease.attempt_id, lease.attempt)  # type: ignore[attr-defined]
+    def _lease_key(lease: LeaseRef) -> tuple[str, str, str, int]:
+        return lease.job_id, lease.lease_id, lease.attempt_id, lease.attempt
 
     def _require_accepted(self, lease: LeaseRef) -> None:
         if self.assignments.get(self._lease_key(lease)) != "accepted":

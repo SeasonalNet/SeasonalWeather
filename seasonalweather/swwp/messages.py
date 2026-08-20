@@ -19,7 +19,13 @@ from ..validation.modeling import (
     field_validator,
     model_validator,
 )
-from .constants import PROTOCOL_NAME, PROTOCOL_VERSION, ProtocolErrorCategory, ReconcileDisposition
+from .constants import (
+    PROTOCOL_NAME,
+    PROTOCOL_VERSION,
+    ProtocolErrorCategory,
+    ReconcileDisposition,
+    WorkerReadinessState,
+)
 
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{2,127}$")
 _KEY_RE = re.compile(r"^[a-z][a-z0-9_.-]{1,63}$")
@@ -250,6 +256,9 @@ class Register(Payload):
     requested_slots: int = Field(ge=1, le=128)
     capability_manifest: CapabilityManifest
     supported_versions: VersionSupport
+    lifecycle_state: WorkerReadinessState = WorkerReadinessState.STARTING
+    ready: bool = False
+    accepting_new_jobs: bool = False
 
     @field_validator("worker_id", "worker_instance_id")
     @classmethod
@@ -298,6 +307,9 @@ class Heartbeat(Payload):
     active_leases: tuple[LeaseRef, ...] = Field(default_factory=tuple, max_length=32)
     capability_epoch: int | None = Field(default=None, ge=1)
     capability_digest: str | None = Field(default=None, min_length=71, max_length=71)
+    lifecycle_state: WorkerReadinessState = WorkerReadinessState.READY
+    ready: bool = True
+    accepting_new_jobs: bool = True
 
     @model_validator(mode="after")
     def validate_capability_identity(self) -> Self:

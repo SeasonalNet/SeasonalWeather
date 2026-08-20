@@ -51,6 +51,15 @@ class WorkerState(StrEnum):
     FAILED = "failed"
 
 
+class WorkerReadinessState(StrEnum):
+    STARTING = "starting"
+    READY = "ready"
+    DEGRADED = "degraded"
+    DRAINING = "draining"
+    STOPPED = "stopped"
+    FAILED = "failed"
+
+
 class ProtocolErrorCategory(StrEnum):
     MALFORMED_JSON = "malformed_json"
     INVALID_ENVELOPE = "invalid_envelope"

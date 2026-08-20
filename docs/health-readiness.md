@@ -63,7 +63,8 @@ when disabled they report `disabled`.
 
 Worker capability health uses bounded registry aggregates when a simulated
 P1-09 registry is composed. Readiness gates only on explicitly required
-capability names. Without such a registry or requirements, simulated worker
+capability names; a missing registry with required capabilities is explicitly
+`unavailable`. Without such a registry or requirements, simulated worker
 absence is `not_applicable` rather than a production outage. SWWP live
 transport, PostgreSQL, and Redis remain `not_applicable`.
 

@@ -123,4 +123,15 @@ class HandlerRegistry:
                 f"worker profile does not implement {assignment.job_type.value}",
                 category=FailureCategory.UNSUPPORTED,
             )
-        return await handler.execute(assignment, context)
+        try:
+            return await handler.execute(assignment, context)
+        except WorkerHandlerError:
+            raise
+        except BaseException as exc:
+            if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt, SystemExit, GeneratorExit)):
+                raise
+            raise WorkerHandlerError(
+                "handler_failed",
+                f"worker handler failed: {type(exc).__name__}",
+                category=FailureCategory.UNSUPPORTED,
+            ) from exc

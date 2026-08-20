@@ -157,5 +157,5 @@ USER seasonalweather
 
 EXPOSE 9080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=3 \
-    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9080/healthz', timeout=2).read(0)"]
+    CMD ["python", "-m", "seasonalweather", "health", "controller", "--mode", "readiness"]
 ENTRYPOINT ["python", "-m", "seasonalweather.api.server"]

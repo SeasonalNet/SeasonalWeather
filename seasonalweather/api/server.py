@@ -38,6 +38,7 @@ from ..job_store import (
     JobRepository,
 )
 from ..lifecycle import Lifecycle, LifecycleState, TaskSupervisor
+from ..lifecycle_records import LifecycleRecordWriter, LifecycleStage
 from ..main import Orchestrator, _setup_logging
 from ..nwws.diagnostics import NwwsRuntimeDiagnosticSink
 from ..runtime_diagnostics.fatal import FatalBoundary, SecondaryFailureLedger, enable_faulthandler
@@ -334,7 +335,15 @@ async def _run_api_server_impl(
     build_info: BuildInfo | None = None,
 ) -> None:
     build_info = build_info or current_build_info()
+    lifecycle_records = LifecycleRecordWriter(
+        role="controller",
+        instance_id=instance_id,
+        build_info=build_info,
+    )
+    lifecycle_records.startup_identity()
+    lifecycle_records.stage(LifecycleStage.SERVICE_STARTING, ready=False)
     cfg = load_config(config_path)
+    lifecycle_records.stage(LifecycleStage.CONFIGURATION_VALIDATED, ready=False)
     api_network = getattr(getattr(cfg, "network", None), "api", None)
     effective_host = str(host or getattr(api_network, "bind_host", "127.0.0.1"))
     effective_port = int(port if port is not None else getattr(api_network, "port", 9080))
@@ -363,6 +372,7 @@ async def _run_api_server_impl(
         cfg,
         lifecycle=lifecycle,
         supervisor=supervisor,
+        lifecycle_records=lifecycle_records,
     )
     segment_service = None
     if all(hasattr(orch, name) for name in ("segment_registry", "_seg_store", "refresher", "conductor")):
@@ -445,6 +455,7 @@ async def _run_api_server_impl(
         command_store=command_store,
         auth_service=auth_service,
         job_service=job_service,
+        capability_registry=getattr(orch, "capability_registry", None),
     )
     app = create_app(
         control,
@@ -456,6 +467,7 @@ async def _run_api_server_impl(
         diagnostic_service=diagnostic_service,
         build_info=build_info,
     )
+    lifecycle_records.stage(LifecycleStage.CONTROL_PLANE_READY, ready=False)
 
     server = _ControllerOwnedUvicornServer(
         uvicorn.Config(
@@ -475,7 +487,8 @@ async def _run_api_server_impl(
     # responsible for its supported active-request drain contract.
 
     def request_shutdown() -> None:
-        lifecycle.request_shutdown()
+        if lifecycle.request_shutdown():
+            lifecycle_records.stage(LifecycleStage.SERVICE_DRAINING, ready=False, reason="signal")
         server.should_exit = True
 
     remove_signal_handlers = _install_signal_handlers(
@@ -508,11 +521,22 @@ async def _run_api_server_impl(
         fatal[0].secondary_failures,
     )
     if terminal_failure is not None:
+        if lifecycle_records.last_stage not in {
+            LifecycleStage.SERVICE_READY,
+            LifecycleStage.SERVICE_STARTED_DEGRADED,
+            LifecycleStage.SERVICE_DRAINING,
+        }:
+            lifecycle_records.stage(
+                LifecycleStage.SERVICE_STARTED_DEGRADED,
+                ready=False,
+                reason="controller_failed",
+            )
         raise terminal_failure
     if handler_failures:
         raise RuntimeError("controller handler cleanup failed")
     marker_integration.finalize_clean()
     lifecycle.mark_stopped()
+    lifecycle_records.stage(LifecycleStage.SERVICE_STOPPED, ready=False)
 
 
 async def _run_controller_session(

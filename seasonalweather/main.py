@@ -46,6 +46,7 @@ from .lifecycle import (
     TaskSupervisor,
     WorkClass,
 )
+from .lifecycle_records import LifecycleRecordWriter, LifecycleStage
 from .logging_config import setup_logging
 from .nwws.source import NwwsDiagnosticSink, NwwsProductEnvelope, NwwsSource, NwwsSourceAdmissionFence
 
@@ -149,6 +150,7 @@ class Orchestrator:
         lifecycle: Lifecycle | None = None,
         supervisor: TaskSupervisor | None = None,
         capability_registry: CapabilityRegistry | None = None,
+        lifecycle_records: LifecycleRecordWriter | None = None,
     ) -> None:
         global _APP_CFG
         _APP_CFG = cfg
@@ -156,6 +158,7 @@ class Orchestrator:
         self.cfg = cfg
         self.lifecycle = lifecycle or Lifecycle(cfg.lifecycle)
         self.supervisor = supervisor or TaskSupervisor(self.lifecycle)
+        self.lifecycle_records = lifecycle_records
         self.publication_fence = PublicationFence(self.lifecycle)
         self.reload_activities = ActivityRegistry()
         self.artifact_service: object | None = None
@@ -369,6 +372,13 @@ class Orchestrator:
             sample_rate=cfg.audio.sample_rate,
             registry=self.segment_registry,
             on_alert_segments_changed=lambda reason: self.conductor.notify_flush(reset_rotation=True, reason=reason),
+            on_warmup_complete=(
+                lambda: (
+                    lifecycle_records.stage(LifecycleStage.BACKGROUND_WARMUP_COMPLETE, ready=self.lifecycle.ready)
+                    if lifecycle_records is not None
+                    else None
+                )
+            ),
             activity_context=lambda: self.reload_activities.async_activity(RELOAD_SEGMENT_ACTIVITY),
         )
 

@@ -11,7 +11,7 @@ from ..capabilities.manifest import manifest_digest
 from ..jobs.contracts import AttemptOutcome
 from ..jobs.policies import FailureCategory
 from .capability_adapter import record_from_wire
-from .constants import ProtocolErrorCategory, WorkerState
+from .constants import ProtocolErrorCategory, WorkerReadinessState, WorkerState
 from .messages import (
     Cancel,
     CancelAcknowledged,
@@ -70,6 +70,9 @@ class WorkerSession(SessionMachine):
         self.completions: dict[tuple[str, str, str, int], JobResult] = {}
         self.cancelled: set[tuple[str, str, str, int]] = set()
         self.capability_manifest = registration.capability_manifest
+        self.readiness_state = registration.lifecycle_state
+        self.ready = registration.ready
+        self.accepting_new_jobs = registration.accepting_new_jobs
         self.diagnostic_requests: OrderedDict[str, WorkerDiagnostic] = OrderedDict()
         self.diagnostic_acknowledgments: OrderedDict[str, WorkerDiagnosticAck] = OrderedDict()
         self.diagnostic_occurrences: dict[str, str] = {}
@@ -178,6 +181,7 @@ class WorkerSession(SessionMachine):
     def _registration_response(self, payload: object) -> tuple[Envelope, ...]:
         if isinstance(payload, RegistrationRejected):
             self.state = WorkerState.CLOSED
+            self.set_readiness(WorkerReadinessState.STOPPED, ready=False, accepting_new_jobs=False)
             return ()
         if not isinstance(payload, Registered):
             raise ValueError("registered must be first controller message")
@@ -192,6 +196,21 @@ class WorkerSession(SessionMachine):
         ):
             raise ValueError("registered capability baseline does not match")
         return ()
+
+    def set_readiness(
+        self,
+        state: WorkerReadinessState,
+        *,
+        ready: bool,
+        accepting_new_jobs: bool,
+    ) -> None:
+        if ready and state is not WorkerReadinessState.READY:
+            raise ValueError("only ready workers may report ready")
+        if accepting_new_jobs and not ready:
+            raise ValueError("a non-ready worker cannot accept new jobs")
+        self.readiness_state = state
+        self.ready = ready
+        self.accepting_new_jobs = accepting_new_jobs
 
     def _assignment(self, payload: JobAssignmentPayload) -> tuple[Envelope, ...]:
         if self.state is not WorkerState.ACTIVE:
@@ -230,6 +249,7 @@ class WorkerSession(SessionMachine):
 
     def _drain(self, _: Drain) -> tuple[Envelope, ...]:
         self.state = WorkerState.DRAINING
+        self.set_readiness(WorkerReadinessState.DRAINING, ready=False, accepting_new_jobs=False)
         return (
             self._out(
                 Drained(
@@ -250,11 +270,14 @@ class WorkerSession(SessionMachine):
 
     def _reconciled(self, _: ReconcileResult) -> tuple[Envelope, ...]:
         self.state = WorkerState.ACTIVE
+        if self.readiness_state is WorkerReadinessState.DRAINING:
+            self.set_readiness(WorkerReadinessState.READY, ready=True, accepting_new_jobs=True)
         return ()
 
     def _protocol_error(self, payload: ProtocolErrorPayload) -> tuple[Envelope, ...]:
         if payload.fatal:
             self.state = WorkerState.FAILED
+            self.set_readiness(WorkerReadinessState.FAILED, ready=False, accepting_new_jobs=False)
         return ()
 
     def _capability_probe(self, payload: CapabilityProbe) -> tuple[Envelope, ...]:
@@ -306,6 +329,9 @@ class WorkerSession(SessionMachine):
                 active_leases=tuple(item.lease for item in self.assignments.values()),
                 capability_epoch=self.capability_manifest.epoch,
                 capability_digest=self.capability_manifest.digest,
+                lifecycle_state=self.readiness_state,
+                ready=self.ready,
+                accepting_new_jobs=self.accepting_new_jobs,
             )
         )
 

@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import datetime as dt
 import os
+import signal
 import uuid
 
 from ..swwp.worker import WorkerSession
@@ -49,7 +50,37 @@ def _parser() -> argparse.ArgumentParser:
         choices=tuple(profile.value for profile in WorkerProfile),
         default=os.environ.get("SEASONALWEATHER_WORKER_PROFILE", WorkerProfile.ROUTINE.value),
     )
+    parser.add_argument(
+        "--health-file",
+        default=os.environ.get("SEASONALWEATHER_WORKER_HEALTH_FILE"),
+        help="local bounded health record path (or SEASONALWEATHER_WORKER_HEALTH_FILE)",
+    )
     return parser
+
+
+async def _run_worker(runtime: WorkerRuntime) -> None:
+    loop = asyncio.get_running_loop()
+    stop_tasks: set[asyncio.Task[None]] = set()
+
+    def request_stop() -> None:
+        task = asyncio.create_task(runtime.stop(), name="seasonalweather-worker-stop")
+        stop_tasks.add(task)
+        task.add_done_callback(stop_tasks.discard)
+
+    installed: list[signal.Signals] = []
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, request_stop)
+        except (NotImplementedError, RuntimeError):
+            continue
+        installed.append(sig)
+    try:
+        await runtime.run()
+    finally:
+        for sig in installed:
+            loop.remove_signal_handler(sig)
+        if stop_tasks:
+            await asyncio.gather(*stop_tasks, return_exceptions=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -77,8 +108,10 @@ def main(argv: list[str] | None = None) -> int:
         session,
         handlers,
         WebSocketWorkerTransport(args.controller_url),
+        health_file=args.health_file,
+        image_profile=profile.value,
     )
-    asyncio.run(runtime.run())
+    asyncio.run(_run_worker(runtime))
     return 0
 
 

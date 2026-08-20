@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+from importlib import import_module
 from typing import Any
 
+from ..lifecycle_records import LifecycleStage
 from ..nwws.source import (
     NwwsProductEnvelope,
     NwwsSourceAdmissionFence,
@@ -13,26 +16,26 @@ from ..nwws.source import (
 from .station_feed_runtime import hydrate_persisted_alerts as _sf_hydrate_persisted_alerts
 from .station_feed_runtime import purge_legacy_synthetic_alerts as _sf_purge_legacy_synthetic_alerts
 
+
 # Optional CAP (api.weather.gov/alerts/active)
-try:
-    from ..alerts.cap_nws import CapAlertEvent, NwsCapPoller
-except Exception:  # pragma: no cover
-    NwsCapPoller = None  # type: ignore
-    CapAlertEvent = None  # type: ignore
+def _optional_class(module_name: str, class_name: str) -> type[Any] | None:
+    try:
+        candidate = getattr(import_module(module_name), class_name)
+    except Exception:
+        return None
+    return candidate if isinstance(candidate, type) else None
+
+
+NwsCapPoller = _optional_class("seasonalweather.alerts.cap_nws", "NwsCapPoller")
+CapAlertEvent = _optional_class("seasonalweather.alerts.cap_nws", "CapAlertEvent")
 
 # Optional IPAWS CAP (apps.fema.gov IPAWS Open feed)
-try:
-    from ..alerts.ipaws_cap import IpawsCapEvent, IpawsCapPoller
-except Exception:  # pragma: no cover
-    IpawsCapPoller = None  # type: ignore
-    IpawsCapEvent = None  # type: ignore
+IpawsCapPoller = _optional_class("seasonalweather.alerts.ipaws_cap", "IpawsCapPoller")
+IpawsCapEvent = _optional_class("seasonalweather.alerts.ipaws_cap", "IpawsCapEvent")
 
 # Optional ERN/GWES SAME monitor (Level 3 source)
-try:
-    from .ern_gwes import ErnGwesMonitor, ErnSameEvent
-except Exception:  # pragma: no cover
-    ErnGwesMonitor = None  # type: ignore
-    ErnSameEvent = None  # type: ignore
+ErnGwesMonitor = _optional_class("seasonalweather.broadcast.ern_gwes", "ErnGwesMonitor")
+ErnSameEvent = _optional_class("seasonalweather.broadcast.ern_gwes", "ErnSameEvent")
 
 
 log = logging.getLogger("seasonalweather")
@@ -97,8 +100,12 @@ class SeasonalWeatherServiceRuntime:
         work, audio, cache, logs = o._paths()
         for p in (work, audio, cache, logs):
             p.mkdir(parents=True, exist_ok=True)
+        if o.lifecycle_records is not None:
+            o.lifecycle_records.stage(LifecycleStage.STORAGE_READY, ready=False)
 
         await o._wait_for_liquidsoap()
+        if o.lifecycle_records is not None:
+            o.lifecycle_records.stage(LifecycleStage.BROADCAST_PATH_READY, ready=False)
         o._clear_liquidsoap_queues_on_startup()
         o.discord.service_started(
             cap_enabled=o.cfg.cap.enabled,
@@ -156,14 +163,12 @@ class SeasonalWeatherServiceRuntime:
         except Exception:
             log.exception("AlertTracker: startup load/purge failed")
         # _TRACKER_DL_
-        try:
+        with contextlib.suppress(Exception):
             o.discord.alerttracker_lifecycle(
                 loaded=_loaded,
                 purged=_purged,
                 active=len(o.alert_tracker.get_cycle_alerts()),
             )
-        except Exception:
-            pass
 
         try:
             _sf_removed_legacy = _sf_purge_legacy_synthetic_alerts()
@@ -206,7 +211,8 @@ class SeasonalWeatherServiceRuntime:
 
         if o.lifecycle.is_shutting_down:
             return
-        o.lifecycle.mark_running()
+        if o.lifecycle_records is not None:
+            o.lifecycle_records.stage(LifecycleStage.SOURCES_STARTING, ready=False)
         supervisor.create_task(
             o.health_state.run_forever(on_change=_health_changed),
             name="health_state",
@@ -287,7 +293,7 @@ class SeasonalWeatherServiceRuntime:
             if NwsCapPoller is None or CapAlertEvent is None:
                 log.warning("CAP enabled but cap_nws.py import failed; CAP is disabled.")
             else:
-                kwargs = dict(
+                kwargs: dict[str, Any] = dict(
                     out_queue=o.cap_queue,
                     same_fips_allow=o.cfg.service_area.same_fips_all,
                     poll_seconds=o.cfg.cap.poll_seconds,
@@ -298,9 +304,9 @@ class SeasonalWeatherServiceRuntime:
                 )
                 url = o.cfg.cap.url.strip()
                 if url:
-                    kwargs["url"] = url  # type: ignore[assignment]
+                    kwargs["url"] = url
 
-                cap = NwsCapPoller(**kwargs)  # type: ignore[arg-type]
+                cap = NwsCapPoller(**kwargs)
                 supervisor.create_task(
                     cap.run_forever(),
                     name="cap_poller",
@@ -408,4 +414,9 @@ class SeasonalWeatherServiceRuntime:
             required=False,
             stop=o.discord.aclose,
         )
+        if o.lifecycle.is_shutting_down:
+            return
+        o.lifecycle.mark_running()
+        if o.lifecycle_records is not None:
+            o.lifecycle_records.stage(LifecycleStage.SERVICE_READY, ready=True)
         await o.lifecycle.wait_for_shutdown()

@@ -188,4 +188,6 @@ RUN groupadd --gid 10001 seasonalweather \
 WORKDIR /opt/seasonalweather
 USER seasonalweather
 
+HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=3 \
+    CMD ["python", "-m", "seasonalweather", "health", "worker", "--mode", "liveness"]
 ENTRYPOINT ["python", "-m", "seasonalweather", "worker"]
