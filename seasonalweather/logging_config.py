@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import re
 import sys
 from typing import TYPE_CHECKING
 
@@ -22,12 +23,26 @@ _LEVEL_COLORS = {
     "CRITICAL": "\x1b[1;31m",
 }
 _LOGGER_COLOR = "\x1b[36m"
+_SECRET_LOG_PATTERN = re.compile(
+    r"(?i)\b(password|secret|token|api[_-]?key|authorization|webhook)(\s*[=:]\s*)(?:bearer\s+)?[^\s,;]+"
+)
+
+
+def _redact_secret_values(text: str) -> str:
+    return _SECRET_LOG_PATTERN.sub(r"\1\2[REDACTED]", text)
+
+
+class _SecretRedactingFormatter(logging.Formatter):
+    """Ensure configured application outputs never contain credential values."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return _redact_secret_values(super().format(record))
 
 
 class _RuntimeMessageFilter(logging.Filter):
     """Filter routine steady-state log chatter based on config.yaml toggles."""
 
-    def __init__(self, runtime_cfg: "LogsRuntimeConfig") -> None:
+    def __init__(self, runtime_cfg: LogsRuntimeConfig) -> None:
         super().__init__()
         self._runtime_cfg = runtime_cfg
 
@@ -52,12 +67,10 @@ class _RuntimeMessageFilter(logging.Filter):
             or message.startswith("SegmentRefresher: synthesised key=")
         ):
             return False
-        if not self._runtime_cfg.segment_refresher_alert_lifecycle and (
-            message.startswith("SegmentRefresher: alert segment expired/cancelled id=")
-        ):
-            return False
-
-        return True
+        return not (
+            not self._runtime_cfg.segment_refresher_alert_lifecycle
+            and message.startswith("SegmentRefresher: alert segment expired/cancelled id=")
+        )
 
 
 class _SlixmppOutputContainmentFilter(logging.Filter):
@@ -77,7 +90,7 @@ class _AnsiFormatter(logging.Formatter):
             colored.levelname = f"{level_color}{record.levelname}{_RESET}"
         colored.name = f"{_LOGGER_COLOR}{record.name}{_RESET}"
         # Keep the timestamp dim but leave the application message itself clean.
-        rendered = super().format(colored)
+        rendered = _redact_secret_values(super().format(colored))
         if rendered:
             parts = rendered.split(" ", 2)
             if len(parts) >= 2:
@@ -109,7 +122,7 @@ def _apply_level(logger_name: str, level_name: str) -> None:
     logging.getLogger(logger_name).setLevel(getattr(logging, level_name, logging.INFO))
 
 
-def setup_logging(cfg: "AppConfig | None" = None) -> None:
+def setup_logging(cfg: AppConfig | None = None) -> None:
     runtime = getattr(getattr(cfg, "logs", None), "runtime", None)
     root_level = _normalize_level(getattr(runtime, "level", None), default="INFO")
     color_mode = _normalize_color_mode(getattr(runtime, "color", None), default="never")
@@ -123,6 +136,8 @@ def setup_logging(cfg: "AppConfig | None" = None) -> None:
 
     root_logger = logging.getLogger()
     formatter: logging.Formatter
+    for handler in root_logger.handlers:
+        handler.setFormatter(_SecretRedactingFormatter(_DEFAULT_FORMAT))
     if _should_use_color(color_mode):
         formatter = _AnsiFormatter(_DEFAULT_FORMAT)
         for handler in root_logger.handlers:

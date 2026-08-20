@@ -228,6 +228,13 @@ VOICETEXT_PAUL_WINEDEBUG=-all,+seh,+tid,+timestamp
 
 Everything else that was previously in `.env` (SEASONAL_CAP_*, SEASONAL_ERN_*, SEASONAL_TESTS_*, SEASONAL_CYCLE_*, VOICETEXT_PAUL_RETRIES, etc.) is now in `config.yaml`.
 
+Container deployments may provide the same known secret bindings as separate
+read-only `0400` files under `paths.secret_dir` (default `/run/secrets`), using
+the environment variable name as the filename. Present mounted files override
+environment compatibility values; host/systemd deployments may continue using
+`seasonalweather.env`. The controller allowlist is checked by
+`make container-security-check`; worker profiles receive no secret files.
+
 ### API authentication modes
 
 `api.auth.mode` is required in current configuration and accepts exactly

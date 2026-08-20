@@ -6,7 +6,7 @@ BUILD_PROFILE ?= source
 TARGET_PLATFORM ?= unknown
 
 .PHONY: format-check lint typecheck basedpyright architecture-check dependency-check
-.PHONY: dead-code-check security-check complexity-check image-boundaries-check
+.PHONY: dead-code-check security-check complexity-check image-boundaries-check container-security-check
 .PHONY: exceptions-check diagnostics-check diagnostics-build diagnostics-export
 .PHONY: quality test compile check build-info version image images compose-check release
 
@@ -43,6 +43,9 @@ complexity-check:
 image-boundaries-check:
 	$(PYTHON) -m tools.quality.image_boundaries_check
 
+container-security-check:
+	$(PYTHON) -m tools.quality.container_security_check
+
 exceptions-check:
 	$(PYTHON) -m tools.quality.validate_governance
 
@@ -55,7 +58,7 @@ diagnostics-build:
 diagnostics-export:
 	$(PYTHON) -m seasonalweather diagnostics export --output $(DIAGNOSTICS_EXPORT_DIR)
 
-quality: exceptions-check diagnostics-check format-check lint typecheck basedpyright architecture-check dependency-check dead-code-check security-check complexity-check image-boundaries-check
+quality: exceptions-check diagnostics-check format-check lint typecheck basedpyright architecture-check dependency-check dead-code-check security-check complexity-check image-boundaries-check container-security-check
 
 test:
 	$(PYTHON) -m pytest

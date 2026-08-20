@@ -1,0 +1,101 @@
+version = 1
+status = "active"
+owner = "SeasonalWeather maintainers"
+rationale = "P2-05 defines the runtime hardening and secret-isolation contract consumed by each image profile before deployment wiring exists."
+scope = "Controller and worker image profiles; Compose topology and lifecycle remain owned by later packets."
+review_date = "2026-10-23"
+removal_condition = "Replace this contract only when the image profiles or their deployment security authority are deliberately revised."
+
+profiles = ["controller", "routine-worker", "piper", "legacy-tts", "maintenance", "development"]
+service_user = "seasonalweather"
+service_uid = 10001
+service_gid = 10001
+read_only_root = true
+no_new_privileges = true
+cap_drop = ["ALL"]
+tmpfs = ["/tmp", "/run"]
+runtime_flags = [
+  "--read-only",
+  "--cap-drop=ALL",
+  "--security-opt=no-new-privileges:true",
+  "--tmpfs=/tmp:rw,nosuid,nodev,noexec",
+  "--tmpfs=/run:rw,nosuid,nodev,noexec",
+]
+config_mount = "/etc/seasonalweather/config.yaml"
+config_mount_mode = "read-only"
+secret_mount_root = "/run/secrets"
+secret_mount_mode = "read-only"
+secret_file_mode = "0400"
+diagnostic_export_root = "/usr/share/seasonalweather/diagnostics"
+diagnostic_mount_mode = "read-only"
+
+[roles.controller]
+definition = "Dockerfile"
+read_only_mounts = [
+  "/etc/seasonalweather/config.yaml",
+  "/run/secrets",
+  "/usr/share/seasonalweather/diagnostics",
+]
+secret_files = [
+  "NWWS_JID",
+  "NWWS_PASSWORD",
+  "ICECAST_SOURCE_PASSWORD",
+  "ICECAST_ADMIN_PASSWORD",
+  "ICECAST_RELAY_PASSWORD",
+  "SEASONAL_API_TOKEN",
+  "SEASONAL_API_TOKENS_JSON",
+  "SEASONAL_DISCORD_ALERTS_WEBHOOK",
+  "SEASONAL_DISCORD_OPS_WEBHOOK",
+  "SEASONAL_DISCORD_API_WEBHOOK",
+  "SEASONAL_DISCORD_ERRORS_WEBHOOK",
+]
+writable_mounts = [
+  "/var/lib/seasonalweather/state",
+  "/var/lib/seasonalweather/jobs",
+  "/var/lib/seasonalweather/artifacts",
+  "/var/log/seasonalweather",
+]
+forbidden_mounts = []
+
+[roles.worker]
+definition = "Dockerfile.worker"
+read_only_mounts = []
+secret_files = []
+writable_mounts = ["/var/lib/seasonalweather/artifacts"]
+forbidden_mounts = [
+  "/var/lib/seasonalweather/state",
+  "/var/lib/seasonalweather/jobs",
+  "/var/log/seasonalweather",
+]
+
+[image]
+required_labels = [
+  "io.seasonalweather.security.profile",
+  "io.seasonalweather.security.user",
+  "io.seasonalweather.security.read-only-root",
+  "io.seasonalweather.security.no-new-privileges",
+  "io.seasonalweather.security.cap-drop",
+  "io.seasonalweather.security.tmpfs",
+  "io.seasonalweather.security.secrets",
+]
+forbidden_secret_tokens = [
+  "ARG PASSWORD",
+  "ARG SECRET",
+  "ARG TOKEN",
+  "ARG API_KEY",
+  "ENV PASSWORD",
+  "ENV SECRET",
+  "ENV TOKEN",
+  "ENV API_KEY",
+  "COPY .env",
+  "COPY *.env",
+]
+required_context_excludes = [
+  "*.env",
+  "*.pem",
+  "*.key",
+  "*.p12",
+  "*.sqlite3",
+]
+forbidden_controller_dependencies = ["piper-tts", "ffmpeg", "samedec", "samegen", "espeak"]
+forbidden_worker_dependencies = ["slixmpp", "sqlalchemy", "fastapi", "uvicorn"]

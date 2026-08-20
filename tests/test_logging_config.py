@@ -7,10 +7,11 @@ import sys
 import xml.etree.ElementTree as ET
 from contextlib import suppress
 from types import SimpleNamespace
+from typing import cast
 
 from slixmpp.xmlstream.xmlstream import XMLStream
 
-from seasonalweather.config import load_config
+from seasonalweather.config import AppConfig, load_config
 from seasonalweather.logging_config import setup_logging
 from seasonalweather.nwws import smoke_test
 from seasonalweather.nwws.source import normalize_nwws_message
@@ -46,7 +47,7 @@ def test_log_color_never_avoids_ansi(monkeypatch) -> None:
         segment_refresher_alert_lifecycle=True,
     )))
 
-    setup_logging(cfg)
+    setup_logging(cast(AppConfig, cast(object, cfg)))
     logging.getLogger("seasonalweather.test").info("plain message")
 
     assert "\x1b[" not in stream.getvalue()
@@ -75,10 +76,49 @@ def test_log_color_always_adds_ansi(monkeypatch) -> None:
         segment_refresher_alert_lifecycle=True,
     )))
 
-    setup_logging(cfg)
+    setup_logging(cast(AppConfig, cast(object, cfg)))
     logging.getLogger("seasonalweather.test").warning("colored message")
 
     assert "\x1b[" in stream.getvalue()
+
+
+def test_secret_values_are_redacted_from_application_logs(monkeypatch) -> None:
+    stream = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", stream)
+    cfg = SimpleNamespace(
+        logs=SimpleNamespace(
+            runtime=SimpleNamespace(
+                level="INFO",
+                color="never",
+                httpx_level="WARNING",
+                httpcore_level="WARNING",
+                uvicorn_access_level="WARNING",
+                uvicorn_error_level="INFO",
+                asyncio_level="WARNING",
+                slixmpp_level="WARNING",
+                slixmpp_xmlstream_level="WARNING",
+                logger_levels={},
+                cap_poll_summary=True,
+                ipaws_poll_summary=True,
+                conductor_cycle_push=True,
+                conductor_alert_push=True,
+                conductor_live_time_push=True,
+                segment_refresher_synth=True,
+                segment_refresher_alert_lifecycle=True,
+            )
+        )
+    )
+
+    setup_logging(cast(AppConfig, cast(object, cfg)))
+    logging.getLogger("seasonalweather.security-test").error(
+        "password=log-secret token=log-token authorization=Bearer log-bearer"
+    )
+
+    output = stream.getvalue()
+    assert "log-secret" not in output
+    assert "log-token" not in output
+    assert "log-bearer" not in output
+    assert output.count("[REDACTED]") == 3
 
 
 def test_slixmpp_payload_records_are_contained_at_output_boundary(monkeypatch) -> None:
@@ -108,7 +148,7 @@ def test_slixmpp_payload_records_are_contained_at_output_boundary(monkeypatch) -
         )
     )
 
-    setup_logging(cfg)
+    setup_logging(cast(AppConfig, cast(object, cfg)))
     slix = logging.getLogger("slixmpp")
     xmlstream = logging.getLogger("slixmpp.xmlstream")
     slix.error("raw malformed-data ERROR body=secret-product auth=password=secret-pass")

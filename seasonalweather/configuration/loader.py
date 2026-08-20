@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, cast
 
 from .compiler import CompiledConfiguration, compile_path
 from .environment import EnvironmentValues
@@ -24,13 +24,38 @@ class ConfigurationCompileError(ValueError):
         super().__init__(render_report(compiled.report, sources=source))
 
 
+class _SecretFileMerger(Protocol):
+    def __call__(
+        self,
+        environ: Mapping[str, str],
+        *,
+        config_value: Mapping[str, object] | None,
+    ) -> dict[str, str]: ...
+
+
+def _merge_secret_files(
+    environ: Mapping[str, str],
+    *,
+    config_value: Mapping[str, object] | None,
+) -> dict[str, str]:
+    """Load the optional secret-file adapter without extending the config cycle."""
+
+    from importlib import import_module
+
+    merger = cast(_SecretFileMerger, import_module("seasonalweather.secret_files").merge_secret_files)
+    return merger(environ, config_value=config_value)
+
+
 def load_runtime_config(
     path: str,
     *,
     environ: Mapping[str, str] | None = None,
 ) -> AppConfig:
-    effective_environment = os.environ if environ is None else environ
+    effective_environment = dict(os.environ if environ is None else environ)
     compiled = compile_path(path, environ=effective_environment)
+    if compiled.valid and compiled.value is not None:
+        effective_environment = _merge_secret_files(effective_environment, config_value=compiled.value)
+        compiled = compile_path(path, environ=effective_environment)
     if not compiled.valid or compiled.value is None:
         _raise_legacy_auth_error(compiled)
         raise ConfigurationCompileError(compiled)
@@ -48,10 +73,11 @@ def build_runtime_config(
         raise ConfigurationCompileError(compiled)
     from seasonalweather.config import _build_app_config
 
-    return _build_app_config(
-        dict(compiled.value),
-        environment=EnvironmentValues(os.environ if environ is None else environ),
+    effective_environment = _merge_secret_files(
+        dict(os.environ if environ is None else environ),
+        config_value=compiled.value,
     )
+    return _build_app_config(dict(compiled.value), environment=EnvironmentValues(effective_environment))
 
 
 def _raise_legacy_auth_error(compiled: CompiledConfiguration) -> None:

@@ -1,5 +1,5 @@
 {
-  "$schema": "https://raw.githubusercontent.com/DetachHead/basedpyright/main/packages/pyright-internal/src/schemas/pyrightconfig.schema.json",
+  "$schema": "https://raw.githubusercontent.com/DetachHead/basedpyright/refs/heads/main/packages/vscode-pyright/schemas/pyrightconfig.schema.json",
   "exclude": [
     ".venv",
     ".venv-ci",

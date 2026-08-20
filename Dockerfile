@@ -128,6 +128,14 @@ FROM ${PYTHON_BASE} AS controller
 ARG SW_IMAGE_PROFILE
 RUN test "${SW_IMAGE_PROFILE}" = "controller"
 
+LABEL io.seasonalweather.security.profile="controller" \
+      io.seasonalweather.security.user="seasonalweather:10001:10001" \
+      io.seasonalweather.security.read-only-root="required" \
+      io.seasonalweather.security.no-new-privileges="required" \
+      io.seasonalweather.security.cap-drop="ALL" \
+      io.seasonalweather.security.tmpfs="/tmp,/run" \
+      io.seasonalweather.security.secrets="read-only-per-service"
+
 ENV PATH="/opt/venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1

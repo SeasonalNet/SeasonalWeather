@@ -165,6 +165,14 @@ RUN case "${SW_IMAGE_PROFILE}" in \
         *) exit 1 ;; \
     esac
 
+LABEL io.seasonalweather.security.profile="worker" \
+      io.seasonalweather.security.user="seasonalweather:10001:10001" \
+      io.seasonalweather.security.read-only-root="required" \
+      io.seasonalweather.security.no-new-privileges="required" \
+      io.seasonalweather.security.cap-drop="ALL" \
+      io.seasonalweather.security.tmpfs="/tmp,/run" \
+      io.seasonalweather.security.secrets="read-only-per-service"
+
 ENV PATH="/opt/venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
