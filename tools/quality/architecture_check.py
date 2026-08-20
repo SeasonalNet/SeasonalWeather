@@ -53,7 +53,113 @@ def _imports(tree: ast.AST, module: str) -> Iterable[tuple[str, int]]:
             for alias in node.names:
                 yield alias.name, node.lineno
         elif isinstance(node, ast.ImportFrom):
-            yield _resolve_import(node, module), node.lineno
+            resolved = _resolve_import(node, module)
+            yield resolved, node.lineno
+            if node.module is None:
+                for alias in node.names:
+                    if alias.name != "*":
+                        yield f"{resolved}.{alias.name}", node.lineno
+
+
+def _module_index(root: Path) -> dict[str, Path]:
+    modules: dict[str, Path] = {}
+    for path in sorted(root.rglob("*.py")):
+        if any(part in {".git", ".venv", ".venv-ci", "__pycache__"} for part in path.parts):
+            continue
+        if path.relative_to(root).as_posix().startswith("tests/architecture/fixtures/"):
+            continue
+        modules[_module_name(path, root)] = path
+    return modules
+
+
+def _resolve_local_import(imported: str, modules: dict[str, Path]) -> str | None:
+    candidate = imported
+    while candidate:
+        if candidate in modules:
+            return candidate
+        candidate = candidate.rpartition(".")[0]
+    return None
+
+
+def _strongly_connected_components(graph: dict[str, set[str]]) -> list[tuple[str, ...]]:
+    index = 0
+    indices: dict[str, int] = {}
+    lowlinks: dict[str, int] = {}
+    stack: list[str] = []
+    on_stack: set[str] = set()
+    components: list[tuple[str, ...]] = []
+
+    def visit(node: str) -> None:
+        nonlocal index
+        indices[node] = index
+        lowlinks[node] = index
+        index += 1
+        stack.append(node)
+        on_stack.add(node)
+        for child in sorted(graph[node]):
+            if child not in indices:
+                visit(child)
+                lowlinks[node] = min(lowlinks[node], lowlinks[child])
+            elif child in on_stack:
+                lowlinks[node] = min(lowlinks[node], indices[child])
+        if lowlinks[node] != indices[node]:
+            return
+        component: list[str] = []
+        while True:
+            child = stack.pop()
+            on_stack.remove(child)
+            component.append(child)
+            if child == node:
+                break
+        components.append(tuple(sorted(component)))
+
+    for node in sorted(graph):
+        if node not in indices:
+            visit(node)
+    return components
+
+
+def _import_cycle_findings(root: Path, config: dict[str, Any]) -> list[Finding]:
+    module_index = _module_index(root)
+    cycle_roots = config.get("import_cycle_roots", [])
+    modules = set(module_index)
+    graph: dict[str, set[str]] = {module: set() for module in modules}
+    import_lines: dict[tuple[str, str], int] = {}
+    for module in sorted(modules):
+        module_path = module_index[module]
+        try:
+            tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=module_path.as_posix())
+        except (OSError, SyntaxError):
+            continue
+        for imported, line in _imports(tree, module):
+            target = _resolve_local_import(imported, module_index)
+            if target is None or target not in modules:
+                continue
+            graph[module].add(target)
+            import_lines.setdefault((module, target), line)
+
+    findings: list[Finding] = []
+    for component in _strongly_connected_components(graph):
+        component_set = set(component)
+        cyclic = len(component) > 1 and any(_matches_prefix(node, cycle_roots) for node in component)
+        if not cyclic:
+            continue
+        cycle_text = " -> ".join((*component, component[0]))
+        for module in component:
+            targets = sorted(graph[module] & component_set)
+            if not targets:
+                continue
+            target = targets[0]
+            relative_path = module_index[module].relative_to(root).as_posix()
+            findings.append(
+                Finding(
+                    relative_path,
+                    import_lines[(module, target)],
+                    "SWARCH050",
+                    f"import cycle detected: {cycle_text}",
+                )
+            )
+    return findings
 
 
 def _qualified_call(node: ast.Call) -> str:
@@ -186,6 +292,7 @@ def _exception_applies(finding: Finding, exceptions: list[dict[str, Any]]) -> bo
 def scan(root: Path, config: dict[str, Any], exceptions: list[dict[str, Any]] | None = None) -> list[Finding]:
     findings: list[Finding] = []
     exceptions = exceptions or []
+    findings.extend(_import_cycle_findings(root, config))
     worker_roots = config["worker_roots"]
     controller_roots = config["controller_roots"]
 

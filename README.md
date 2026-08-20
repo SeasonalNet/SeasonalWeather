@@ -72,6 +72,9 @@ Freeze products are supported natively. `FZ.W` maps to SAME `FZW` (**Freeze Warn
 - Runs under **systemd** (units included in `systemd/`).
 - HTTP control API (localhost-only by default) for status, cycle control, bounded broadcast inserts, and audio injection.
 - OpenAPI 3.1 API document at `/openapi.json`; Swagger UI remains available at `/docs`.
+- Centralized build and provenance commands (`make check`, `make image`,
+  `make images`, `make release`) and the authenticated `/v1/version` build
+  identity surface are documented in [`docs/build-and-provenance.md`](docs/build-and-provenance.md).
 - RFC 9457 Problem Details error responses (`application/problem+json`) with `code`, `details`, and `request_id` extensions for operator/debug use.
 - Typed command and bounded-job contracts are documented in
   [`docs/command-job-contracts.md`](docs/command-job-contracts.md). A separate

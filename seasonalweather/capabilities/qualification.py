@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -58,9 +59,9 @@ class WorkerQualificationView:
     records: tuple[CapabilityRecord, ...]
     authorized_capabilities: frozenset[str]
     authorized_job_types: frozenset[JobType]
-    payload_versions: dict[JobType, int]
-    result_versions: dict[JobType, int]
-    effective_capacity: dict[str, int]
+    payload_versions: Mapping[JobType, int]
+    result_versions: Mapping[JobType, int]
+    effective_capacity: Mapping[str, int]
     trusted: bool = True
     connected: bool = True
     probe_required: bool = False

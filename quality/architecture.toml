@@ -1,6 +1,9 @@
 version = 1
 
 controller_roots = ["seasonalweather"]
+# P2-01 build metadata must remain outside runtime import cycles. Existing
+# unrelated legacy cycles are outside this packet's bounded authority.
+import_cycle_roots = ["seasonalweather.build_metadata"]
 worker_roots = ["seasonalweather.worker", "seasonalweather.workers"]
 
 worker_only_imports = [

@@ -1,9 +1,14 @@
-PYTHON ?= python3
+.DEFAULT_GOAL := check
 
-.PHONY: format-check lint typecheck architecture-check dependency-check
+PYTHON ?= $(if $(wildcard .venv/bin/python),./.venv/bin/python,python3)
+BUILD_INFO ?= build/build-info.json
+BUILD_PROFILE ?= source
+TARGET_PLATFORM ?= unknown
+
+.PHONY: format-check lint typecheck basedpyright architecture-check dependency-check
 .PHONY: dead-code-check security-check complexity-check image-boundaries-check
 .PHONY: exceptions-check diagnostics-check diagnostics-build diagnostics-export
-.PHONY: quality test
+.PHONY: quality test compile check build-info version image images compose-check release
 
 DIAGNOSTICS_EXPORT_DIR ?= build/diagnostics
 
@@ -15,6 +20,9 @@ lint:
 
 typecheck:
 	$(PYTHON) -m tools.quality.run_check typecheck
+
+basedpyright:
+	$(PYTHON) -m tools.quality.run_check basedpyright
 
 architecture-check:
 	$(PYTHON) -m tools.quality.architecture_check
@@ -47,7 +55,43 @@ diagnostics-build:
 diagnostics-export:
 	$(PYTHON) -m seasonalweather diagnostics export --output $(DIAGNOSTICS_EXPORT_DIR)
 
-quality: exceptions-check diagnostics-check format-check lint typecheck architecture-check dependency-check dead-code-check security-check complexity-check image-boundaries-check
+quality: exceptions-check diagnostics-check format-check lint typecheck basedpyright architecture-check dependency-check dead-code-check security-check complexity-check image-boundaries-check
 
 test:
 	$(PYTHON) -m pytest
+
+compile:
+	PYTHONPYCACHEPREFIX="$(CURDIR)/build/pycache" $(PYTHON) -m compileall -q seasonalweather tools tests
+
+check: quality compile test
+
+build-info:
+	$(PYTHON) -m seasonalweather.build_metadata \
+		--output "$(BUILD_INFO)" \
+		--repo-root "$(CURDIR)" \
+		--profile "$(BUILD_PROFILE)" \
+		--target-platform "$(TARGET_PLATFORM)" \
+		$(if $(SOURCE_DATE_EPOCH),--source-date-epoch "$(SOURCE_DATE_EPOCH)") \
+		$(if $(BUILD_ID),--build-id "$(BUILD_ID)")
+
+version:
+	$(PYTHON) -m seasonalweather version --json
+
+image:
+	$(MAKE) BUILD_PROFILE=controller build-info
+	$(PYTHON) -m tools.build_interface image --build-info "$(BUILD_INFO)" --target controller
+
+images:
+	@set -e; \
+	for profile in controller routine-worker piper legacy-tts maintenance development; do \
+		$(MAKE) BUILD_PROFILE="$$profile" build-info; \
+		$(PYTHON) -m tools.build_interface image --build-info "$(BUILD_INFO)" --target "$$profile"; \
+	done
+
+compose-check:
+	$(PYTHON) -m tools.build_interface compose-check
+
+release:
+	@test -n "$(SOURCE_DATE_EPOCH)" || (echo "SOURCE_DATE_EPOCH is required for release provenance" >&2; exit 1)
+	@test -z "$$(git status --porcelain)" || (echo "release requires a clean working tree" >&2; exit 1)
+	$(MAKE) BUILD_PROFILE=release build-info

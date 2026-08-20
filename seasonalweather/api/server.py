@@ -13,11 +13,12 @@ from typing import Any
 
 import uvicorn
 
-from seasonalweather import __version__
+from seasonalweather import __version__  # noqa: F401
 
 from ..artifacts.composition import build_controller_artifact_composition
 from ..auth import AuthenticationRepository, AuthenticationService
 from ..broadcast.segment_service import SegmentApplicationService
+from ..build_metadata import BuildInfo, current_build_info
 from ..commands import CommandStore
 from ..config import AuthMode, load_config
 from ..configuration_reload.candidate_store import CandidateStore
@@ -190,13 +191,15 @@ def _prepare_runtime_diagnostics(
     marker_store: ProcessMarkerStore,
     supervisor: TaskSupervisor,
     instance_id: str,
+    build_info: BuildInfo | None = None,
 ) -> tuple[RuntimeDiagnosticService | None, CorrelationContext]:
+    identity = (build_info or current_build_info()).build_identity
     service = RuntimeDiagnosticService(OccurrenceRepository(database)) if database is not None else None
     context = CorrelationContext(
         role=DiagnosticRole.CONTROLLER,
         instance_id=instance_id,
         component="controller",
-        build_identity=f"seasonalweather-{__version__}",
+        build_identity=identity,
     )
     if service is None:
         return None, context
@@ -278,11 +281,12 @@ def _reload_diagnostic_promoter(
 
 async def run_api_server(*, config_path: str, host: str, port: int) -> None:
     instance_id = f"controller_{uuid.uuid4().hex}"
+    build_info = current_build_info()
     context = CorrelationContext(
         role=DiagnosticRole.CONTROLLER,
         instance_id=instance_id,
         component="controller",
-        build_identity=f"seasonalweather-{__version__}",
+        build_identity=build_info.build_identity,
     )
     secondary_failures = SecondaryFailureLedger()
     fatal = [FatalBoundary(None, context, secondary_failures)]
@@ -294,6 +298,7 @@ async def run_api_server(*, config_path: str, host: str, port: int) -> None:
             port=port,
             instance_id=instance_id,
             fatal=fatal,
+            build_info=build_info,
         )
     except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
         raise
@@ -309,9 +314,19 @@ async def _run_api_server_impl(
     port: int,
     instance_id: str,
     fatal: list[FatalBoundary],
+    build_info: BuildInfo | None = None,
 ) -> None:
+    build_info = build_info or current_build_info()
     cfg = load_config(config_path)
     _setup_logging(cfg)
+    log.info(
+        "lifecycle_event=service_starting role=controller build=%s software=%s profile=%s target_platform=%s dirty_tree=%s",
+        build_info.build_identity,
+        build_info.software_version,
+        build_info.image_profile,
+        build_info.target_platform,
+        str(build_info.dirty_tree).lower(),
+    )
     state_root = Path(cfg.database.path).parent if str(cfg.database.path).strip() else Path(cfg.paths.work_dir)
     marker_store = ProcessMarkerStore(state_root)
     marker_store.start(controller_marker(instance_id=instance_id))
@@ -346,6 +361,7 @@ async def _run_api_server_impl(
         marker_store=marker_store,
         supervisor=supervisor,
         instance_id=instance_id,
+        build_info=build_info,
     )
     if diagnostic_service is not None:
         orch.nwws_diagnostic_sink = NwwsRuntimeDiagnosticSink(
@@ -418,6 +434,7 @@ async def _run_api_server_impl(
         lifecycle=lifecycle,
         reload_service=reload_service,
         diagnostic_service=diagnostic_service,
+        build_info=build_info,
     )
 
     server = _ControllerOwnedUvicornServer(

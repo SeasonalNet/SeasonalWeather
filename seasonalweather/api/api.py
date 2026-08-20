@@ -17,6 +17,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ..application.errors import ControlError
 from ..auth.service import AuthenticationError, AuthenticationService
+from ..build_metadata import BuildInfo, current_build_info
 from ..configuration_reload.models import ReloadRequest, WarningAcknowledgment
 from ..control import OrchestratorControl
 from ..diagnostics import load_catalog
@@ -60,6 +61,7 @@ from .models import (
 )
 from .openapi import (
     API_VERSION,
+    BUILD_INFO_SCHEMA,
     PROBLEM_JSON,
     PUBLIC_PROBLEM_RESPONSES,
     STANDARD_PROBLEM_RESPONSES,
@@ -310,6 +312,7 @@ def create_app(
     lifecycle: Lifecycle | None = None,
     reload_service: Any | None = None,
     diagnostic_service: RuntimeDiagnosticService | None = None,
+    build_info: BuildInfo | None = None,
 ) -> FastAPI:
     command_store = store or CommandStore()
     if health_service is None:
@@ -338,6 +341,8 @@ def create_app(
     app.state.lifecycle = lifecycle
     app.state.reload_service = reload_service
     app.state.diagnostic_service = diagnostic_service
+    runtime_build_info = build_info or current_build_info()
+    app.state.build_info = runtime_build_info
     install_openapi(app)
 
     @app.middleware("http")
@@ -531,6 +536,23 @@ def create_app(
         response.headers["Cache-Control"] = "no-store"
         report = await health_service.collect()
         return report.to_dict(detailed=True)
+
+    @app.get(
+        "/v1/version",
+        tags=["status"],
+        summary="Return the immutable software and build identity.",
+        responses={
+            200: json_response("Build identity and compatibility metadata.", BUILD_INFO_SCHEMA),
+            **STANDARD_PROBLEM_RESPONSES,
+        },
+    )
+    async def v1_version(
+        response: Response,
+        principal: ApiPrincipal = Depends(require_route_policy("GET", "/v1/version")),  # noqa: B008
+    ) -> dict[str, object]:
+        del principal
+        response.headers["Cache-Control"] = "no-store"
+        return runtime_build_info.to_dict()
 
     @app.get(
         "/v1/status",

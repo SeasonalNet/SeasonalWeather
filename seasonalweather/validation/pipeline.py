@@ -10,9 +10,9 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Any, cast
 
 from seasonalweather import __version__
+from seasonalweather.build_metadata import current_build_info
 from seasonalweather.capabilities.manifest import MANIFEST_SCHEMA_VERSION
 from seasonalweather.capabilities.qualification import WorkerQualificationView
 from seasonalweather.configuration.compiler import CompiledConfiguration, compile_path
@@ -38,6 +38,7 @@ from .compatibility import (
     SupportedCompatibility,
     analyze_compatibility,
 )
+from .constants import VALIDATION_PROTOCOL_VERSION
 from .issues import (
     STAGE_ORDER,
     StageState,
@@ -57,7 +58,6 @@ from .preflight import (
 from .rules import expected_rule_identities
 from .semantic import validate_semantics
 
-VALIDATION_PROTOCOL_VERSION = 1
 VALIDATION_REPORT_VERSION = 1
 VALIDATOR_STAMP_VERSION = 1
 _VALIDATION_PHASES = frozenset(
@@ -446,9 +446,9 @@ def _freeze_capability_view(view: WorkerQualificationView) -> WorkerQualificatio
         records=records,
         authorized_capabilities=frozenset(view.authorized_capabilities),
         authorized_job_types=frozenset(view.authorized_job_types),
-        payload_versions=cast(dict[Any, int], MappingProxyType(dict(view.payload_versions))),
-        result_versions=cast(dict[Any, int], MappingProxyType(dict(view.result_versions))),
-        effective_capacity=cast(dict[str, int], MappingProxyType(dict(view.effective_capacity))),
+        payload_versions=MappingProxyType(dict(view.payload_versions)),
+        result_versions=MappingProxyType(dict(view.result_versions)),
+        effective_capacity=MappingProxyType(dict(view.effective_capacity)),
         trusted=view.trusted,
         connected=view.connected,
         probe_required=view.probe_required,
@@ -703,7 +703,7 @@ def current_compatibility_identity(config_schema_version: int | None) -> Compati
     result_versions = tuple(sorted({policy.result_schema_version for policy in JOB_TYPE_POLICIES.values()}))
     return CompatibilityIdentity(
         software_version=__version__,
-        build_identity=None,
+        build_identity=current_build_info().build_identity,
         validation_protocol_version=VALIDATION_PROTOCOL_VERSION,
         config_schema_version=config_schema_version,
         swwp_protocol_version=PROTOCOL_VERSION,
@@ -1048,7 +1048,7 @@ def _validator_stamp(
     return ValidatorStamp(
         stamp_version=VALIDATOR_STAMP_VERSION,
         software_version=__version__,
-        build_identity=context.build_identity,
+        build_identity=context.build_identity or current_build_info().build_identity,
         validation_protocol_version=VALIDATION_PROTOCOL_VERSION,
         supported_config_schema=IntegerRange(
             min(SUPPORTED_CONFIG_SCHEMAS),

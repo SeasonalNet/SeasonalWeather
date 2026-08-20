@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import datetime as dt
 import hashlib
+import json
 import logging
 import sys
 import time
@@ -21,6 +22,7 @@ from pathlib import Path
 from typing import cast
 from zoneinfo import ZoneInfo
 
+from .build_metadata import current_build_info
 from .config import AppConfig, load_config
 from .configuration_reload.safe_point import (
     ALERT as RELOAD_ALERT_ACTIVITY,
@@ -958,8 +960,22 @@ class Orchestrator:
             self.tts_execution_port.shutdown(wait=True)
 
 
+def _version_command(argv: list[str]) -> int:
+    version_parser = argparse.ArgumentParser(prog="seasonalweather version")
+    version_parser.add_argument("--json", action="store_true", dest="machine_readable")
+    args = version_parser.parse_args(argv)
+    info = current_build_info()
+    if args.machine_readable:
+        print(json.dumps(info.to_dict(), ensure_ascii=True, sort_keys=True, separators=(",", ":")))
+    else:
+        print(info.build_identity)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     effective_argv = list(sys.argv[1:] if argv is None else argv)
+    if effective_argv and effective_argv[0] == "version":
+        return _version_command(effective_argv[1:])
     if effective_argv and effective_argv[0] == "auth":
         from .cli.auth import main as auth_main
 

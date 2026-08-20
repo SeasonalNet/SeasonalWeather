@@ -20,32 +20,7 @@ jobs:
           . .venv-ci/bin/activate
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-dev.txt
-      - name: Compile Python sources
-        run: |
-          python3 - <<'PY'
-          import compileall
-          import pathlib
-          import sys
-
-          excluded = {'.git', '.forgejo', '.venv-ci', '__pycache__'}
-          roots = [p for p in pathlib.Path('.').iterdir() if p.name not in excluded]
-          ok = True
-          for root in roots:
-              if root.is_dir():
-                  ok = compileall.compile_dir(str(root), quiet=1, legacy=False) and ok
-              elif root.suffix == '.py':
-                  ok = compileall.compile_file(str(root), quiet=1, legacy=False) and ok
-          sys.exit(0 if ok else 1)
-          PY
-      - name: Run repository quality gates
+      - name: Run the repository check interface
         run: |
           . .venv-ci/bin/activate
-          make quality
-      - name: Run pytest when tests exist
-        run: |
-          . .venv-ci/bin/activate
-          if find . -maxdepth 3 -type d -name tests | grep -q .; then
-            python -m pytest
-          else
-            echo "No tests directory found; compile check only."
-          fi
+          make check

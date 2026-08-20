@@ -60,6 +60,10 @@ def checks() -> dict[str, Check]:
             (python, "-m", "mypy"),
             _line_count(r"^.+:\d+: error: "),
         ),
+        "basedpyright": Check(
+            (python, "-m", "basedpyright"),
+            _line_count(r" - error: "),
+        ),
         "dependency": Check(
             (python, "-m", "deptry", ".", "--config", "pyproject.toml", "--no-ansi"),
             _line_count(r"^.+: DEP\d{3} "),

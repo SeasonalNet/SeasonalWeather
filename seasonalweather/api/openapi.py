@@ -63,6 +63,12 @@ LIVENESS_SCHEMA: dict[str, Any] = {
     },
 }
 
+BUILD_INFO_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": True,
+    "required": ["schema_version", "project", "software_version", "build_identity", "build_id"],
+}
+
 HEALTH_COMPONENT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,

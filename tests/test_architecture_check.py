@@ -54,8 +54,19 @@ def test_invalid_architecture_fixture_proves_rules_fail_closed():
         "SWARCH043",
         "SWARCH044",
         "SWARCH045",
+        "SWARCH050",
     }
     assert any("filesystem mutation" in finding.message for finding in findings)
+
+
+def test_import_cycle_rule_has_an_independent_negative_fixture() -> None:
+    assert not any(finding.rule == "SWARCH050" for finding in scan(FIXTURES / "valid", CONFIG))
+    findings = scan(FIXTURES / "invalid", CONFIG)
+    cycle_findings = [finding for finding in findings if finding.rule == "SWARCH050"]
+    assert [finding.path for finding in cycle_findings] == [
+        "seasonalweather/build_metadata/cycle_a.py",
+        "seasonalweather/build_metadata/cycle_b.py",
+    ]
 
 
 def test_nwws_architecture_rules_have_independent_matching_negative_fixtures():

@@ -25,6 +25,12 @@ _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{2,127}$")
 _KEY_RE = re.compile(r"^[a-z][a-z0-9_.-]{1,63}$")
 
 
+def _current_build_info():
+    from ..build_metadata import current_build_info
+
+    return current_build_info()
+
+
 def _utc(value: dt.datetime, name: str) -> dt.datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError(f"{name} must be timezone-aware")
@@ -230,8 +236,16 @@ class Register(Payload):
     worker_id: str
     worker_instance_id: str
     worker_epoch: int = Field(ge=1)
-    software_version: str = Field(min_length=1, max_length=64)
-    build_identity: str = Field(min_length=1, max_length=128)
+    software_version: str = Field(
+        default_factory=lambda: _current_build_info().software_version,
+        min_length=1,
+        max_length=64,
+    )
+    build_identity: str = Field(
+        default_factory=lambda: _current_build_info().build_identity,
+        min_length=1,
+        max_length=128,
+    )
     requested_queues: tuple[QueueClass, ...] = Field(min_length=1, max_length=8)
     requested_slots: int = Field(ge=1, le=128)
     capability_manifest: CapabilityManifest

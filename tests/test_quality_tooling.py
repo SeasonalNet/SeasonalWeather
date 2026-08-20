@@ -25,6 +25,13 @@ def test_dependency_findings_are_counted_from_stderr():
     assert check.count("requirements.txt: DEP002 'unused' defined as a dependency\n") == 1
 
 
+def test_basedpyright_errors_are_counted_from_stdout():
+    check = checks()["basedpyright"]
+
+    assert check.count_stream == "stdout"
+    assert check.count("file.py:1:1 - error: type mismatch\n") == 1
+
+
 def test_governed_record_rejects_expired_review_date():
     record = {
         "owner": "maintainer",

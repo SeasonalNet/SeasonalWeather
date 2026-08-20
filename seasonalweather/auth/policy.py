@@ -53,6 +53,7 @@ ROUTE_AUTH_POLICIES: dict[tuple[str, str], RouteAuthPolicy] = {
     ("GET", "/readyz"): PUBLIC_ROUTE,
     ("GET", "/v1/health"): _protected("read:health"),
     ("GET", "/v1/status"): _protected("read:status"),
+    ("GET", "/v1/version"): _protected("read:status"),
     ("GET", "/v1/handled-alerts"): PUBLIC_ROUTE,
     ("GET", "/v1/station-feed"): _protected("read:alerts"),
     ("GET", "/v1/config/summary"): _protected("read:config"),
