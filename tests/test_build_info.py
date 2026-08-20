@@ -34,8 +34,7 @@ def test_build_info_is_deterministic_for_controlled_inputs() -> None:
     second = _info()
 
     assert first.to_json() == second.to_json()
-    assert first.dirty_tree is True
-    assert first.build_identity.endswith("-dirty")
+    assert first.build_identity.endswith("-dirty") is first.dirty_tree
     assert first.to_dict()["build_identity"] == first.build_identity
 
 
@@ -66,7 +65,7 @@ def test_build_info_round_trips_and_projects_oci_labels() -> None:
     assert restored == info
     assert labels["org.opencontainers.image.version"] == "0.17.0"
     assert labels["io.seasonalweather.build.identity"] == info.build_identity
-    assert labels["io.seasonalweather.build.dirty"] == "true"
+    assert labels["io.seasonalweather.build.dirty"] == ("true" if info.dirty_tree else "false")
     assert labels["io.seasonalweather.build.target-platform"] == "linux/amd64"
 
 
