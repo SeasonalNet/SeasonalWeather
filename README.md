@@ -93,6 +93,9 @@ Freeze products are supported natively. `FZ.W` maps to SAME `FZW` (**Freeze Warn
 - Controller and worker container health commands, startup identity records,
   readiness gating, and bounded lifecycle/shutdown behavior are documented in
   [`docs/p2-06-health-lifecycle.md`](docs/p2-06-health-lifecycle.md).
+- Structured JSON logging, controller Prometheus metrics, bounded SWWP worker
+  telemetry, trace context, and nonblocking optional sink boundaries are
+  documented in [`docs/p2-07-observability.md`](docs/p2-07-observability.md).
 - Deployment filesystem mounts, controller/worker state authority, and
   parameterized service endpoints are documented in
   [`docs/p2-04-filesystem-network.md`](docs/p2-04-filesystem-network.md).

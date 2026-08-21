@@ -9,6 +9,8 @@ import os
 import signal
 import uuid
 
+from ..build_metadata import current_build_info
+from ..logging_config import setup_logging
 from ..swwp.worker import WorkerSession
 from .handlers import HandlerRegistry
 from .profiles import WorkerProfile, registration_for_profile, worker_id_from_environment
@@ -110,6 +112,11 @@ def main(argv: list[str] | None = None) -> int:
         WebSocketWorkerTransport(args.controller_url),
         health_file=args.health_file,
         image_profile=profile.value,
+    )
+    setup_logging(
+        role="worker",
+        instance_id=registration.worker_instance_id,
+        build_info=current_build_info(),
     )
     asyncio.run(_run_worker(runtime))
     return 0

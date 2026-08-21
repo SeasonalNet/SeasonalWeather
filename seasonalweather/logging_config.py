@@ -1,13 +1,32 @@
 from __future__ import annotations
 
 import copy
+import datetime as dt
+import json
 import logging
+import os
 import re
 import sys
 from typing import TYPE_CHECKING
 
+from .diagnostics.bindings import OBS_CODES
+from .observability.correlation import current_correlation, set_correlation
+from .observability.outputs import (
+    AlertmanagerTransport,
+    OtlpHttpTransport,
+    OutputEvent,
+    OutputTransport,
+    PySnmpV3Transport,
+    SyslogTlsTransport,
+    build_output_hub,
+)
+from .observability.sinks import OutputHub
+from .observability.tracing import current_trace_context
+
 if TYPE_CHECKING:
+    from .build_metadata import BuildInfo
     from .config import AppConfig, LogsRuntimeConfig
+    from .observability.metrics import MetricsRegistry
 
 
 _DEFAULT_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
@@ -26,6 +45,7 @@ _LOGGER_COLOR = "\x1b[36m"
 _SECRET_LOG_PATTERN = re.compile(
     r"(?i)\b(password|secret|token|api[_-]?key|authorization|webhook)(\s*[=:]\s*)(?:bearer\s+)?[^\s,;]+"
 )
+_output_hub: OutputHub[OutputEvent] | None = None
 
 
 def _redact_secret_values(text: str) -> str:
@@ -37,6 +57,43 @@ class _SecretRedactingFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         return _redact_secret_values(super().format(record))
+
+
+class StructuredJsonFormatter(logging.Formatter):
+    """Canonical bounded JSON formatter for stdout/stderr and containers."""
+
+    _EXTRA_FIELDS = (
+        "event",
+        "code",
+        "component",
+        "state",
+        "outcome",
+        "reason",
+        "status_code",
+    )
+
+    def format(self, record: logging.LogRecord) -> str:
+        message = _redact_secret_values(record.getMessage())[:4096]
+        payload: dict[str, object] = {
+            "observed_at": dt.datetime.fromtimestamp(record.created, tz=dt.UTC)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z"),
+            "level": record.levelname,
+            "logger": record.name[:128],
+            "message": message,
+        }
+        payload.update(current_correlation().as_dict())
+        for field in self._EXTRA_FIELDS:
+            value = getattr(record, field, None)
+            if value is None:
+                continue
+            text = _redact_secret_values(str(value))[:256]
+            if text:
+                payload[field] = text
+        if record.exc_info:
+            payload["exception"] = _redact_secret_values(self.formatException(record.exc_info))[:16_384]
+        return json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
 
 
 class _RuntimeMessageFilter(logging.Filter):
@@ -100,6 +157,38 @@ class _AnsiFormatter(logging.Formatter):
         return rendered
 
 
+class _OptionalOutputHandler(logging.Handler):
+    """Copy bounded log events to optional transports without blocking emitters."""
+
+    def __init__(self, output_hub: OutputHub[OutputEvent]) -> None:
+        super().__init__()
+        self._output_hub = output_hub
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            fields = current_correlation().as_dict()
+            fields["logger"] = record.name[:128]
+            attributes = tuple((key, value[:256]) for key, value in sorted(fields.items())[:16])
+            trace = current_trace_context()
+            code = getattr(record, "code", None)
+            event = OutputEvent(
+                event=_output_event_name(getattr(record, "event", "log_record")),
+                message=_redact_secret_values(record.getMessage())[:4096],
+                severity=record.levelname.upper() if record.levelname.upper() in _VALID_LEVELS else "INFO",
+                attributes=attributes,
+                traceparent=trace.as_traceparent() if trace is not None else None,
+                diagnostic_code=str(code) if code is not None else None,
+            )
+            self._output_hub.submit(event)
+        except Exception:
+            self.handleError(record)
+
+
+def _output_event_name(value: object) -> str:
+    normalized = re.sub(r"[^a-z0-9_.-]+", "_", str(value).strip().lower()).strip("._-")[:64]
+    return normalized if normalized and normalized[0].isalpha() else f"event_{normalized or 'record'}"
+
+
 def _normalize_level(value: str | None, *, default: str) -> str:
     level = str(value or default).strip().upper()
     return level if level in _VALID_LEVELS else default
@@ -122,47 +211,156 @@ def _apply_level(logger_name: str, level_name: str) -> None:
     logging.getLogger(logger_name).setLevel(getattr(logging, level_name, logging.INFO))
 
 
-def setup_logging(cfg: AppConfig | None = None) -> None:
-    runtime = getattr(getattr(cfg, "logs", None), "runtime", None)
-    root_level = _normalize_level(getattr(runtime, "level", None), default="INFO")
-    color_mode = _normalize_color_mode(getattr(runtime, "color", None), default="never")
+def _build_output_hub(
+    cfg: AppConfig | None,
+    metrics: MetricsRegistry | None,
+) -> OutputHub[OutputEvent] | None:
+    if cfg is None:
+        return None
+    configured = cfg.logs.outputs
+    transports: dict[str, OutputTransport] = {}
+    syslog = configured.syslog_tls
+    if syslog.enabled:
+        transports["syslog_tls"] = SyslogTlsTransport(
+            syslog.host,
+            syslog.port,
+            ca_file=syslog.ca_file,
+            server_name=syslog.server_name,
+            timeout_seconds=syslog.timeout_seconds,
+        )
+    otlp = configured.otlp
+    if otlp.enabled:
+        transports["otlp"] = OtlpHttpTransport(otlp.endpoint, timeout_seconds=otlp.timeout_seconds)
+    alertmanager = configured.alertmanager
+    if alertmanager.enabled:
+        transports["alertmanager"] = AlertmanagerTransport(
+            alertmanager.endpoint,
+            timeout_seconds=alertmanager.timeout_seconds,
+        )
+    snmpv3 = configured.snmpv3
+    if snmpv3.enabled:
+        transports["snmpv3"] = PySnmpV3Transport(
+            snmpv3.host,
+            snmpv3.port,
+            username=snmpv3.username,
+            auth_protocol=snmpv3.auth_protocol,
+            privacy_protocol=snmpv3.privacy_protocol,
+            auth_secret=os.environ.get(snmpv3.auth_secret_env, ""),
+            privacy_secret=os.environ.get(snmpv3.privacy_secret_env, ""),
+            timeout_seconds=snmpv3.timeout_seconds,
+        )
 
-    logging.basicConfig(
-        level=getattr(logging, root_level, logging.INFO),
-        format=_DEFAULT_FORMAT,
-        stream=sys.stdout,
-        force=True,
+    def on_drop(name: str) -> None:
+        if metrics is not None:
+            metrics.inc("seasonalweather_observability_sink_dropped_total", labels={"sink": name})
+
+    def on_failure(name: str, _exception: BaseException) -> None:
+        if metrics is not None:
+            metrics.inc("seasonalweather_observability_sink_failed_total", labels={"sink": name})
+
+    if not transports:
+        return None
+    queue_size = max(
+        [
+            syslog.queue_size,
+            otlp.queue_size,
+            alertmanager.queue_size,
+            snmpv3.queue_size,
+        ]
     )
+    return build_output_hub(transports, queue_size=min(queue_size, 10_000), on_drop=on_drop, on_failure=on_failure)
 
-    root_logger = logging.getLogger()
-    formatter: logging.Formatter
-    for handler in root_logger.handlers:
-        handler.setFormatter(_SecretRedactingFormatter(_DEFAULT_FORMAT))
-    if _should_use_color(color_mode):
-        formatter = _AnsiFormatter(_DEFAULT_FORMAT)
-        for handler in root_logger.handlers:
-            handler.setFormatter(formatter)
 
+def _logging_context(
+    role: str | None,
+    instance_id: str | None,
+    build_info: BuildInfo | None,
+) -> dict[str, object]:
+    context: dict[str, object] = {"service": "seasonalweather"}
+    if role:
+        context["role"] = role
+    if instance_id:
+        context["instance_id"] = instance_id
+    if build_info is not None:
+        context["build_id"] = build_info.build_id
+        context["build_identity"] = build_info.build_identity
+    return context
+
+
+def _configure_formatters(root_logger: logging.Logger, color_mode: str) -> None:
+    formatter: logging.Formatter = (
+        _AnsiFormatter(_DEFAULT_FORMAT) if _should_use_color(color_mode) else StructuredJsonFormatter()
+    )
     for handler in root_logger.handlers:
+        handler.setFormatter(formatter)
         handler.addFilter(_SlixmppOutputContainmentFilter())
 
-    if runtime is None:
-        return
 
+def _configure_optional_output_handler(
+    root_logger: logging.Logger,
+    output_hub: OutputHub[OutputEvent] | None,
+) -> None:
+    if output_hub is not None:
+        root_logger.addHandler(_OptionalOutputHandler(output_hub))
+
+
+def _configure_runtime_logging(runtime: LogsRuntimeConfig, root_logger: logging.Logger) -> None:
     runtime_filter = _RuntimeMessageFilter(runtime)
     for handler in root_logger.handlers:
         handler.addFilter(runtime_filter)
 
-    _apply_level("httpx", _normalize_level(runtime.httpx_level, default="WARNING"))
-    _apply_level("httpcore", _normalize_level(runtime.httpcore_level, default="WARNING"))
-    _apply_level("uvicorn.access", _normalize_level(runtime.uvicorn_access_level, default="WARNING"))
-    _apply_level("uvicorn.error", _normalize_level(runtime.uvicorn_error_level, default="INFO"))
-    _apply_level("asyncio", _normalize_level(runtime.asyncio_level, default="WARNING"))
-    _apply_level("slixmpp", _normalize_level(runtime.slixmpp_level, default="WARNING"))
-    _apply_level("slixmpp.xmlstream", _normalize_level(runtime.slixmpp_xmlstream_level, default="WARNING"))
+    logger_levels = (
+        ("httpx", runtime.httpx_level, "WARNING"),
+        ("httpcore", runtime.httpcore_level, "WARNING"),
+        ("uvicorn.access", runtime.uvicorn_access_level, "WARNING"),
+        ("uvicorn.error", runtime.uvicorn_error_level, "INFO"),
+        ("asyncio", runtime.asyncio_level, "WARNING"),
+        ("slixmpp", runtime.slixmpp_level, "WARNING"),
+        ("slixmpp.xmlstream", runtime.slixmpp_xmlstream_level, "WARNING"),
+    )
+    for logger_name, level_name, default in logger_levels:
+        _apply_level(logger_name, _normalize_level(level_name, default=default))
 
     for logger_name, level_name in (runtime.logger_levels or {}).items():
         name = str(logger_name).strip()
-        if not name:
-            continue
-        _apply_level(name, _normalize_level(level_name, default="INFO"))
+        if name:
+            _apply_level(name, _normalize_level(level_name, default="INFO"))
+
+
+def setup_logging(
+    cfg: AppConfig | None = None,
+    *,
+    role: str | None = None,
+    instance_id: str | None = None,
+    build_info: BuildInfo | None = None,
+    metrics: MetricsRegistry | None = None,
+) -> None:
+    runtime = getattr(getattr(cfg, "logs", None), "runtime", None)
+    root_level = _normalize_level(getattr(runtime, "level", None), default="INFO")
+    color_mode = _normalize_color_mode(getattr(runtime, "color", None), default="never")
+
+    logging.basicConfig(level=getattr(logging, root_level, logging.INFO), stream=sys.stdout, force=True)
+
+    root_logger = logging.getLogger()
+    set_correlation(**_logging_context(role, instance_id, build_info))
+    _configure_formatters(root_logger, color_mode)
+    global _output_hub
+    if _output_hub is not None:
+        _output_hub.close()
+    try:
+        _output_hub = _build_output_hub(cfg, metrics)
+    except Exception:
+        _output_hub = None
+        logging.getLogger("seasonalweather.observability").error(
+            "optional observability output configuration was rejected",
+            extra={
+                "event": "observability_output_configuration_failed",
+                "code": OBS_CODES["configuration_rejected"],
+            },
+        )
+    _configure_optional_output_handler(root_logger, _output_hub)
+
+    if runtime is None:
+        return
+
+    _configure_runtime_logging(runtime, root_logger)

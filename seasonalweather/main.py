@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 from zoneinfo import ZoneInfo
 
-from .build_metadata import current_build_info
+from .build_metadata import BuildInfo, current_build_info
 from .config import AppConfig, load_config
 from .configuration_reload.safe_point import (
     ALERT as RELOAD_ALERT_ACTIVITY,
@@ -115,6 +115,7 @@ if TYPE_CHECKING:
     from .alerts.cap_nws import CapAlertEvent
     from .alerts.ipaws_cap import IpawsCapEvent
     from .broadcast.ern_gwes import ErnSameEvent
+    from .observability.metrics import MetricsRegistry
 
 log = logging.getLogger("seasonalweather")
 
@@ -134,8 +135,15 @@ from .broadcast.station_feed_runtime import (
 # _VTEC_FIND_RE and _VTEC_PARSE_RE are now imported from .alerts.vtec above.
 
 
-def _setup_logging(cfg: AppConfig | None = None) -> None:
-    setup_logging(cfg)
+def _setup_logging(
+    cfg: AppConfig | None = None,
+    *,
+    role: str | None = None,
+    instance_id: str | None = None,
+    build_info: BuildInfo | None = None,
+    metrics: MetricsRegistry | None = None,
+) -> None:
+    setup_logging(cfg, role=role, instance_id=instance_id, build_info=build_info, metrics=metrics)
 
 
 # _env_* helpers removed — all configuration now flows through AppConfig.

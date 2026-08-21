@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import re
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from http import HTTPStatus
@@ -12,7 +13,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ..application.errors import ControlError
@@ -29,6 +30,8 @@ from ..health_service import (
     HealthService,
 )
 from ..lifecycle import Lifecycle, WorkClass
+from ..observability import MetricsRegistry, bind_correlation, bind_trace_context, create_default_metrics
+from ..observability.tracing import TraceContext
 from ..runtime_diagnostics.representations import occurrence_summary
 from ..runtime_diagnostics.service import RuntimeDiagnosticService
 from .auth import ApiPrincipal, get_client_authentication, require_route_policy
@@ -77,6 +80,9 @@ def _new_request_id() -> str:
 
 
 def _request_id(request: Request) -> str:
+    state_id = getattr(getattr(request, "state", None), "request_id", None)
+    if isinstance(state_id, str) and state_id:
+        return state_id
     header = (request.headers.get("x-request-id") or "").strip()
     if header and len(header) <= 128 and all(ch.isprintable() and not ch.isspace() for ch in header):
         return header
@@ -313,6 +319,8 @@ def create_app(
     reload_service: Any | None = None,
     diagnostic_service: RuntimeDiagnosticService | None = None,
     build_info: BuildInfo | None = None,
+    metrics: MetricsRegistry | None = None,
+    instance_id: str | None = None,
 ) -> FastAPI:
     command_store = store or CommandStore()
     if health_service is None:
@@ -342,7 +350,19 @@ def create_app(
     app.state.reload_service = reload_service
     app.state.diagnostic_service = diagnostic_service
     runtime_build_info = build_info or current_build_info()
+    metrics_registry = metrics or create_default_metrics()
+    metrics_registry.set(
+        "seasonalweather_build_info",
+        1,
+        labels={
+            "build_id": runtime_build_info.build_id,
+            "role": "controller",
+            "instance_id": instance_id or "controller_unknown",
+        },
+    )
     app.state.build_info = runtime_build_info
+    app.state.metrics = metrics_registry
+    app.state.instance_id = instance_id
     install_openapi(app)
 
     @app.middleware("http")
@@ -350,19 +370,57 @@ def create_app(
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
-        if (
-            lifecycle is not None
-            and request.method not in {"GET", "HEAD", "OPTIONS"}
-            and not lifecycle.allows(WorkClass.COMMAND)
+        trace = TraceContext.parse(request.headers.get("traceparent"))
+        request_id = _request_id(request)
+        request.state.request_id = request_id
+        started = time.monotonic()
+        response: Response | None = None
+        with (
+            bind_trace_context(trace),
+            bind_correlation(
+                role="controller",
+                instance_id=instance_id or "controller_unknown",
+                build_id=runtime_build_info.build_id,
+                build_identity=runtime_build_info.build_identity,
+                request_id=request_id,
+                trace_id=trace.trace_id,
+                span_id=trace.span_id,
+            ),
         ):
-            return _problem_response(
-                request,
-                status_code=503,
-                code="service_draining",
-                detail="The service is draining and is not accepting mutable work.",
-                headers={"Retry-After": "5"},
-            )
-        return await call_next(request)
+            try:
+                if (
+                    lifecycle is not None
+                    and request.method not in {"GET", "HEAD", "OPTIONS"}
+                    and not lifecycle.allows(WorkClass.COMMAND)
+                ):
+                    response = _problem_response(
+                        request,
+                        status_code=503,
+                        code="service_draining",
+                        detail="The service is draining and is not accepting mutable work.",
+                        headers={"Retry-After": "5"},
+                    )
+                else:
+                    response = await call_next(request)
+            finally:
+                route = request.scope.get("route")
+                route_name = str(getattr(route, "path", "unknown"))[:128]
+                status = str(response.status_code if response is not None else 500)
+                status_class = f"{status[0]}xx" if status and status[0].isdigit() else "5xx"
+                metrics_registry.inc(
+                    "seasonalweather_api_requests_total",
+                    labels={"method": request.method, "route": route_name, "status": status_class},
+                )
+                metrics_registry.observe(
+                    "seasonalweather_api_request_duration_seconds",
+                    max(0.0, time.monotonic() - started),
+                    labels={"method": request.method, "route": route_name},
+                )
+            if response is None:
+                raise RuntimeError("request middleware completed without a response")
+            response.headers["X-Request-ID"] = request_id
+            response.headers["traceparent"] = trace.as_traceparent()
+            return response
 
     @app.exception_handler(RequestValidationError)
     async def _handle_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -494,6 +552,19 @@ def create_app(
         return {"status": "alive"}
 
     @app.get(
+        "/metrics",
+        tags=["status"],
+        summary="Return bounded controller application metrics.",
+        include_in_schema=False,
+    )
+    async def metrics_endpoint() -> PlainTextResponse:
+        return PlainTextResponse(
+            metrics_registry.render(),
+            media_type="text/plain; version=0.0.4",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.get(
         "/readyz",
         tags=["status"],
         summary="Return broadcast-critical operational readiness.",
@@ -511,6 +582,8 @@ def create_app(
     )
     async def readyz() -> JSONResponse:
         report = await health_service.collect()
+        metrics_registry.set("seasonalweather_lifecycle_ready", 1 if report.ready else 0)
+        metrics_registry.set_one_hot("seasonalweather_lifecycle_state", "state", report.lifecycle_state)
         return JSONResponse(
             status_code=200 if report.ready else 503,
             content=report.to_dict(detailed=False),

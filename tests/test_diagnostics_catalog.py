@@ -11,6 +11,7 @@ import pytest
 
 from seasonalweather.diagnostics.bindings import (
     NWWS_CODES,
+    OBS_CODES,
     RELOAD_CODES,
     RULE_BINDINGS,
     RUNTIME_CODES,
@@ -145,7 +146,12 @@ def test_canonical_catalog_is_immutable_complete_and_deterministic() -> None:
     assert first == second == load_catalog()
     assert first_bytes == second_bytes == packaged_catalog_bytes()
     expected_count = (
-        len(RULE_BINDINGS) + len(SEGMENT_BINDINGS) + len(RELOAD_CODES) + len(RUNTIME_CODES) + len(NWWS_CODES)
+        len(RULE_BINDINGS)
+        + len(SEGMENT_BINDINGS)
+        + len(RELOAD_CODES)
+        + len(RUNTIME_CODES)
+        + len(NWWS_CODES)
+        + len(OBS_CODES)
     )
     assert len(first.definitions) == expected_count
     assert {definition.introduction_version for definition in first.definitions} == {"0.18.0"}
@@ -233,6 +239,12 @@ def test_catalog_source_rejects_duplicate_and_unknown_metadata_keys(tmp_path: Pa
 def test_catalog_metadata_contradictions_fail_closed(tmp_path: Path, mutation, message: str) -> None:
     copied = _copy_catalog(tmp_path)
     raw = _source(copied)
+    definitions = raw["definitions"]
+    assert isinstance(definitions, list)
+    target = next(item for item in definitions if item["code"] == "SWCFG0001")
+    assert isinstance(target, dict)
+    definitions.remove(target)
+    definitions.insert(0, target)
     mutation(raw)
     _write_source(copied, raw)
 
@@ -384,7 +396,12 @@ def test_package_data_metadata_covers_compiled_source_and_explanations() -> None
     assert "catalog/source.json" in declared
     assert "catalog/explanations/*.md" in declared
     assert len(tuple((CATALOG_ROOT / "explanations").glob("*.md"))) == (
-        len(RULE_BINDINGS) + len(SEGMENT_BINDINGS) + len(RELOAD_CODES) + len(RUNTIME_CODES) + len(NWWS_CODES)
+        len(RULE_BINDINGS)
+        + len(SEGMENT_BINDINGS)
+        + len(RELOAD_CODES)
+        + len(RUNTIME_CODES)
+        + len(NWWS_CODES)
+        + len(OBS_CODES)
     )
 
 

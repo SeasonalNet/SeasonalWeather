@@ -147,6 +147,23 @@ api_forbidden_imports = [
   "sqlalchemy",
 ]
 
+observability_roots = ["seasonalweather/observability"]
+observability_forbidden_imports = [
+  "seasonalweather.api",
+  "seasonalweather.broadcast",
+  "seasonalweather.config",
+  "seasonalweather.control",
+  "seasonalweather.database",
+  "seasonalweather.discord_log",
+  "seasonalweather.job_store",
+  "seasonalweather.liquidsoap_telnet",
+  "seasonalweather.nwws",
+  "seasonalweather.runtime_diagnostics",
+  "seasonalweather.tts",
+  "seasonalweather.worker",
+  "seasonalweather.workers",
+]
+
 domain_roots = [
   "seasonalweather/domain",
   "seasonalweather/validation",

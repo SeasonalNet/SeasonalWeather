@@ -287,6 +287,8 @@ def test_message_registry_and_canonical_json_cover_complete_vocabulary() -> None
         "protocol_error",
         "diagnostic",
         "diagnostic_ack",
+        "telemetry",
+        "telemetry_ack",
     }
     encoded = encode(_envelope(registration()))
     assert (

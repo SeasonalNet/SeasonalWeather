@@ -931,6 +931,64 @@ SCHEMA_V1 = _o(
                     },
                     default={},
                 ),
+                "outputs": _o(
+                    {
+                        "collectors": _o(
+                            {
+                                "node_exporter_target": _s(default=""),
+                                "container_runtime_target": _s(default=""),
+                                "scrape_interval_seconds": _i(default=15),
+                            },
+                            default={},
+                        ),
+                        "syslog_tls": _o(
+                            {
+                                "enabled": _b(default=False),
+                                "host": _s(default=""),
+                                "port": _i(default=6514),
+                                "ca_file": _s(default=""),
+                                "server_name": _s(default=""),
+                                "queue_size": _i(default=256),
+                                "timeout_seconds": _n(default=5.0),
+                            },
+                            default={},
+                        ),
+                        "otlp": _o(
+                            {
+                                "enabled": _b(default=False),
+                                "endpoint": _s(default=""),
+                                "queue_size": _i(default=256),
+                                "timeout_seconds": _n(default=5.0),
+                            },
+                            default={},
+                        ),
+                        "alertmanager": _o(
+                            {
+                                "enabled": _b(default=False),
+                                "endpoint": _s(default=""),
+                                "queue_size": _i(default=256),
+                                "timeout_seconds": _n(default=5.0),
+                            },
+                            default={},
+                        ),
+                        "snmpv3": _o(
+                            {
+                                "enabled": _b(default=False),
+                                "host": _s(default=""),
+                                "port": _i(default=162),
+                                "username": _s(default=""),
+                                "auth_protocol": _s(default="SHA256"),
+                                "privacy_protocol": _s(default="AES256"),
+                                "auth_secret_env": _s(default="SEASONAL_OBSERVABILITY_SNMP_AUTH_SECRET"),
+                                "privacy_secret_env": _s(default="SEASONAL_OBSERVABILITY_SNMP_PRIVACY_SECRET"),
+                                "queue_size": _i(default=256),
+                                "timeout_seconds": _n(default=5.0),
+                            },
+                            default={},
+                        ),
+                    },
+                    default={},
+                ),
                 "discord": _o(
                     {
                         "enabled": _b(default=False),

@@ -498,6 +498,18 @@ def scan(root: Path, config: dict[str, Any], exceptions: list[dict[str, Any]] | 
                             )
                         )
 
+        if _under(relative, config.get("observability_roots", [])):
+            for imported, line in imports:
+                if _matches_prefix(imported, config.get("observability_forbidden_imports", [])):
+                    findings.append(
+                        Finding(
+                            relative,
+                            line,
+                            "SWARCH051",
+                            f"observability imports controller, worker, or persistence authority {imported}",
+                        )
+                    )
+
         if _under(relative, config["domain_roots"]):
             for imported, line in imports:
                 if _matches_prefix(imported, config["domain_forbidden_imports"]):

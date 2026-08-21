@@ -31,10 +31,12 @@ class SessionMachine:
         clock: Callable[[], dt.datetime] = _utc_now,
         id_factory: Callable[[str], str],
         limits: ProtocolLimits = DEFAULT_LIMITS,
+        traceparent: str | None = None,
     ) -> None:
         self.clock = clock
         self.id_factory = id_factory
         self.limits = limits
+        self.traceparent = traceparent
         self._seen: OrderedDict[str, tuple[str, tuple[Envelope, ...]]] = OrderedDict()
 
     def envelope(
@@ -56,6 +58,7 @@ class SessionMachine:
             worker_instance_id=worker_instance_id,
             controller_epoch=controller_epoch,
             worker_epoch=worker_epoch,
+            traceparent=self.traceparent,
             payload=payload,
         )
 

@@ -41,6 +41,7 @@ from ..lifecycle import Lifecycle, LifecycleState, TaskSupervisor
 from ..lifecycle_records import LifecycleRecordWriter, LifecycleStage
 from ..main import Orchestrator, _setup_logging
 from ..nwws.diagnostics import NwwsRuntimeDiagnosticSink
+from ..observability import create_default_metrics, set_correlation
 from ..runtime_diagnostics.fatal import FatalBoundary, SecondaryFailureLedger, enable_faulthandler
 from ..runtime_diagnostics.marker import ProcessMarkerStore, controller_marker
 from ..runtime_diagnostics.models import CorrelationContext, DiagnosticRole, PromotionReason
@@ -347,7 +348,20 @@ async def _run_api_server_impl(
     api_network = getattr(getattr(cfg, "network", None), "api", None)
     effective_host = str(host or getattr(api_network, "bind_host", "127.0.0.1"))
     effective_port = int(port if port is not None else getattr(api_network, "port", 9080))
-    _setup_logging(cfg)
+    metrics_registry = create_default_metrics()
+    _setup_logging(
+        cfg,
+        role="controller",
+        instance_id=instance_id,
+        build_info=build_info,
+        metrics=metrics_registry,
+    )
+    set_correlation(
+        role="controller",
+        instance_id=instance_id,
+        build_id=build_info.build_id,
+        build_identity=build_info.build_identity,
+    )
     log.info(
         "lifecycle_event=service_starting role=controller build=%s software=%s profile=%s target_platform=%s dirty_tree=%s",
         build_info.build_identity,
@@ -466,6 +480,8 @@ async def _run_api_server_impl(
         reload_service=reload_service,
         diagnostic_service=diagnostic_service,
         build_info=build_info,
+        metrics=metrics_registry,
+        instance_id=instance_id,
     )
     lifecycle_records.stage(LifecycleStage.CONTROL_PLANE_READY, ready=False)
 

@@ -804,7 +804,7 @@ service_area:
 logs:
   runtime:
     level: "INFO"                 # root logger level for SeasonalWeather itself
-    color: "never"                # never|auto|always; ANSI color is presentation-only
+    color: "never"                # never|auto|always; never is structured JSON, color is presentation-only
     httpx_level: "WARNING"        # raise to INFO to see every outbound HTTP request again
     httpcore_level: "WARNING"
     uvicorn_access_level: "WARNING"
@@ -820,6 +820,45 @@ logs:
     segment_refresher_synth: false # log routine segment synthesis / resynthesis
     segment_refresher_alert_lifecycle: false # log alert segment expiry placeholder churn
     logger_levels: {}              # optional explicit overrides, e.g. { seasonalweather.cap: "INFO" }
+
+  # Optional observability destinations. All network delivery is bounded and
+  # runs outside the broadcast caller. Leave disabled unless the destination
+  # is explicitly provisioned. Collector targets are external scrape targets;
+  # SeasonalWeather does not become a host/container metrics authority.
+  outputs:
+    collectors:
+      node_exporter_target: ""       # e.g. "seasonalwx:9100"
+      container_runtime_target: ""  # e.g. "cadvisor:8080"
+      scrape_interval_seconds: 15
+    syslog_tls:
+      enabled: false
+      host: ""
+      port: 6514
+      ca_file: ""
+      server_name: ""
+      queue_size: 256
+      timeout_seconds: 5.0
+    otlp:
+      enabled: false
+      endpoint: ""                   # base URL or explicit /v1/logs endpoint
+      queue_size: 256
+      timeout_seconds: 5.0
+    alertmanager:
+      enabled: false
+      endpoint: ""                   # base URL or explicit /api/v2/alerts endpoint
+      queue_size: 256
+      timeout_seconds: 5.0
+    snmpv3:
+      enabled: false
+      host: ""
+      port: 162
+      username: ""
+      auth_protocol: "SHA256"
+      privacy_protocol: "AES256"
+      auth_secret_env: "SEASONAL_OBSERVABILITY_SNMP_AUTH_SECRET"
+      privacy_secret_env: "SEASONAL_OBSERVABILITY_SNMP_PRIVACY_SECRET"
+      queue_size: 256
+      timeout_seconds: 5.0
 
   discord:
     enabled: false

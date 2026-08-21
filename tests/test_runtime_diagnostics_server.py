@@ -221,7 +221,7 @@ def _install_server_seams(
 ) -> tuple[SimpleNamespace, _Database]:
     selected = cfg or _config(tmp_path)
     monkeypatch.setattr(api_server, "load_config", lambda _path: selected)
-    monkeypatch.setattr(api_server, "_setup_logging", lambda _cfg: None)
+    monkeypatch.setattr(api_server, "_setup_logging", lambda _cfg, **_kwargs: None)
     monkeypatch.setattr(api_server, "ProcessMarkerStore", marker)
     monkeypatch.setattr(api_server, "Orchestrator", orchestrator)
     monkeypatch.setattr(api_server, "OrchestratorControl", lambda *_args, **_kwargs: object())

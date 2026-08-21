@@ -56,6 +56,8 @@ from .messages import (
     SelectedVersions,
     WorkerDiagnostic,
     WorkerDiagnosticAck,
+    WorkerTelemetry,
+    WorkerTelemetryAck,
 )
 from .session import SessionMachine
 
@@ -138,6 +140,18 @@ class WorkerDiagnosticPort(Protocol):
     ) -> None: ...
 
 
+class WorkerTelemetryPort(Protocol):
+    def handle(
+        self,
+        telemetry: WorkerTelemetry,
+        *,
+        worker_id: str,
+        worker_instance_id: str,
+        session_id: str,
+        worker_epoch: int,
+    ) -> tuple[int, int, str]: ...
+
+
 class ControllerSession(SessionMachine):
     def __init__(
         self,
@@ -156,8 +170,10 @@ class ControllerSession(SessionMachine):
         assignment_ack_seconds: int = 10,
         capabilities: CapabilityControllerPort | None = None,
         diagnostics: WorkerDiagnosticPort | None = None,
+        telemetry: WorkerTelemetryPort | None = None,
+        traceparent: str | None = None,
     ) -> None:
-        super().__init__(clock=clock, id_factory=id_factory, limits=limits)
+        super().__init__(clock=clock, id_factory=id_factory, limits=limits, traceparent=traceparent)
         if controller_epoch < 1:
             raise ValueError("controller_epoch must be positive")
         self.controller_epoch = controller_epoch
@@ -171,6 +187,7 @@ class ControllerSession(SessionMachine):
         self.assignment_ack_seconds = assignment_ack_seconds
         self.capabilities = capabilities
         self.diagnostics = diagnostics
+        self.telemetry = telemetry
         self.state = ControllerState.AWAITING_REGISTRATION
         self.session_id: str | None = None
         self.worker_id: str | None = None
@@ -470,6 +487,7 @@ class ControllerSession(SessionMachine):
             CapabilityUpdate: self._capability_update,
             CapabilityReport: self._capability_report,
             WorkerDiagnostic: self._worker_diagnostic,
+            WorkerTelemetry: self._worker_telemetry,
         }
         handler = handlers.get(type(payload))
         if handler is None:
@@ -555,6 +573,37 @@ class ControllerSession(SessionMachine):
                 summary="controller rejected worker diagnostic safely",
             )
         return (self._out(acknowledgment),)
+
+    def _worker_telemetry(self, payload: WorkerTelemetry) -> tuple[Envelope, ...]:
+        if (
+            self.telemetry is None
+            or self.worker_id is None
+            or self.worker_instance_id is None
+            or self.session_id is None
+            or self.worker_epoch is None
+        ):
+            accepted, rejected, summary = 0, len(payload.samples), "worker telemetry is unavailable"
+        else:
+            try:
+                accepted, rejected, summary = self.telemetry.handle(
+                    payload,
+                    worker_id=self.worker_id,
+                    worker_instance_id=self.worker_instance_id,
+                    session_id=self.session_id,
+                    worker_epoch=self.worker_epoch,
+                )
+            except Exception:
+                accepted, rejected, summary = 0, len(payload.samples), "worker telemetry rejected safely"
+        return (
+            self._out(
+                WorkerTelemetryAck(
+                    schema_version=payload.schema_version,
+                    accepted=accepted,
+                    rejected=rejected,
+                    summary=summary,
+                )
+            ),
+        )
 
     def _job_rejected(self, payload: JobRejected) -> tuple[Envelope, ...]:
         key = self._lease_key(payload.lease)
@@ -699,6 +748,8 @@ class ControllerSession(SessionMachine):
         if assignment is None or assignment.job_type not in self.authorized_job_types:
             return None
         key = self._lease_key(assignment.lease)
+        if getattr(assignment, "traceparent", None) is None and self.traceparent is not None:
+            assignment = assignment.model_copy(update={"traceparent": self.traceparent})
         self.assignments[key] = "delivered"
         return self._out(assignment)
 

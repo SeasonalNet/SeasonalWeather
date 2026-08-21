@@ -29,6 +29,7 @@ from .constants import (
 
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{2,127}$")
 _KEY_RE = re.compile(r"^[a-z][a-z0-9_.-]{1,63}$")
+_TRACEPARENT_RE = re.compile(r"^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$")
 
 
 def _current_build_info():
@@ -58,6 +59,14 @@ def _key(value: str, name: str) -> str:
 def _digest(value: str) -> str:
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", value):
         raise ValueError("capability digest must use lowercase sha256")
+    return value
+
+
+def _traceparent(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if not _TRACEPARENT_RE.fullmatch(value) or set(value[3:35]) == {"0"} or set(value[36:52]) == {"0"}:
+        raise ValueError("traceparent must be a valid W3C version 00 context")
     return value
 
 
@@ -436,8 +445,11 @@ class JobAssignmentPayload(Payload):
     payload_schema_version: int = Field(ge=1, le=255)
     result_schema_version: int = Field(ge=1, le=255)
     configuration_generation: int | None = Field(default=None, ge=0)
+    traceparent: str | None = None
     payload: dict[str, Any] = Field(max_length=32)
     capability_requirements: tuple[str, ...] = Field(default_factory=tuple, max_length=64)
+
+    _traceparent = field_validator("traceparent")(_traceparent)
 
     @field_validator("deadline_at", "lease_expires_at", "acknowledgment_deadline_at")
     @classmethod
@@ -478,8 +490,10 @@ class JobProgress(Payload):
     stage: str = Field(min_length=2, max_length=64)
     reason: str | None = Field(default=None, max_length=64)
     numeric: dict[str, int | float] = Field(default_factory=dict, max_length=16)
+    traceparent: str | None = None
 
     _stage = field_validator("stage")(lambda value: _key(value, "stage"))
+    _traceparent = field_validator("traceparent")(_traceparent)
 
 
 class JobResult(Payload):
@@ -489,8 +503,10 @@ class JobResult(Payload):
     result: dict[str, Any] = Field(max_length=32)
     artifact_refs: tuple[str, ...] = Field(default_factory=tuple, max_length=16)
     completion_id: str
+    traceparent: str | None = None
 
     _completion_id = field_validator("completion_id")(lambda value: _identifier(value, "completion_id"))
+    _traceparent = field_validator("traceparent")(_traceparent)
 
     @field_validator("artifact_refs")
     @classmethod
@@ -506,8 +522,10 @@ class JobFailed(Payload):
     error_code: str = Field(min_length=2, max_length=64)
     summary: str = Field(min_length=1, max_length=256)
     metadata: dict[str, str | int | float | bool] = Field(default_factory=dict, max_length=16)
+    traceparent: str | None = None
 
     _error_code = field_validator("error_code")(lambda value: _key(value, "error_code"))
+    _traceparent = field_validator("traceparent")(_traceparent)
 
     @model_validator(mode="after")
     def validate_failure(self) -> Self:
@@ -688,6 +706,68 @@ class WorkerDiagnosticAck(Payload):
         return _identifier(value, "controller_occurrence_id") if value is not None else None
 
 
+class TelemetryKind(StrEnum):
+    COUNTER = "counter"
+    GAUGE = "gauge"
+
+
+class WorkerTelemetrySample(WireModel):
+    name: str
+    kind: TelemetryKind
+    value: float
+    labels: dict[str, str] = Field(default_factory=dict, max_length=8)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        return _key(value, "telemetry name")
+
+    @field_validator("value")
+    @classmethod
+    def validate_value(cls, value: float) -> float:
+        if (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or value != value
+            or abs(value) == float("inf")
+        ):
+            raise ValueError("telemetry value must be finite")
+        if value < 0:
+            raise ValueError("telemetry value must be non-negative")
+        return float(value)
+
+    @field_validator("labels")
+    @classmethod
+    def validate_labels(cls, value: dict[str, str]) -> dict[str, str]:
+        normalized: dict[str, str] = {}
+        for key, raw_value in value.items():
+            label = _key(key, "telemetry label")
+            text = str(raw_value)
+            if len(text) > 64 or not text or any(ord(char) < 0x20 for char in text):
+                raise ValueError("telemetry label values must be printable and bounded")
+            if any(
+                term in label.lower() or term in text.lower()
+                for term in ("password", "secret", "token", "credential", "alert", "text", "raw")
+            ):
+                raise ValueError("sensitive telemetry labels are not permitted")
+            normalized[label] = text
+        return dict(sorted(normalized.items()))
+
+
+class WorkerTelemetry(Payload):
+    message_type = "telemetry"
+    schema_version: int = Field(ge=1, le=255)
+    samples: tuple[WorkerTelemetrySample, ...] = Field(default_factory=tuple, max_length=32)
+
+
+class WorkerTelemetryAck(Payload):
+    message_type = "telemetry_ack"
+    schema_version: int = Field(ge=1, le=255)
+    accepted: int = Field(ge=0, le=32)
+    rejected: int = Field(ge=0, le=32)
+    summary: str = Field(min_length=1, max_length=256)
+
+
 PAYLOAD_TYPES: tuple[type[Payload], ...] = (
     Register,
     Registered,
@@ -714,6 +794,8 @@ PAYLOAD_TYPES: tuple[type[Payload], ...] = (
     ProtocolErrorPayload,
     WorkerDiagnostic,
     WorkerDiagnosticAck,
+    WorkerTelemetry,
+    WorkerTelemetryAck,
 )
 PAYLOAD_BY_TYPE = {model.message_type: model for model in PAYLOAD_TYPES}
 
@@ -729,6 +811,7 @@ class Envelope(WireModel):
     worker_instance_id: str | None = None
     controller_epoch: int | None = Field(default=None, ge=1)
     worker_epoch: int | None = Field(default=None, ge=1)
+    traceparent: str | None = None
     payload: SerializeAsAny[Payload]
 
     @field_validator("message_id", "session_id", "worker_id", "worker_instance_id")
@@ -740,6 +823,8 @@ class Envelope(WireModel):
     @classmethod
     def validate_sent_at(cls, value: dt.datetime) -> dt.datetime:
         return _utc(value, "sent_at")
+
+    _traceparent = field_validator("traceparent")(_traceparent)
 
     @model_validator(mode="after")
     def validate_identity(self) -> Self:

@@ -100,6 +100,16 @@ RELOAD_CODES = MappingProxyType(
     }
 )
 
+OBS_CODES = MappingProxyType(
+    {
+        "configuration_rejected": "SWOBS2001",
+        "transport_failed": "SWOBS3001",
+        "sink_degraded": "SWOBS4001",
+        "destination_unauthorized": "SWOBS6001",
+        "queue_dropped": "SWOBS7001",
+    }
+)
+
 
 def binding_for_rule(rule_id: str) -> RuleCodeBinding:
     try:

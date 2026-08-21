@@ -43,6 +43,9 @@ from .messages import (
     ResultCommitted,
     WorkerDiagnostic,
     WorkerDiagnosticAck,
+    WorkerTelemetry,
+    WorkerTelemetryAck,
+    WorkerTelemetrySample,
 )
 from .session import SessionMachine
 
@@ -58,8 +61,9 @@ class WorkerSession(SessionMachine):
         clock: Callable[[], dt.datetime],
         accept_assignments: bool = True,
         assignment_acceptor: Callable[[JobAssignmentPayload], bool] | None = None,
+        traceparent: str | None = None,
     ) -> None:
-        super().__init__(clock=clock, id_factory=id_factory)
+        super().__init__(clock=clock, id_factory=id_factory, traceparent=traceparent)
         self.registration = registration
         self.accept_assignments = accept_assignments
         self.assignment_acceptor = assignment_acceptor
@@ -76,6 +80,7 @@ class WorkerSession(SessionMachine):
         self.diagnostic_requests: OrderedDict[str, WorkerDiagnostic] = OrderedDict()
         self.diagnostic_acknowledgments: OrderedDict[str, WorkerDiagnosticAck] = OrderedDict()
         self.diagnostic_occurrences: dict[str, str] = {}
+        self.telemetry_acknowledgments: OrderedDict[int, WorkerTelemetryAck] = OrderedDict()
 
     def _out(self, payload: Payload) -> Envelope:
         return self.envelope(
@@ -130,6 +135,7 @@ class WorkerSession(SessionMachine):
             ProtocolErrorPayload: self._protocol_error,
             CapabilityProbe: self._capability_probe,
             WorkerDiagnosticAck: self._diagnostic_ack,
+            WorkerTelemetryAck: self._telemetry_ack,
         }
         handler = handlers.get(type(payload))
         return handler(payload) if handler is not None else ()
@@ -145,6 +151,19 @@ class WorkerSession(SessionMachine):
         self.diagnostic_requests.move_to_end(payload.diagnostic_id)
         self._trim_diagnostic_state()
         return self._out(payload)
+
+    def telemetry(self, samples: tuple[WorkerTelemetrySample, ...]) -> Envelope:
+        if self.state not in {WorkerState.ACTIVE, WorkerState.DRAINING}:
+            raise ValueError("worker is not active")
+        if len(samples) > 32:
+            raise ValueError("worker telemetry batch is too large")
+        return self._out(WorkerTelemetry(schema_version=1, samples=samples))
+
+    def _telemetry_ack(self, payload: WorkerTelemetryAck) -> tuple[Envelope, ...]:
+        self.telemetry_acknowledgments[payload.schema_version] = payload
+        while len(self.telemetry_acknowledgments) > self.limits.max_retained_errors:
+            self.telemetry_acknowledgments.popitem(last=False)
+        return ()
 
     def _diagnostic_ack(self, payload: WorkerDiagnosticAck) -> tuple[Envelope, ...]:
         self.diagnostic_acknowledgments[payload.diagnostic_id] = payload
@@ -382,7 +401,15 @@ class WorkerSession(SessionMachine):
     ) -> Envelope:
         if self._key(lease) not in self.assignments:
             raise KeyError("unknown assignment")
-        return self._out(JobProgress(lease=lease, stage=stage, reason=reason, numeric=numeric or {}))
+        return self._out(
+            JobProgress(
+                lease=lease,
+                stage=stage,
+                reason=reason,
+                numeric=numeric or {},
+                traceparent=self._assignment_traceparent(lease),
+            )
+        )
 
     def result(
         self,
@@ -401,6 +428,7 @@ class WorkerSession(SessionMachine):
             result=result,
             completion_id=completion_id,
             artifact_refs=artifact_refs,
+            traceparent=self._assignment_traceparent(lease),
         )
         self.completions[self._key(lease)] = payload
         return self._out(payload)
@@ -423,8 +451,13 @@ class WorkerSession(SessionMachine):
                 category=category,
                 error_code=error_code,
                 summary=summary,
+                traceparent=self._assignment_traceparent(lease),
             )
         )
+
+    def _assignment_traceparent(self, lease: LeaseRef) -> str | None:
+        assignment = self.assignments.get(self._key(lease))
+        return assignment.traceparent if assignment is not None else self.traceparent
 
     def reconnect_report(self, *, prior_session_id: str | None, prior_controller_epoch: int | None) -> Envelope:
         if self.state is not WorkerState.ACTIVE:

@@ -11,6 +11,8 @@ from ..build_metadata import current_build_info
 from ..jobs.contracts import AttemptOutcome
 from ..jobs.policies import FailureCategory
 from ..lifecycle_records import LifecycleRecordWriter, LifecycleStage
+from ..observability import bind_correlation, bind_trace_context
+from ..observability.tracing import TraceContext
 from ..swwp.codec import decode, encode
 from ..swwp.constants import WorkerReadinessState, WorkerState
 from ..swwp.messages import (
@@ -222,10 +224,23 @@ class WorkerRuntime:
     async def _execute(self, assignment: JobAssignmentPayload, cancellation: asyncio.Event) -> None:
         key = self._lease_key(assignment.lease)
         try:
-            result = await self.handlers.execute(
-                assignment,
-                HandlerContext(cancellation=cancellation, deadline_at=assignment.deadline_at),
-            )
+            trace = TraceContext.parse(assignment.traceparent)
+            with (
+                bind_trace_context(trace),
+                bind_correlation(
+                    role="worker",
+                    worker_id=self.session.registration.worker_id,
+                    instance_id=self.session.registration.worker_instance_id,
+                    job_id=assignment.lease.job_id,
+                    lease_id=assignment.lease.lease_id,
+                    trace_id=trace.trace_id,
+                    span_id=trace.span_id,
+                ),
+            ):
+                result = await self.handlers.execute(
+                    assignment,
+                    HandlerContext(cancellation=cancellation, deadline_at=assignment.deadline_at),
+                )
         except asyncio.CancelledError:
             raise
         except WorkerHandlerError as exc:

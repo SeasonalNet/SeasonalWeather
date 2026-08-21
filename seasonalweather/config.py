@@ -733,6 +733,59 @@ class LogsRuntimeConfig:
 
 
 @dataclass(frozen=True)
+class CollectorIntegrationConfig:
+    """External host/container collector scrape targets; not app metric authorities."""
+
+    node_exporter_target: str = ""
+    container_runtime_target: str = ""
+    scrape_interval_seconds: int = 15
+
+
+@dataclass(frozen=True)
+class SyslogTlsOutputConfig:
+    enabled: bool = False
+    host: str = ""
+    port: int = 6514
+    ca_file: str = ""
+    server_name: str = ""
+    queue_size: int = 256
+    timeout_seconds: float = 5.0
+
+
+@dataclass(frozen=True)
+class HttpOutputConfig:
+    enabled: bool = False
+    endpoint: str = ""
+    queue_size: int = 256
+    timeout_seconds: float = 5.0
+
+
+@dataclass(frozen=True)
+class SnmpV3OutputConfig:
+    enabled: bool = False
+    host: str = ""
+    port: int = 162
+    username: str = ""
+    auth_protocol: str = "SHA256"
+    privacy_protocol: str = "AES256"
+    auth_secret_env: str = "SEASONAL_OBSERVABILITY_SNMP_AUTH_SECRET"
+    privacy_secret_env: str = "SEASONAL_OBSERVABILITY_SNMP_PRIVACY_SECRET"
+    queue_size: int = 256
+    timeout_seconds: float = 5.0
+
+
+@dataclass(frozen=True)
+class LogsOutputsConfig:
+    """Optional outputs and external collector integration declarations."""
+
+    collectors: CollectorIntegrationConfig = field(default_factory=CollectorIntegrationConfig)
+    syslog_tls: SyslogTlsOutputConfig = field(default_factory=SyslogTlsOutputConfig)
+    otlp: HttpOutputConfig = field(default_factory=HttpOutputConfig)
+    alertmanager: HttpOutputConfig = field(default_factory=HttpOutputConfig)
+    snmpv3: SnmpV3OutputConfig = field(default_factory=SnmpV3OutputConfig)
+
+
+@dataclass(frozen=True)
 class LogsDiscordConfig:
     """Discord webhook logging knobs. URLs come from .env, not config.yaml."""
 
@@ -776,6 +829,7 @@ class LogsDiscordConfig:
 class LogsConfig:
     runtime: LogsRuntimeConfig = field(default_factory=LogsRuntimeConfig)
     discord: LogsDiscordConfig = field(default_factory=LogsDiscordConfig)
+    outputs: LogsOutputsConfig = field(default_factory=LogsOutputsConfig)
 
 
 @dataclass(frozen=True)
@@ -2631,6 +2685,58 @@ def _build_app_config(
         segment_refresher_synth=bool(_get(_lr, "segment_refresher_synth", default=False)),
         segment_refresher_alert_lifecycle=bool(_get(_lr, "segment_refresher_alert_lifecycle", default=False)),
     )
+    _lo = _get(raw, "logs", "outputs") or {}
+    _collectors = _get(_lo, "collectors") or {}
+    _syslog = _get(_lo, "syslog_tls") or {}
+    _otlp = _get(_lo, "otlp") or {}
+    _alertmanager = _get(_lo, "alertmanager") or {}
+    _snmpv3 = _get(_lo, "snmpv3") or {}
+    _logs_outputs = LogsOutputsConfig(
+        collectors=CollectorIntegrationConfig(
+            node_exporter_target=str(_get(_collectors, "node_exporter_target", default="") or "").strip(),
+            container_runtime_target=str(_get(_collectors, "container_runtime_target", default="") or "").strip(),
+            scrape_interval_seconds=int(_get(_collectors, "scrape_interval_seconds", default=15)),
+        ),
+        syslog_tls=SyslogTlsOutputConfig(
+            enabled=bool(_get(_syslog, "enabled", default=False)),
+            host=str(_get(_syslog, "host", default="") or "").strip(),
+            port=int(_get(_syslog, "port", default=6514)),
+            ca_file=str(_get(_syslog, "ca_file", default="") or "").strip(),
+            server_name=str(_get(_syslog, "server_name", default="") or "").strip(),
+            queue_size=int(_get(_syslog, "queue_size", default=256)),
+            timeout_seconds=float(_get(_syslog, "timeout_seconds", default=5.0)),
+        ),
+        otlp=HttpOutputConfig(
+            enabled=bool(_get(_otlp, "enabled", default=False)),
+            endpoint=str(_get(_otlp, "endpoint", default="") or "").strip(),
+            queue_size=int(_get(_otlp, "queue_size", default=256)),
+            timeout_seconds=float(_get(_otlp, "timeout_seconds", default=5.0)),
+        ),
+        alertmanager=HttpOutputConfig(
+            enabled=bool(_get(_alertmanager, "enabled", default=False)),
+            endpoint=str(_get(_alertmanager, "endpoint", default="") or "").strip(),
+            queue_size=int(_get(_alertmanager, "queue_size", default=256)),
+            timeout_seconds=float(_get(_alertmanager, "timeout_seconds", default=5.0)),
+        ),
+        snmpv3=SnmpV3OutputConfig(
+            enabled=bool(_get(_snmpv3, "enabled", default=False)),
+            host=str(_get(_snmpv3, "host", default="") or "").strip(),
+            port=int(_get(_snmpv3, "port", default=162)),
+            username=str(_get(_snmpv3, "username", default="") or "").strip(),
+            auth_protocol=str(_get(_snmpv3, "auth_protocol", default="SHA256") or "SHA256").strip().upper(),
+            privacy_protocol=str(_get(_snmpv3, "privacy_protocol", default="AES256") or "AES256").strip().upper(),
+            auth_secret_env=str(
+                _get(_snmpv3, "auth_secret_env", default="SEASONAL_OBSERVABILITY_SNMP_AUTH_SECRET")
+                or "SEASONAL_OBSERVABILITY_SNMP_AUTH_SECRET"
+            ).strip(),
+            privacy_secret_env=str(
+                _get(_snmpv3, "privacy_secret_env", default="SEASONAL_OBSERVABILITY_SNMP_PRIVACY_SECRET")
+                or "SEASONAL_OBSERVABILITY_SNMP_PRIVACY_SECRET"
+            ).strip(),
+            queue_size=int(_get(_snmpv3, "queue_size", default=256)),
+            timeout_seconds=float(_get(_snmpv3, "timeout_seconds", default=5.0)),
+        ),
+    )
     _ld = _get(raw, "logs", "discord") or {}
     _logs_discord = LogsDiscordConfig(
         enabled=bool(_get(_ld, "enabled", default=False)),
@@ -2652,7 +2758,7 @@ def _build_app_config(
         source_health_log=bool(_get(_ld, "source_health_log", default=True)),
         icon_cdn_url=str(_get(_ld, "icon_cdn_url", default="") or "").strip(),
     )
-    logs = LogsConfig(runtime=_logs_runtime, discord=_logs_discord)
+    logs = LogsConfig(runtime=_logs_runtime, discord=_logs_discord, outputs=_logs_outputs)
 
     return AppConfig(
         station=station,
