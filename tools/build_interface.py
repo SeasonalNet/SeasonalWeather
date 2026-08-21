@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
 
 from seasonalweather.build_metadata import BuildInfo, BuildInfoError
@@ -35,7 +36,12 @@ def _load(path: Path) -> BuildInfo:
         raise SystemExit(f"invalid build-info: {exc}") from exc
 
 
-def _controlled_environment(info: BuildInfo, *, build_network: str | None = None) -> dict[str, str]:
+def _controlled_environment(
+    info: BuildInfo,
+    *,
+    build_network: str | None = None,
+    docker_environment: Mapping[str, str] | None = None,
+) -> dict[str, str]:
     """Pass only build inputs explicitly represented in the build record."""
 
     environment = {
@@ -62,7 +68,8 @@ def _controlled_environment(info: BuildInfo, *, build_network: str | None = None
         "SW_DIAGNOSTIC_CATALOG_VERSION": str(info.diagnostic_catalog_version),
         "SW_CAPABILITY_MANIFEST_VERSION": str(info.capability_manifest_version),
     }
-    environment.update({key: os.environ[key] for key in DOCKER_ENVIRONMENT_KEYS if key in os.environ})
+    transport = docker_environment or {}
+    environment.update({key: transport[key] for key in DOCKER_ENVIRONMENT_KEYS if key in transport})
     if build_network is not None:
         environment[_BUILD_NETWORK_ENVIRONMENT] = build_network
     return environment
@@ -79,11 +86,16 @@ def run_image(*, build_info: Path, targets: tuple[str, ...]) -> int:
     if network == "host":
         command.append("--allow=network.host")
     command.extend(targets)
+    docker_environment = {key: os.environ[key] for key in DOCKER_ENVIRONMENT_KEYS if key in os.environ}
     try:
         completed = subprocess.run(
             command,
             cwd=ROOT,
-            env=_controlled_environment(info, build_network=network),
+            env=_controlled_environment(
+                info,
+                build_network=network,
+                docker_environment=docker_environment,
+            ),
             check=False,
         )
     except OSError as exc:
