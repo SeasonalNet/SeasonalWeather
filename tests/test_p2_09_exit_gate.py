@@ -33,6 +33,16 @@ def test_p2_09_forgejo_bootstraps_docker_inside_the_gate_step() -> None:
     bootstrap = (ROOT / "tools/ci/bootstrap_docker.sh").read_text(encoding="utf-8")
     assert '--pidfile="$pid_file"' in bootstrap
     assert '--pid-file="$pid_file"' not in bootstrap
+    assert "--iptables=false" in bootstrap
+    assert "--ip6tables=false" in bootstrap
+    assert "--ip-masq=false" in bootstrap
+    assert "--ip-forward=false" in bootstrap
+    assert "--bridge=none" in bootstrap
+    assert "SEASONALWEATHER_DOCKER_BUILD_NETWORK=host" in bootstrap
+    assert "SEASONALWEATHER_DOCKER_RUN_NETWORK=none" in bootstrap
+    bake = (ROOT / "docker-bake.hcl").read_text(encoding="utf-8")
+    assert 'variable "SEASONALWEATHER_DOCKER_BUILD_NETWORK"' in bake
+    assert "network = SEASONALWEATHER_DOCKER_BUILD_NETWORK" in bake
 
 
 def test_p2_09_github_keeps_the_native_docker_path() -> None:

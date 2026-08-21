@@ -104,10 +104,17 @@ start_ephemeral_daemon() {
         --data-root="${state_dir}/data" \
         --exec-root="${state_dir}/exec" \
         --pidfile="$pid_file" \
+        --iptables=false \
+        --ip6tables=false \
+        --ip-masq=false \
+        --ip-forward=false \
+        --bridge=none \
         >"$log_file" 2>&1 &
     EPHEMERAL_DOCKER_PID=$!
 
     export DOCKER_HOST="unix://${socket}"
+    export SEASONALWEATHER_DOCKER_BUILD_NETWORK=host
+    export SEASONALWEATHER_DOCKER_RUN_NETWORK=none
     local attempt
     for attempt in $(seq 1 30); do
         if docker info >/dev/null 2>&1; then

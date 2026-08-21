@@ -21,6 +21,8 @@ DOCKER_ENVIRONMENT_KEYS = (
     "DOCKER_TLS_VERIFY",
     "BUILDX_CONFIG",
 )
+_BUILD_NETWORK_ENVIRONMENT = "SEASONALWEATHER_DOCKER_BUILD_NETWORK"
+_BUILD_NETWORKS = frozenset(("default", "host", "none"))
 
 
 def _load(path: Path) -> BuildInfo:
@@ -61,6 +63,8 @@ def _controlled_environment(info: BuildInfo) -> dict[str, str]:
         "SW_CAPABILITY_MANIFEST_VERSION": str(info.capability_manifest_version),
     }
     environment.update({key: os.environ[key] for key in DOCKER_ENVIRONMENT_KEYS if key in os.environ})
+    if _BUILD_NETWORK_ENVIRONMENT in os.environ:
+        environment[_BUILD_NETWORK_ENVIRONMENT] = os.environ[_BUILD_NETWORK_ENVIRONMENT]
     return environment
 
 
@@ -68,7 +72,13 @@ def run_image(*, build_info: Path, targets: tuple[str, ...]) -> int:
     if not BAKE_FILE.is_file():
         raise SystemExit(f"image matrix is missing: {BAKE_FILE}")
     info = _load(build_info)
-    command = ["docker", "buildx", "bake", "--load", "--file", str(BAKE_FILE), *targets]
+    network = os.environ.get(_BUILD_NETWORK_ENVIRONMENT, "default")
+    if network not in _BUILD_NETWORKS:
+        raise SystemExit(f"unsupported Docker build network: {network}")
+    command = ["docker", "buildx", "bake", "--load", "--file", str(BAKE_FILE)]
+    if network == "host":
+        command.append("--allow=network.host")
+    command.extend(targets)
     try:
         completed = subprocess.run(command, cwd=ROOT, env=_controlled_environment(info), check=False)
     except OSError as exc:
