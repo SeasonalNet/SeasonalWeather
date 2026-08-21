@@ -8,7 +8,7 @@ TARGET_PLATFORM ?= unknown
 .PHONY: format-check lint typecheck basedpyright architecture-check dependency-check suppressions-check
 .PHONY: dead-code-check security-check complexity-check image-boundaries-check container-security-check
 .PHONY: exceptions-check diagnostics-check diagnostics-build diagnostics-export
-.PHONY: quality test compile check phase2-gate build-info version image images compose-check release
+.PHONY: quality test compile check phase2-gate phase2-images build-info version image images compose-check release
 
 DIAGNOSTICS_EXPORT_DIR ?= build/diagnostics
 QUALITY_SUPPRESSIONS_BASE ?= HEAD
@@ -73,6 +73,9 @@ compile:
 check: quality compile test
 
 phase2-gate: check
+	$(MAKE) phase2-images
+
+phase2-images:
 	$(MAKE) images
 	$(PYTHON) -m tools.quality.phase2_exit_gate --images
 

@@ -22,8 +22,6 @@ DOCKER_ENVIRONMENT_KEYS = (
     "DOCKER_TLS_VERIFY",
     "BUILDX_CONFIG",
 )
-_BUILD_NETWORK_ENVIRONMENT = "SEASONALWEATHER_DOCKER_BUILD_NETWORK"
-_BUILD_NETWORKS = frozenset(("default", "host", "none"))
 
 
 def _load(path: Path) -> BuildInfo:
@@ -39,7 +37,6 @@ def _load(path: Path) -> BuildInfo:
 def _controlled_environment(
     info: BuildInfo,
     *,
-    build_network: str | None = None,
     docker_environment: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """Pass only build inputs explicitly represented in the build record."""
@@ -70,8 +67,6 @@ def _controlled_environment(
     }
     transport = docker_environment or {}
     environment.update({key: transport[key] for key in DOCKER_ENVIRONMENT_KEYS if key in transport})
-    if build_network is not None:
-        environment[_BUILD_NETWORK_ENVIRONMENT] = build_network
     return environment
 
 
@@ -79,13 +74,7 @@ def run_image(*, build_info: Path, targets: tuple[str, ...]) -> int:
     if not BAKE_FILE.is_file():
         raise SystemExit(f"image matrix is missing: {BAKE_FILE}")
     info = _load(build_info)
-    network = os.environ.get(_BUILD_NETWORK_ENVIRONMENT, "default")
-    if network not in _BUILD_NETWORKS:
-        raise SystemExit(f"unsupported Docker build network: {network}")
-    command = ["docker", "buildx", "bake", "--load", "--file", str(BAKE_FILE)]
-    if network == "host":
-        command.append("--allow=network.host")
-    command.extend(targets)
+    command = ["docker", "buildx", "bake", "--load", "--file", str(BAKE_FILE), *targets]
     docker_environment = {key: os.environ[key] for key in DOCKER_ENVIRONMENT_KEYS if key in os.environ}
     try:
         completed = subprocess.run(
@@ -93,7 +82,6 @@ def run_image(*, build_info: Path, targets: tuple[str, ...]) -> int:
             cwd=ROOT,
             env=_controlled_environment(
                 info,
-                build_network=network,
                 docker_environment=docker_environment,
             ),
             check=False,

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -82,8 +81,6 @@ _WORKER_FORBIDDEN_MODULES = (
     "seasonalweather.nwws",
 )
 _WORKER_IMPORTS = ("fastapi", "slixmpp", "sqlalchemy", "uvicorn")
-_DOCKER_RUN_NETWORK_ENVIRONMENT = "SEASONALWEATHER_DOCKER_RUN_NETWORK"
-_DOCKER_RUN_NETWORKS = frozenset(("default", "none"))
 _STABLE_BUILD_FIELDS = (
     "project",
     "software_version",
@@ -143,11 +140,7 @@ def _image_inspect(spec: ImageSpec) -> dict[str, Any]:
 
 
 def _embedded_json(spec: ImageSpec, *command: str) -> Any:
-    network = os.environ.get(_DOCKER_RUN_NETWORK_ENVIRONMENT, "default")
-    if network not in _DOCKER_RUN_NETWORKS:
-        raise GateError(f"unsupported Docker probe network: {network}")
-    network_args = () if network == "default" else ("--network", network)
-    return _docker_json("run", *network_args, "--rm", "--entrypoint", "python", spec.tag, *command)
+    return _docker_json("run", "--rm", "--entrypoint", "python", spec.tag, *command)
 
 
 def _embedded_file_json(spec: ImageSpec, path: str) -> Any:

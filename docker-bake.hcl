@@ -22,7 +22,6 @@ variable "SW_CONFIG_SCHEMA_MAX" { default = "1" }
 variable "SW_DIAGNOSTIC_SCHEMA_VERSION" { default = "1" }
 variable "SW_DIAGNOSTIC_CATALOG_VERSION" { default = "1" }
 variable "SW_CAPABILITY_MANIFEST_VERSION" { default = "1" }
-variable "SEASONALWEATHER_DOCKER_BUILD_NETWORK" { default = "default" }
 
 group "default" {
   targets = ["controller"]
@@ -31,7 +30,6 @@ group "default" {
 target "common" {
   context = "."
   dockerfile = "Dockerfile"
-  network = SEASONALWEATHER_DOCKER_BUILD_NETWORK
   args = {
     SW_PROJECT = SW_PROJECT
     SW_VERSION = SW_VERSION

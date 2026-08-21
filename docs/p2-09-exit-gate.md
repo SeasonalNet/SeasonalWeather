@@ -17,13 +17,14 @@ This runs `make check`, builds the controller plus routine-worker, Piper,
 legacy-TTS, maintenance, and development profiles through `make images`, and
 then runs `tools.quality.phase2_exit_gate --images`.
 
-The Forgejo workflow sources `tools/ci/bootstrap_docker.sh` in the same step as
-the gate. It first reuses a working Docker/Buildx endpoint, then installs the
-Docker client and Buildx from Docker's Debian-family repository when needed,
-and finally starts an ephemeral daemon when no endpoint is available. A job
-container must be privileged for that last fallback; otherwise the workflow
-fails closed with an actionable diagnostic. GitHub keeps its native hosted
-Docker path and does not run this bootstrap.
+Forgejo splits that combined interface across two ordered jobs for the same
+commit. The ordinary `victus-fast` runner executes `make check`. After it
+passes, the dedicated `victus-builder` runner executes `make phase2-images`,
+which builds and inspects the matrix without repeating quality and tests.
+Only the builder job runs `tools/ci/bootstrap_docker.sh`; it installs the
+Docker CLI/Buildx when needed and requires the runner-provided `dind-builder`
+endpoint. See [Forgejo Runner Docker access](forgejo-runner-docker.md). GitHub
+keeps its native hosted Docker path and runs the combined `phase2-gate` target.
 
 The source-only inspection is also available without Docker:
 

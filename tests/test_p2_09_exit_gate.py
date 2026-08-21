@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 
 from tools.build_interface import IMAGE_TARGETS
@@ -24,25 +26,72 @@ def test_p2_09_source_contract_passes() -> None:
     assert validate_source_contract(ROOT) == []
 
 
-def test_p2_09_forgejo_bootstraps_docker_inside_the_gate_step() -> None:
+def test_p2_09_forgejo_confines_docker_to_dedicated_builder() -> None:
     workflow = (ROOT / ".forgejo/workflows/ci.yml").read_text(encoding="utf-8")
-    assert ". ./tools/ci/bootstrap_docker.sh" in workflow
-    assert "make phase2-gate" in workflow
-    assert workflow.index("bootstrap_docker.sh") < workflow.index("make phase2-gate")
+    python_job, image_job = workflow.split("  images:\n", maxsplit=1)
+
+    assert "runs-on: [docker, victus-fast]" in python_job
+    assert "make check" in python_job
+    assert "bootstrap_docker.sh" not in python_job
+    assert "needs: python" in image_job
+    assert "runs-on: [docker, victus-builder]" in image_job
+    assert "bash ./tools/ci/bootstrap_docker.sh" in image_job
+    assert "make phase2-images" in image_job
+    assert image_job.index("bootstrap_docker.sh") < image_job.index("Install Python tooling")
+
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    assert "phase2-gate: check\n\t$(MAKE) phase2-images" in makefile
+    assert "phase2-images:\n\t$(MAKE) images" in makefile
 
     bootstrap = (ROOT / "tools/ci/bootstrap_docker.sh").read_text(encoding="utf-8")
-    assert '--pidfile="$pid_file"' in bootstrap
-    assert '--pid-file="$pid_file"' not in bootstrap
-    assert "--iptables=false" in bootstrap
-    assert "--ip6tables=false" in bootstrap
-    assert "--ip-masq=false" in bootstrap
-    assert "--ip-forward=false" in bootstrap
-    assert "--bridge=none" in bootstrap
-    assert "SEASONALWEATHER_DOCKER_BUILD_NETWORK=host" in bootstrap
-    assert "SEASONALWEATHER_DOCKER_RUN_NETWORK=none" in bootstrap
+    assert "docker-ce-cli docker-buildx-plugin" in bootstrap
+    assert "docker-ce docker-ce-cli" not in bootstrap
+    assert "containerd.io" not in bootstrap
+    assert "start_ephemeral_daemon" not in bootstrap
+    assert "dockerd \\" not in bootstrap
+    assert "runner.envs.DOCKER_HOST" in bootstrap
     bake = (ROOT / "docker-bake.hcl").read_text(encoding="utf-8")
-    assert 'variable "SEASONALWEATHER_DOCKER_BUILD_NETWORK"' in bake
-    assert "network = SEASONALWEATHER_DOCKER_BUILD_NETWORK" in bake
+    assert "SEASONALWEATHER_DOCKER_BUILD_NETWORK" not in bake
+
+
+def test_p2_09_forgejo_docker_preflight_accepts_runner_endpoint(tmp_path: Path) -> None:
+    docker = tmp_path / "docker"
+    docker.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    docker.chmod(0o755)
+
+    completed = subprocess.run(
+        ["bash", str(ROOT / "tools/ci/bootstrap_docker.sh")],
+        cwd=ROOT,
+        env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "runner-provided endpoint and Buildx are ready" in completed.stdout
+
+
+def test_p2_09_forgejo_docker_preflight_rejects_missing_endpoint(tmp_path: Path) -> None:
+    docker = tmp_path / "docker"
+    docker.write_text(
+        '#!/bin/sh\n[ "$1" = "info" ] && exit 1\nexit 0\n',
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+
+    completed = subprocess.run(
+        ["bash", str(ROOT / "tools/ci/bootstrap_docker.sh")],
+        cwd=ROOT,
+        env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "did not provide a usable Docker endpoint" in completed.stderr
+    assert "docs/forgejo-runner-docker.md" in completed.stderr
 
 
 def test_p2_09_github_keeps_the_native_docker_path() -> None:
