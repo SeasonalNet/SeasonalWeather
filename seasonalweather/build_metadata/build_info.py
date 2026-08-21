@@ -8,10 +8,10 @@ import hashlib
 import json
 import os
 import platform
-import subprocess  # nosec B404 - invokes the fixed git executable with argv-only arguments
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from subprocess import SubprocessError, run
 
 from .. import __version__
 from ..capabilities.manifest import MANIFEST_SCHEMA_VERSION
@@ -301,14 +301,14 @@ def _validate_schema_versions(info: BuildInfo) -> None:
 
 def _run_git(repo_root: Path, *args: str) -> str | None:
     try:
-        result = subprocess.run(  # nosec B603 - argv is fixed to git metadata queries; shell execution is disabled
+        result = run(
             ("git", "-C", str(repo_root), *args),
             check=True,
             capture_output=True,
             text=True,
             timeout=5,
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, SubprocessError):
         return None
     value = result.stdout.strip()
     return value if value else None

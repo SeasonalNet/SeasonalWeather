@@ -427,7 +427,7 @@ def _build_script(text: str, subtype: PnsSubtypeConfig, delimiter: str) -> str:
 
 
 def _sha1_12(value: str) -> str:
-    return hashlib.sha1(value.encode("utf-8", "ignore")).hexdigest()[:12]
+    return hashlib.sha1(value.encode("utf-8", "ignore"), usedforsecurity=False).hexdigest()[:12]
 
 
 class PnsStateMachine:

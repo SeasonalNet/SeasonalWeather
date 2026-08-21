@@ -632,7 +632,7 @@ class Orchestrator:
 
     # ---- dedupe helpers ----
     def _sha1_12(self, s: str) -> str:
-        h = hashlib.sha1((s or "").encode("utf-8", errors="ignore")).hexdigest()
+        h = hashlib.sha1((s or "").encode("utf-8", errors="ignore"), usedforsecurity=False).hexdigest()
         return h[:12]
 
     def _dedupe_func_full_key(self, event_code: str, same_locs: list[str] | None) -> str | None:

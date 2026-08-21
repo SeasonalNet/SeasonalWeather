@@ -8,7 +8,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from http import HTTPStatus
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, Response, UploadFile, WebSocket
 from fastapi.encoders import jsonable_encoder
@@ -647,7 +647,7 @@ def create_app(
     )
     async def v1_version(
         response: Response,
-        principal: ApiPrincipal = Depends(require_route_policy("GET", "/v1/version")),  # noqa: B008
+        principal: Annotated[ApiPrincipal, Depends(require_route_policy("GET", "/v1/version"))],
     ) -> dict[str, object]:
         del principal
         response.headers["Cache-Control"] = "no-store"
