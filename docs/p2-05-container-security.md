@@ -35,11 +35,11 @@ mode `0400` and a bounded size. Missing files preserve host/systemd
 environment-file compatibility. Unknown files are ignored by the application;
 the service-level mount policy remains responsible for not mounting them.
 
-The controller allowlist is explicit: NWWS, Icecast, API, and Discord bindings
-may be mounted by name. Worker profiles have an empty secret allowlist because
-the current SWWP worker contract does not require worker credentials. This
-allowlist must be expanded together with an authenticated worker protocol, not
-by mounting the controller secret directory into workers.
+The controller allowlist is explicit: NWWS, Icecast, API, Discord, and the
+controller's known secret bindings may be mounted by name. Worker profiles
+receive only `/run/secrets/SEASONAL_WORKER_TOKEN`; they do not receive the
+controller secret directory or any controller credential. This worker binding
+was added with the authenticated live SWWP transport in P2-08.
 
 Application log handlers redact values following `password=`, `secret=`,
 `token=`, `api_key=`, `authorization=`, or `webhook=` before output. Diagnostic

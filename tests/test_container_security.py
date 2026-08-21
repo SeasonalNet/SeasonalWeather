@@ -73,8 +73,8 @@ def test_dockerfiles_do_not_declare_secret_shaped_build_inputs() -> None:
         assert "env token" not in text
 
 
-def test_secret_allowlist_is_controller_only() -> None:
+def test_secret_allowlists_separate_controller_and_worker_credentials() -> None:
     contract = (ROOT / "quality/container-security.toml").read_text(encoding="utf-8")
-    assert "secret_files = []" in contract
+    assert '"SEASONAL_WORKER_TOKEN"' in contract
     assert '"ICECAST_SOURCE_PASSWORD"' in contract
     assert '"SEASONAL_API_TOKEN"' in contract

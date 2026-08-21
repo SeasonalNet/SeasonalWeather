@@ -61,12 +61,12 @@ upstream requests. Enabled IPAWS or ERN integrations currently report
 `unknown` because those runtimes do not yet expose a bounded state snapshot;
 when disabled they report `disabled`.
 
-Worker capability health uses bounded registry aggregates when a simulated
-P1-09 registry is composed. Readiness gates only on explicitly required
-capability names; a missing registry with required capabilities is explicitly
-`unavailable`. Without such a registry or requirements, simulated worker
-absence is `not_applicable` rather than a production outage. SWWP live
-transport, PostgreSQL, and Redis remain `not_applicable`.
+Worker capability health uses bounded registry aggregates refreshed by live
+SWWP sessions. Readiness gates only on explicitly required capability names;
+a missing registry with required capabilities is explicitly `unavailable`.
+When durable jobs are enabled and required, a controller with no active live
+worker session reports SWWP as unavailable and never falls back to controller
+execution. PostgreSQL and Redis remain `not_applicable`.
 
 Reports never include configured paths, raw exceptions, credentials, tokens,
 authorization headers, source payloads, or client details. Component and

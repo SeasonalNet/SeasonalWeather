@@ -9,6 +9,7 @@ import time
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -255,6 +256,83 @@ def _source_probe(runtime: Any, source: str) -> ComponentProbe:
     return ComponentProbe(name, False, evaluate)
 
 
+def _qualified_worker_capabilities(snapshots: Iterable[Any]) -> set[str]:
+    return {
+        record.name
+        for snapshot in snapshots
+        if snapshot.connected and snapshot.trusted and not snapshot.probe_required
+        for record in snapshot.records
+        if snapshot.effective_capacity.get(record.name, 0) > 0
+    }
+
+
+def _worker_health_state(summary: Any, missing: set[str]) -> tuple[ComponentState, str]:
+    if missing:
+        return ComponentState.UNAVAILABLE, "required_capability_unavailable"
+    if summary.connected_workers == 0:
+        return ComponentState.NOT_APPLICABLE, "no_live_workers"
+    if summary.unknown_workers or summary.stale_capabilities:
+        return ComponentState.DEGRADED, "capability_requalification_required"
+    return ComponentState.HEALTHY, "capabilities_qualified"
+
+
+async def _workers_health_probe(
+    capability_registry: Any,
+    required_capability_names: tuple[str, ...],
+) -> HealthComponent:
+    if capability_registry is None:
+        return _component(
+            "workers",
+            ComponentState.UNAVAILABLE if required_capability_names else ComponentState.NOT_APPLICABLE,
+            bool(required_capability_names),
+            "required_worker_registry_unavailable" if required_capability_names else "simulated_only",
+        )
+    now = _utc_now()
+    summary = capability_registry.health(now)
+    snapshots = capability_registry.snapshots(now)
+    satisfied = _qualified_worker_capabilities(snapshots)
+    missing = set(required_capability_names) - satisfied
+    state, reason = _worker_health_state(summary, missing)
+    return _component(
+        "workers",
+        state,
+        bool(required_capability_names),
+        reason,
+        details={
+            "active_assignments": summary.active_assignments,
+            "connected_workers": summary.connected_workers,
+            "effective_capacity": summary.effective_capacity,
+            "missing_required": len(missing),
+            "outstanding_probes": summary.outstanding_probes,
+            "qualified_workers": summary.qualified_workers,
+            "stale_capabilities": summary.stale_capabilities,
+            "unknown_workers": summary.unknown_workers,
+        },
+    )
+
+
+async def _swwp_health_probe(
+    swwp_manager: Any,
+    jobs_enabled: bool,
+    jobs_required: bool,
+) -> HealthComponent:
+    active = int(getattr(swwp_manager, "active_count", 0)) if swwp_manager is not None else 0
+    required = swwp_manager is not None and jobs_enabled and jobs_required
+    if active:
+        return _component("swwp", ComponentState.HEALTHY, required, "live_sessions", details={"active": active})
+    return _component(
+        "swwp",
+        ComponentState.UNAVAILABLE if required else ComponentState.NOT_APPLICABLE,
+        required,
+        "worker_sessions_unavailable" if required else "no_live_workers",
+        details={"active": active},
+    )
+
+
+def _swwp_is_required(swwp_manager: Any, jobs_enabled: bool, jobs_required: bool) -> bool:
+    return swwp_manager is not None and jobs_enabled and jobs_required
+
+
 def build_runtime_health_service(
     runtime: Any,
     *,
@@ -262,6 +340,7 @@ def build_runtime_health_service(
     auth_service: Any,
     job_service: Any = None,
     capability_registry: Any = None,
+    swwp_manager: Any = None,
     artifact_service: Any = None,
     artifacts_required: bool = False,
     required_capabilities: Iterable[str] = (),
@@ -532,62 +611,16 @@ def build_runtime_health_service(
     required_capability_names = tuple(sorted(set(required_capabilities)))
     if len(required_capability_names) > _MAX_REQUIRED_CAPABILITIES:
         raise ValueError("required worker capabilities exceed supported maximum")
-
-    async def workers_probe() -> HealthComponent:
-        if capability_registry is None:
-            return _component(
-                "workers",
-                ComponentState.UNAVAILABLE if required_capability_names else ComponentState.NOT_APPLICABLE,
-                bool(required_capability_names),
-                "required_worker_registry_unavailable" if required_capability_names else "simulated_only",
-            )
-        now = _utc_now()
-        summary = capability_registry.health(now)
-        snapshots = capability_registry.snapshots(now)
-        satisfied = {
-            record.name
-            for snapshot in snapshots
-            if snapshot.connected and snapshot.trusted and not snapshot.probe_required
-            for record in snapshot.records
-            if snapshot.effective_capacity.get(record.name, 0) > 0
-        }
-        missing = set(required_capability_names) - satisfied
-        if missing:
-            state = ComponentState.UNAVAILABLE
-            reason = "required_capability_unavailable"
-        elif summary.connected_workers == 0:
-            state = ComponentState.NOT_APPLICABLE
-            reason = "no_simulated_workers"
-        elif summary.unknown_workers or summary.stale_capabilities:
-            state = ComponentState.DEGRADED
-            reason = "capability_requalification_required"
-        else:
-            state = ComponentState.HEALTHY
-            reason = "capabilities_qualified"
-        return _component(
-            "workers",
-            state,
-            bool(required_capability_names),
-            reason,
-            details={
-                "active_assignments": summary.active_assignments,
-                "connected_workers": summary.connected_workers,
-                "effective_capacity": summary.effective_capacity,
-                "missing_required": len(missing),
-                "outstanding_probes": summary.outstanding_probes,
-                "qualified_workers": summary.qualified_workers,
-                "stale_capabilities": summary.stale_capabilities,
-                "unknown_workers": summary.unknown_workers,
-            },
-        )
+    swwp_required = _swwp_is_required(swwp_manager, jobs_enabled, jobs_required)
 
     probes.append(
         ComponentProbe(
             "workers",
             bool(required_capability_names),
-            workers_probe,
+            partial(_workers_health_probe, capability_registry, required_capability_names),
         )
     )
+
     probes.extend(
         (
             _constant_probe(
@@ -600,10 +633,10 @@ def build_runtime_health_service(
                 ComponentState.NOT_APPLICABLE,
                 reason="not_introduced",
             ),
-            _constant_probe(
+            ComponentProbe(
                 "swwp",
-                ComponentState.NOT_APPLICABLE,
-                reason="not_implemented",
+                swwp_required,
+                partial(_swwp_health_probe, swwp_manager, jobs_enabled, jobs_required),
             ),
         )
     )

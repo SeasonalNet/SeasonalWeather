@@ -27,25 +27,29 @@ def test_config_loads_runtime_log_color(monkeypatch) -> None:
 def test_log_color_never_avoids_ansi(monkeypatch) -> None:
     stream = io.StringIO()
     monkeypatch.setattr(sys, "stdout", stream)
-    cfg = SimpleNamespace(logs=SimpleNamespace(runtime=SimpleNamespace(
-        level="INFO",
-        color="never",
-        httpx_level="WARNING",
-        httpcore_level="WARNING",
-        uvicorn_access_level="WARNING",
-        uvicorn_error_level="INFO",
-        asyncio_level="WARNING",
-        slixmpp_level="WARNING",
-        slixmpp_xmlstream_level="WARNING",
-        logger_levels={},
-        cap_poll_summary=True,
-        ipaws_poll_summary=True,
-        conductor_cycle_push=True,
-        conductor_alert_push=True,
-        conductor_live_time_push=True,
-        segment_refresher_synth=True,
-        segment_refresher_alert_lifecycle=True,
-    )))
+    cfg = SimpleNamespace(
+        logs=SimpleNamespace(
+            runtime=SimpleNamespace(
+                level="INFO",
+                color="never",
+                httpx_level="WARNING",
+                httpcore_level="WARNING",
+                uvicorn_access_level="WARNING",
+                uvicorn_error_level="INFO",
+                asyncio_level="WARNING",
+                slixmpp_level="WARNING",
+                slixmpp_xmlstream_level="WARNING",
+                logger_levels={},
+                cap_poll_summary=True,
+                ipaws_poll_summary=True,
+                conductor_cycle_push=True,
+                conductor_alert_push=True,
+                conductor_live_time_push=True,
+                segment_refresher_synth=True,
+                segment_refresher_alert_lifecycle=True,
+            )
+        )
+    )
 
     setup_logging(cast(AppConfig, cast(object, cfg)))
     logging.getLogger("seasonalweather.test").info("plain message")
@@ -56,25 +60,29 @@ def test_log_color_never_avoids_ansi(monkeypatch) -> None:
 def test_log_color_always_adds_ansi(monkeypatch) -> None:
     stream = io.StringIO()
     monkeypatch.setattr(sys, "stdout", stream)
-    cfg = SimpleNamespace(logs=SimpleNamespace(runtime=SimpleNamespace(
-        level="INFO",
-        color="always",
-        httpx_level="WARNING",
-        httpcore_level="WARNING",
-        uvicorn_access_level="WARNING",
-        uvicorn_error_level="INFO",
-        asyncio_level="WARNING",
-        slixmpp_level="WARNING",
-        slixmpp_xmlstream_level="WARNING",
-        logger_levels={},
-        cap_poll_summary=True,
-        ipaws_poll_summary=True,
-        conductor_cycle_push=True,
-        conductor_alert_push=True,
-        conductor_live_time_push=True,
-        segment_refresher_synth=True,
-        segment_refresher_alert_lifecycle=True,
-    )))
+    cfg = SimpleNamespace(
+        logs=SimpleNamespace(
+            runtime=SimpleNamespace(
+                level="INFO",
+                color="always",
+                httpx_level="WARNING",
+                httpcore_level="WARNING",
+                uvicorn_access_level="WARNING",
+                uvicorn_error_level="INFO",
+                asyncio_level="WARNING",
+                slixmpp_level="WARNING",
+                slixmpp_xmlstream_level="WARNING",
+                logger_levels={},
+                cap_poll_summary=True,
+                ipaws_poll_summary=True,
+                conductor_cycle_push=True,
+                conductor_alert_push=True,
+                conductor_live_time_push=True,
+                segment_refresher_synth=True,
+                segment_refresher_alert_lifecycle=True,
+            )
+        )
+    )
 
     setup_logging(cast(AppConfig, cast(object, cfg)))
     logging.getLogger("seasonalweather.test").warning("colored message")

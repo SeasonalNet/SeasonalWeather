@@ -913,6 +913,9 @@ SCHEMA_V1 = _o(
                             default="never",
                             enum=frozenset({"never", "auto", "always"}),
                         ),
+                        "httpx2_level": _s(default="WARNING"),
+                        "httpcore2_level": _s(default="WARNING"),
+                        # Accepted for existing deployments; loader maps these to the httpx2 logger names.
                         "httpx_level": _s(default="WARNING"),
                         "httpcore_level": _s(default="WARNING"),
                         "uvicorn_access_level": _s(default="WARNING"),

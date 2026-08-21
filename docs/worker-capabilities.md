@@ -189,14 +189,16 @@ peers. Simulations cover proactive changes, capacity, duplicate/dropped/
 reordered updates, gaps, digest corruption, probes, staleness, degradation,
 recovery, reconnect, and rejection races.
 
-Deferred work includes the controller-side live WSS endpoint, production worker
-health servers, capability persistence, and container operation. P2-03 adds
-bounded worker dependency probes and handler dispatch but does not move
-artifact staging, media validation,
+P2-08 adds the controller-side live WSS endpoint, worker reconnect and
+reconciliation, and lifecycle drain. Production worker health servers,
+capability persistence, and container topology remain separate boundaries.
+Bounded worker dependency probes and handler dispatch do not move artifact
+staging, media validation,
 hash/identity/generation fences, promotion, result acceptance, Liquidsoap, and
 publication use the P1-10 controller artifact boundary when integrated.
 Capability qualification and capacity accounting do not make a result
 authoritative: the artifact coordinator must validate, promote, and durably
 commit through P1-07 first. P1-09 then releases active capacity exactly once.
-Production worker handlers and broader broadcast-path migration remain later
-work.
+Deployment-owned handler factories and broader broadcast-path migration remain
+bounded integration work behind the live SWWP boundary; no controller-local
+embedded executor is an allowed fallback.

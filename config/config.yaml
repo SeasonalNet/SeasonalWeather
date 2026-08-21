@@ -673,13 +673,13 @@ database:
     tmp_file_grace_seconds: 900               # prune stale temp files after 15m
     wal_checkpoint: true
 
-# Controller-only durable bounded jobs. This database is deliberately separate
+# Controller-owned durable bounded jobs. This database is deliberately separate
 # from database.path and must be on a local filesystem (NFS/SMB are unsupported).
-# Disabled until a deployment explicitly provisions the path and future
-# consumers; P1-07 adds repository/scheduler authority, not worker execution.
+# P2-08 requires live workers for job readiness; no controller-local fallback is
+# enabled when workers are absent.
 jobs:
-  enabled: false
-  required: false
+  enabled: true
+  required: true
   path: "/var/lib/seasonalweather/jobs/jobs.sqlite3"
   busy_timeout_ms: 5000
   lease_seconds: 60
@@ -805,8 +805,8 @@ logs:
   runtime:
     level: "INFO"                 # root logger level for SeasonalWeather itself
     color: "never"                # never|auto|always; never is structured JSON, color is presentation-only
-    httpx_level: "WARNING"        # raise to INFO to see every outbound HTTP request again
-    httpcore_level: "WARNING"
+    httpx2_level: "WARNING"        # raise to INFO to see every outbound HTTP request again
+    httpcore2_level: "WARNING"
     uvicorn_access_level: "WARNING"
     uvicorn_error_level: "INFO"
     asyncio_level: "WARNING"

@@ -5,7 +5,7 @@ import datetime as dt
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-import httpx
+import httpx2
 
 
 DEFAULT_UA = "SeasonalWeather/2.0 (automated IP radio system for weather; contact: info@seasonalnet.org)"
@@ -30,7 +30,7 @@ class NWSProduct:
 
 class NWSApi:
     def __init__(self, timeout: float = 8.0, user_agent: str = DEFAULT_UA) -> None:
-        self._client = httpx.AsyncClient(
+        self._client = httpx2.AsyncClient(
             timeout=timeout,
             headers={
                 "User-Agent": user_agent,

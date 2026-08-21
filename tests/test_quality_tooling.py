@@ -1,7 +1,10 @@
+from collections import Counter
+
 import pytest
 
 from tools.quality.governance import validate_governed_record
 from tools.quality.run_check import _compact_failure_output, checks
+from tools.quality.suppressions_check import collect_suppressions, new_suppressions
 
 
 def test_ruff_format_output_is_counted_for_current_and_legacy_formats():
@@ -51,3 +54,28 @@ def test_governed_record_rejects_expired_review_date():
     }
 
     assert any("expired" in error for error in validate_governed_record(record, context="test"))
+
+
+def test_suppression_check_accounts_for_existing_debt_but_blocks_additions(tmp_path):
+    base = tmp_path / "base"
+    current = tmp_path / "current"
+    base.mkdir()
+    current.mkdir()
+    (base / "module.py").write_text("value = object()  # type: ignore[arg-type]\n", encoding="utf-8")
+    (current / "module.py").write_text(
+        "value = object()  # type: ignore[arg-type]\nother = object()  # noqa: F841\n",
+        encoding="utf-8",
+    )
+
+    additions = new_suppressions(collect_suppressions(current), collect_suppressions(base))
+
+    assert additions == Counter({("module.py", "other = object()  # noqa: F841 [noqa: F841]"): 1})
+
+
+def test_suppression_scanner_ignores_directive_text_outside_comments(tmp_path):
+    (tmp_path / "module.py").write_text(
+        'text = "# type: ignore[arg-type]"\nvalue = 1  # noqa: E501\n',
+        encoding="utf-8",
+    )
+
+    assert sum(collect_suppressions(tmp_path).values()) == 1

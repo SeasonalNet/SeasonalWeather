@@ -15,7 +15,7 @@ from pathlib import Path
 from threading import Lock, local
 from typing import Any, cast
 
-import httpx
+import httpx2
 
 from ...configuration.semantic_rules import remote_tts_base_url_error
 from ..cancellation import explicit_cancellation
@@ -152,12 +152,12 @@ def _status_failure(status: int, *, phase: str) -> ProcessFailure | None:
 
 
 def _transport_failure(exc: BaseException, *, operation_deadline: float) -> ProcessFailure:
-    if isinstance(exc, (httpx.TimeoutException, TimeoutError)):
+    if isinstance(exc, (httpx2.TimeoutException, TimeoutError)):
         classification = "timed_out" if time.monotonic() >= operation_deadline else "provider_timed_out"
         return ProcessFailure(classification, "remote provider request timed out")
     if _contains_tls_error(exc):
         return ProcessFailure("tls_failed", "remote provider TLS validation failed")
-    if isinstance(exc, httpx.ConnectError) and isinstance(exc.__cause__ or exc.__context__, OSError):
+    if isinstance(exc, httpx2.ConnectError) and isinstance(exc.__cause__ or exc.__context__, OSError):
         return ProcessFailure("transport_failed", "remote provider connection failed")
     return ProcessFailure("transport_failed", "remote provider transport failed")
 

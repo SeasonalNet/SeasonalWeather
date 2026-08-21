@@ -310,8 +310,8 @@ def _configure_runtime_logging(runtime: LogsRuntimeConfig, root_logger: logging.
         handler.addFilter(runtime_filter)
 
     logger_levels = (
-        ("httpx", runtime.httpx_level, "WARNING"),
-        ("httpcore", runtime.httpcore_level, "WARNING"),
+        ("httpx2", getattr(runtime, "httpx2_level", getattr(runtime, "httpx_level", "WARNING")), "WARNING"),
+        ("httpcore2", getattr(runtime, "httpcore2_level", getattr(runtime, "httpcore_level", "WARNING")), "WARNING"),
         ("uvicorn.access", runtime.uvicorn_access_level, "WARNING"),
         ("uvicorn.error", runtime.uvicorn_error_level, "INFO"),
         ("asyncio", runtime.asyncio_level, "WARNING"),

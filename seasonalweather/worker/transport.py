@@ -40,10 +40,17 @@ class _WebSocketsModule(Protocol):
 class WebSocketWorkerTransport:
     """Connect to the controller using the exact SWWP subprotocol."""
 
-    def __init__(self, url: str, *, limits: ProtocolLimits = DEFAULT_LIMITS) -> None:
+    def __init__(
+        self,
+        url: str,
+        *,
+        token: str = "",
+        limits: ProtocolLimits = DEFAULT_LIMITS,
+    ) -> None:
         if not url.startswith(("ws://", "wss://")):
             raise ValueError("worker controller URL must use ws:// or wss://")
         self.url = url
+        self.token = token.strip()
         self.limits = limits
 
     async def connect(self) -> WorkerConnection:
@@ -51,10 +58,12 @@ class WebSocketWorkerTransport:
             websockets = cast(_WebSocketsModule, cast(object, import_module("websockets")))
         except ImportError as exc:
             raise RuntimeError("websockets is required by worker images") from exc
+        headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
         connection = await websockets.connect(
             self.url,
             subprotocols=[SUBPROTOCOL],
             max_size=self.limits.max_message_bytes,
+            additional_headers=headers,
         )
         return _WebSocketConnection(connection)
 

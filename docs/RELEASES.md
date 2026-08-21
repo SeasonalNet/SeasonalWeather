@@ -41,7 +41,8 @@ Avoid skipping tests for normal releases. `SKIP_TESTS=1` exists only for constra
 
 ## CI guardrails
 
-The Forgejo workflow validates that:
+The canonical Forgejo workflows, with equivalent GitHub workflow parity,
+validate that:
 
 - `seasonalweather.__version__` is valid SemVer.
 - Release tags are named `vX.Y.Z`.

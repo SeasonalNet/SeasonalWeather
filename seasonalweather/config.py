@@ -9,6 +9,7 @@ The only things that belong in the environment (seasonalweather.env) are:
   - ICECAST_ADMIN_PASSWORD             — Icecast admin secret   (optional)
   - ICECAST_RELAY_PASSWORD             — Icecast relay secret   (optional)
   - SEASONAL_API_TOKEN                 — API bearer token       (optional)
+  - SEASONAL_WORKER_TOKEN              — SWWP worker bearer token (optional)
   - SEASONAL_API_TOKENS_JSON           — multi-token JSON blob  (optional)
   - LIQUIDSOAP_TELNET_HOST             — legacy deployment override (optional)
   - LIQUIDSOAP_TELNET_PORT             — legacy deployment override (optional)
@@ -715,8 +716,8 @@ class LogsRuntimeConfig:
 
     level: str = "INFO"
     color: str = "never"  # never|auto|always
-    httpx_level: str = "WARNING"
-    httpcore_level: str = "WARNING"
+    httpx2_level: str = "WARNING"
+    httpcore2_level: str = "WARNING"
     uvicorn_access_level: str = "WARNING"
     uvicorn_error_level: str = "INFO"
     asyncio_level: str = "WARNING"
@@ -1038,7 +1039,7 @@ class ServiceAreaConfig:
 @dataclass(frozen=True)
 class SecretsConfig:
     """
-    The nine values that legitimately live in the environment file.
+    The environment-backed values that legitimately live in the environment file.
     Loaded once at startup by load_config() and kept here so no other
     module ever needs to call os.getenv() for credentials.
     """
@@ -1050,6 +1051,7 @@ class SecretsConfig:
     icecast_relay_password: str = field(repr=False)  # may be empty
     api_token: str = field(repr=False)  # may be empty
     api_tokens_json: str = field(repr=False)  # may be empty — JSON blob for multi-token
+    worker_token: str = field(repr=False)  # may be empty until live SWWP is configured
     liquidsoap_host: str
     liquidsoap_port: int
 
@@ -2652,6 +2654,7 @@ def _build_app_config(
         icecast_relay_password=environment.optional("ICECAST_RELAY_PASSWORD"),
         api_token=environment.raw_optional("SEASONAL_API_TOKEN"),
         api_tokens_json=environment.raw_optional("SEASONAL_API_TOKENS_JSON"),
+        worker_token=environment.raw_optional("SEASONAL_WORKER_TOKEN"),
         liquidsoap_host=environment.optional("LIQUIDSOAP_TELNET_HOST", network.liquidsoap.host),
         liquidsoap_port=environment.integer("LIQUIDSOAP_TELNET_PORT", network.liquidsoap.port),
     )
@@ -2663,8 +2666,14 @@ def _build_app_config(
     _logs_runtime = LogsRuntimeConfig(
         level=str(_get(_lr, "level", default="INFO") or "INFO").strip().upper(),
         color=str(_get(_lr, "color", default="never") or "never").strip().lower(),
-        httpx_level=str(_get(_lr, "httpx_level", default="WARNING") or "WARNING").strip().upper(),
-        httpcore_level=str(_get(_lr, "httpcore_level", default="WARNING") or "WARNING").strip().upper(),
+        httpx2_level=str(_get(_lr, "httpx2_level", default=_get(_lr, "httpx_level", default="WARNING")) or "WARNING")
+        .strip()
+        .upper(),
+        httpcore2_level=str(
+            _get(_lr, "httpcore2_level", default=_get(_lr, "httpcore_level", default="WARNING")) or "WARNING"
+        )
+        .strip()
+        .upper(),
         uvicorn_access_level=str(_get(_lr, "uvicorn_access_level", default="WARNING") or "WARNING").strip().upper(),
         uvicorn_error_level=str(_get(_lr, "uvicorn_error_level", default="INFO") or "INFO").strip().upper(),
         asyncio_level=str(_get(_lr, "asyncio_level", default="WARNING") or "WARNING").strip().upper(),

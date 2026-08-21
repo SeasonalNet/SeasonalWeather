@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import cast
 
-import httpx
+import httpx2
 
 from seasonalweather.api.api import create_app
 from seasonalweather.api.auth import ApiPrincipal, get_api_principal
@@ -129,9 +129,9 @@ def test_version_endpoint_returns_the_supplied_immutable_build_info() -> None:
 
     app.dependency_overrides[get_api_principal] = principal
 
-    async def request() -> httpx.Response:
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+    async def request() -> httpx2.Response:
+        transport = httpx2.ASGITransport(app=app)
+        async with httpx2.AsyncClient(transport=transport, base_url="http://testserver") as client:
             return await client.get("/v1/version")
 
     response = asyncio.run(request())

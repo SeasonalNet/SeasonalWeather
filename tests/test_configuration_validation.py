@@ -406,7 +406,11 @@ def test_preflight_readiness_requires_a_completed_evaluation_in_typed_and_extern
     ("old", "new", "pointer"),
     [
         ("      minimum_ttl_seconds: 60", "      minimum_ttl_seconds: 1000", "/api/auth/exchange/minimum_ttl_seconds"),
-        ("  required: false", "  required: true", "/jobs/required"),
+        (
+            "  enabled: true\n  required: true",
+            "  enabled: false\n  required: true",
+            "/jobs/required",
+        ),
         (
             "\n  assignment_ack_seconds: 10\n",
             "\n  assignment_ack_seconds: 60\n",

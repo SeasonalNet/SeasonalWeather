@@ -21,7 +21,7 @@ import logging
 import time
 from typing import Any
 
-import httpx
+import httpx2
 
 log = logging.getLogger("seasonalweather.discord_log")
 
@@ -55,7 +55,7 @@ _NWS_COLORS: dict[str, str] = {
     "FZA": "00FFFF",
     "FSW": "483D8B",
     "SQW": "C0C0C0",
-    "WW":  "7B68EE",
+    "WW": "7B68EE",
     "ISW": "8B008B",
     # Wind
     "HWW": "DAA520",
@@ -111,14 +111,14 @@ _NWS_COLORS: dict[str, str] = {
 }
 
 _DEFAULT_ALERT_COLOR = "4169E1"
-_OPS_COLOR           = "378ADD"
-_API_SUCCESS_COLOR   = "639922"
-_API_FAIL_COLOR      = "E24B4A"
-_WARN_COLOR          = "BA7517"
-_ERROR_COLOR         = "E24B4A"
-_TERMINAL_COLOR      = "888888"
-_DETAIL_COLOR        = "5D6FA3"
-_HEALTH_OK_COLOR     = "639922"
+_OPS_COLOR = "378ADD"
+_API_SUCCESS_COLOR = "639922"
+_API_FAIL_COLOR = "E24B4A"
+_WARN_COLOR = "BA7517"
+_ERROR_COLOR = "E24B4A"
+_TERMINAL_COLOR = "888888"
+_DETAIL_COLOR = "5D6FA3"
+_HEALTH_OK_COLOR = "639922"
 
 # ---------------------------------------------------------------------------
 # EAS event code → Lucide icon name
@@ -150,7 +150,7 @@ _ICON_MAP: dict[str, str] = {
     "FZA": "snowflake",
     "FSW": "snowflake",
     "SQW": "snowflake",
-    "WW":  "snowflake",
+    "WW": "snowflake",
     "ISW": "snowflake",
     # Wind
     "HWW": "wind",
@@ -202,17 +202,17 @@ _ICON_MAP: dict[str, str] = {
     "SPS": "bell",
     "SVS": "bell",
     # Internal sentinels
-    "_voice":   "bell",
+    "_voice": "bell",
     "_expired": "bell-off",
-    "_test":    "radio",
-    "_ops":     "activity",
-    "_api":     "terminal",
-    "_error":   "circle-alert",
+    "_test": "radio",
+    "_ops": "activity",
+    "_api": "terminal",
+    "_error": "circle-alert",
     "_startup": "power",
-    "_stall":   "wifi-off",
+    "_stall": "wifi-off",
     "_decision": "list-checks",
-    "_audio":   "audio-lines",
-    "_feed":    "rss",
+    "_audio": "audio-lines",
+    "_feed": "rss",
     "_default": "bell-ring",
 }
 
@@ -220,6 +220,7 @@ _ICON_MAP: dict[str, str] = {
 # ---------------------------------------------------------------------------
 # Small helpers
 # ---------------------------------------------------------------------------
+
 
 def _color_int(hex_str: str) -> int:
     try:
@@ -295,6 +296,7 @@ def _detail_value(value: Any) -> str:
 # Token bucket — per webhook URL
 # ---------------------------------------------------------------------------
 
+
 class _TokenBucket:
     """
     Leaky token bucket: `capacity` = max burst, refills at `rate_per_minute / 60`
@@ -304,9 +306,9 @@ class _TokenBucket:
 
     def __init__(self, rate_per_minute: int) -> None:
         self._capacity = float(max(1, rate_per_minute))
-        self._tokens   = self._capacity
-        self._rate     = self._capacity / 60.0   # tokens / second
-        self._last     = time.monotonic()
+        self._tokens = self._capacity
+        self._rate = self._capacity / 60.0  # tokens / second
+        self._last = time.monotonic()
 
     def consume(self) -> float:
         now = time.monotonic()
@@ -321,6 +323,7 @@ class _TokenBucket:
 # ---------------------------------------------------------------------------
 # DiscordLogger
 # ---------------------------------------------------------------------------
+
 
 class DiscordLogger:
     """
@@ -357,27 +360,27 @@ class DiscordLogger:
         source_health_log: bool = True,
         icon_cdn_url: str = "",
     ) -> None:
-        self._alerts_url     = alerts_url.strip()
+        self._alerts_url = alerts_url.strip()
         self._alerts_enabled = alerts_enabled and bool(self._alerts_url)
-        self._ops_url        = ops_url.strip()
-        self._ops_enabled    = ops_enabled and bool(self._ops_url)
-        self._api_url        = api_url.strip()
-        self._api_enabled    = api_enabled and bool(self._api_url)
-        self._errors_url     = errors_url.strip()
+        self._ops_url = ops_url.strip()
+        self._ops_enabled = ops_enabled and bool(self._ops_url)
+        self._api_url = api_url.strip()
+        self._api_enabled = api_enabled and bool(self._api_url)
+        self._errors_url = errors_url.strip()
         self._errors_enabled = errors_enabled and bool(self._errors_url)
 
-        self._rate_limit     = max(1, rate_limit_per_minute)
-        self._post_tests     = post_tests
-        self._post_voice     = post_voice_only
-        self._cycle_log      = cycle_rebuild_log
-        self._tracker_log    = alerttracker_lifecycle_log
+        self._rate_limit = max(1, rate_limit_per_minute)
+        self._post_tests = post_tests
+        self._post_voice = post_voice_only
+        self._cycle_log = cycle_rebuild_log
+        self._tracker_log = alerttracker_lifecycle_log
         self._ops_detail_log = ops_detail_log
         self._source_health_log = source_health_log
-        self._icon_cdn       = icon_cdn_url.strip()
+        self._icon_cdn = icon_cdn_url.strip()
 
         self._queue: asyncio.Queue[tuple[str, dict]] = asyncio.Queue()
         self._buckets: dict[str, _TokenBucket] = {}
-        self._client: httpx.AsyncClient | None = None
+        self._client: httpx2.AsyncClient | None = None
 
     @classmethod
     def from_config(cls, cfg: Any) -> "DiscordLogger":
@@ -404,18 +407,17 @@ class DiscordLogger:
         )
 
     def _any_enabled(self) -> bool:
-        return any([self._alerts_enabled, self._ops_enabled,
-                    self._api_enabled, self._errors_enabled])
+        return any([self._alerts_enabled, self._ops_enabled, self._api_enabled, self._errors_enabled])
 
     def _bucket(self, url: str) -> _TokenBucket:
         if url not in self._buckets:
             self._buckets[url] = _TokenBucket(self._rate_limit)
         return self._buckets[url]
 
-    async def _ensure_client(self) -> httpx.AsyncClient:
+    async def _ensure_client(self) -> httpx2.AsyncClient:
         if self._client is None:
-            self._client = httpx.AsyncClient(
-                timeout=httpx.Timeout(10.0, connect=5.0),
+            self._client = httpx2.AsyncClient(
+                timeout=httpx2.Timeout(10.0, connect=5.0),
                 headers={"User-Agent": "SeasonalWeather/1.0"},
             )
         return self._client
@@ -438,10 +440,11 @@ class DiscordLogger:
             return
 
         log.info(
-            "Discord webhook logging started "
-            "(alerts=%s ops=%s api=%s errors=%s rate=%d/min icon_cdn=%s)",
-            self._alerts_enabled, self._ops_enabled,
-            self._api_enabled, self._errors_enabled,
+            "Discord webhook logging started (alerts=%s ops=%s api=%s errors=%s rate=%d/min icon_cdn=%s)",
+            self._alerts_enabled,
+            self._ops_enabled,
+            self._api_enabled,
+            self._errors_enabled,
             self._rate_limit,
             self._icon_cdn or "(none)",
         )
@@ -464,14 +467,16 @@ class DiscordLogger:
                             retry_after = 5.0
                         log.warning(
                             "Discord webhook 429; re-enqueuing after %.1fs (url=%.50s...)",
-                            retry_after, url,
+                            retry_after,
+                            url,
                         )
                         await asyncio.sleep(retry_after)
                         self._enqueue(url, payload)
                     elif r.status_code not in (200, 204):
                         log.warning(
                             "Discord webhook unexpected status %d (url=%.50s...)",
-                            r.status_code, url,
+                            r.status_code,
+                            url,
                         )
                 except Exception:
                     log.exception("Discord webhook post failed (url=%.50s...)", url)
@@ -577,8 +582,8 @@ class DiscordLogger:
             return
 
         code_u = (code or "SPS").strip().upper()
-        hex_c  = _alert_color_hex(code_u)
-        color  = _color_int(hex_c)
+        hex_c = _alert_color_hex(code_u)
+        color = _color_int(hex_c)
 
         if is_test:
             icon = _icon_name(code_u, sentinel="_test")
@@ -588,11 +593,8 @@ class DiscordLogger:
 
         thumb = self._icon_url(icon, hex_c)
 
-        event_str    = (event or code_u).strip()
-        mode_display = (
-            "Originated (scheduled test)" if is_test
-            else ("FULL + SAME" if not is_voice else "Voice-only")
-        )
+        event_str = (event or code_u).strip()
+        mode_display = "Originated (scheduled test)" if is_test else ("FULL + SAME" if not is_voice else "Voice-only")
         if is_ern:
             mode_display += " (ERN relay)"
 
@@ -617,12 +619,7 @@ class DiscordLogger:
         for v in (vtec or [])[:2]:
             fields.append(self._field("VTEC", f"`{v}`", inline=False))
 
-        src_slug = (
-            "local" if is_test
-            else "ern" if is_ern
-            else "cap" if "cap" in source.lower()
-            else "nwws"
-        )
+        src_slug = "local" if is_test else "ern" if is_ern else "cap" if "cap" in source.lower() else "nwws"
         embed = self._embed(
             color=color,
             title=title,
@@ -648,13 +645,15 @@ class DiscordLogger:
             return
 
         code_u = (code or "SPS").strip().upper()
-        hex_c  = _alert_color_hex(code_u)
-        color  = _color_int(hex_c)
-        thumb  = self._icon_url(_icon_name(code_u), hex_c)
+        hex_c = _alert_color_hex(code_u)
+        color = _color_int(hex_c)
+        thumb = self._icon_url(_icon_name(code_u), hex_c)
 
         action_labels = {
-            "CON": "continuing", "EXT": "extended",
-            "EXA": "expanded", "EXB": "expanded",
+            "CON": "continuing",
+            "EXT": "extended",
+            "EXA": "expanded",
+            "EXB": "expanded",
         }
         action_word = action_labels.get(vtec_action.upper(), vtec_action.lower())
         title = f"{(event or code_u).strip()} — {action_word}"
@@ -670,7 +669,9 @@ class DiscordLogger:
             fields.append(self._field("VTEC", f"`{v}`", inline=False))
 
         embed = self._embed(
-            color=color, title=title, fields=fields,
+            color=color,
+            title=title,
+            fields=fields,
             footer_text=f"SeasonalWeather · {source.lower()} update · alerts",
             thumbnail_url=thumb,
         )
@@ -691,8 +692,8 @@ class DiscordLogger:
             return
 
         code_u = (code or "SPS").strip().upper()
-        color  = _color_int(_TERMINAL_COLOR)
-        thumb  = self._icon_url(_icon_name(code_u), _TERMINAL_COLOR)
+        color = _color_int(_TERMINAL_COLOR)
+        thumb = self._icon_url(_icon_name(code_u), _TERMINAL_COLOR)
 
         action_labels = {"CAN": "cancelled", "EXP": "expired"}
         action_word = action_labels.get(vtec_action.upper(), vtec_action.lower())
@@ -709,7 +710,9 @@ class DiscordLogger:
             fields.append(self._field("VTEC", f"`{v}`", inline=False))
 
         embed = self._embed(
-            color=color, title=title, fields=fields,
+            color=color,
+            title=title,
+            fields=fields,
             footer_text=f"SeasonalWeather · {source.lower()} · alerts",
             thumbnail_url=thumb,
         )
@@ -733,9 +736,9 @@ class DiscordLogger:
             return
 
         code_u = (code or "SPS").strip().upper()
-        hex_c  = _alert_color_hex(code_u)
-        color  = _color_int(hex_c)
-        thumb  = self._icon_url(_icon_name(code_u), hex_c)
+        hex_c = _alert_color_hex(code_u)
+        color = _color_int(hex_c)
+        thumb = self._icon_url(_icon_name(code_u), hex_c)
 
         action_labels = {"CAN": "partially cancelled", "EXP": "partially expired"}
         action_word = action_labels.get(vtec_action.upper(), f"partial {vtec_action.lower()}")
@@ -745,11 +748,7 @@ class DiscordLogger:
         continuing = [str(t).strip() for t in (continuing_tracks or []) if str(t).strip()]
 
         mode_l = (mode or "").strip().lower()
-        mode_display = (
-            "FULL + SAME mixed lifecycle"
-            if mode_l == "full"
-            else "Voice-only partial lifecycle (no retone)"
-        )
+        mode_display = "FULL + SAME mixed lifecycle" if mode_l == "full" else "Voice-only partial lifecycle (no retone)"
 
         fields: list[dict] = [
             self._field("VTEC action", vtec_action.upper(), inline=True),
@@ -772,7 +771,9 @@ class DiscordLogger:
             fields.append(self._field("VTEC", f"`{v}`", inline=False))
 
         embed = self._embed(
-            color=color, title=title, fields=fields,
+            color=color,
+            title=title,
+            fields=fields,
             footer_text=f"SeasonalWeather · {source.lower()} partial lifecycle · alerts",
             thumbnail_url=thumb,
         )
@@ -794,10 +795,10 @@ class DiscordLogger:
             return
         thumb = self._icon_url(_ICON_MAP["_startup"], _OPS_COLOR)
         fields = [
-            self._field("CAP",     "Enabled"  if cap_enabled   else "Disabled", inline=True),
-            self._field("ERN",     "Enabled"  if ern_enabled   else "Disabled", inline=True),
-            self._field("RWT/RMT", "Enabled"  if tests_enabled else "Disabled", inline=True),
-            self._field("Mode",    mode.capitalize(), inline=True),
+            self._field("CAP", "Enabled" if cap_enabled else "Disabled", inline=True),
+            self._field("ERN", "Enabled" if ern_enabled else "Disabled", inline=True),
+            self._field("RWT/RMT", "Enabled" if tests_enabled else "Disabled", inline=True),
+            self._field("Mode", mode.capitalize(), inline=True),
         ]
         embed = self._embed(
             color=_color_int(_OPS_COLOR),
@@ -829,11 +830,11 @@ class DiscordLogger:
         thumb = self._icon_url(_ICON_MAP["_ops"], _OPS_COLOR)
         dur_str = f"{int(seq_dur // 60)}m {int(seq_dur % 60)}s" if seq_dur > 0 else "—"
         fields: list[dict] = [
-            self._field("Reason",       reason,           inline=True),
-            self._field("Mode",         mode.capitalize(),inline=True),
-            self._field("Interval",     f"{interval}s",   inline=True),
-            self._field("Seq duration", dur_str,          inline=True),
-            self._field("Segments",     str(segments),    inline=True),
+            self._field("Reason", reason, inline=True),
+            self._field("Mode", mode.capitalize(), inline=True),
+            self._field("Interval", f"{interval}s", inline=True),
+            self._field("Seq duration", dur_str, inline=True),
+            self._field("Segments", str(segments), inline=True),
         ]
         if active_alerts:
             fields.append(self._field("Active alerts", str(active_alerts), inline=True))
@@ -1164,9 +1165,9 @@ class DiscordLogger:
             color=_color_int(_OPS_COLOR),
             title="AlertTracker restored",
             fields=[
-                self._field("Loaded",  str(loaded),  inline=True),
-                self._field("Purged",  str(purged),  inline=True),
-                self._field("Active",  str(active),  inline=True),
+                self._field("Loaded", str(loaded), inline=True),
+                self._field("Purged", str(purged), inline=True),
+                self._field("Active", str(active), inline=True),
             ],
             footer_text="SeasonalWeather · alerttracker · ops",
             thumbnail_url=self._icon_url(_ICON_MAP["_ops"], _OPS_COLOR),
@@ -1200,8 +1201,8 @@ class DiscordLogger:
             title += " — rejected"
 
         fields: list[dict] = [
-            self._field("Actor",  actor or "unknown", inline=True),
-            self._field("Status", status,             inline=True),
+            self._field("Actor", actor or "unknown", inline=True),
+            self._field("Status", status, inline=True),
         ]
         if command_id:
             fields.append(self._field("Command ID", f"`{command_id}`", inline=True))
@@ -1212,7 +1213,9 @@ class DiscordLogger:
                 fields.append(self._field(str(k), str(v)[:100], inline=True))
 
         embed = self._embed(
-            color=color, title=title, fields=fields,
+            color=color,
+            title=title,
+            fields=fields,
             footer_text="SeasonalWeather · api",
             thumbnail_url=thumb,
         )

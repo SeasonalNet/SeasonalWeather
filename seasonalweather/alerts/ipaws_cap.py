@@ -47,7 +47,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import httpx
+import httpx2
 
 from .cap_ledger import CapLedger
 from ..same.locations import (
@@ -75,40 +75,110 @@ _SENDER_ID_RE = re.compile(r"^\d+,\s*")
 
 # Organisation-type keywords indicating the first segment is already a
 # complete authority name (city/state suffix not needed).
-_ORG_KEYWORDS = frozenset({
-    "county", "department", "authority", "district", "bureau", "office",
-    "agency", "commission", "service", "management", "corps", "fire",
-    "police", "sheriff", "emergency", "ema", "oem",
-})
+_ORG_KEYWORDS = frozenset(
+    {
+        "county",
+        "department",
+        "authority",
+        "district",
+        "bureau",
+        "office",
+        "agency",
+        "commission",
+        "service",
+        "management",
+        "corps",
+        "fire",
+        "police",
+        "sheriff",
+        "emergency",
+        "ema",
+        "oem",
+    }
+)
 
 # Generic placeholder names produced by some CAP authoring tools.
-_GENERIC_SENDERS = frozenset({
-    "public alert system",
-    "public warning system",
-    "public safety",
-    "publicsafetyalert",
-    "alert system",
-    "emergency alert",
-    "emergency alert system",
-    "mass notification system",
-    "nixle",
-    "hyper-reach",
-    "everbridge",
-    "onsolve",
-    "omnilert",
-    "regroup",
-    "alertmedia",
-})
+_GENERIC_SENDERS = frozenset(
+    {
+        "public alert system",
+        "public warning system",
+        "public safety",
+        "publicsafetyalert",
+        "alert system",
+        "emergency alert",
+        "emergency alert system",
+        "mass notification system",
+        "nixle",
+        "hyper-reach",
+        "everbridge",
+        "onsolve",
+        "omnilert",
+        "regroup",
+        "alertmedia",
+    }
+)
 
 # 2-letter US state/territory abbreviations used for "City, ST" reconstruction.
-_STATE_ABBRS = frozenset({
-    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
-    "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
-    "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
-    "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
-    "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
-    "DC", "PR", "GU", "VI", "AS", "MP",
-})
+_STATE_ABBRS = frozenset(
+    {
+        "AL",
+        "AK",
+        "AZ",
+        "AR",
+        "CA",
+        "CO",
+        "CT",
+        "DE",
+        "FL",
+        "GA",
+        "HI",
+        "ID",
+        "IL",
+        "IN",
+        "IA",
+        "KS",
+        "KY",
+        "LA",
+        "ME",
+        "MD",
+        "MA",
+        "MI",
+        "MN",
+        "MS",
+        "MO",
+        "MT",
+        "NE",
+        "NV",
+        "NH",
+        "NJ",
+        "NM",
+        "NY",
+        "NC",
+        "ND",
+        "OH",
+        "OK",
+        "OR",
+        "PA",
+        "RI",
+        "SC",
+        "SD",
+        "TN",
+        "TX",
+        "UT",
+        "VT",
+        "VA",
+        "WA",
+        "WV",
+        "WI",
+        "WY",
+        "DC",
+        "PR",
+        "GU",
+        "VI",
+        "AS",
+        "MP",
+    }
+)
 
 
 def _clean_ipaws_sender(raw: str) -> str | None:
@@ -205,6 +275,7 @@ def _clean_ipaws_sender(raw: str) -> str | None:
 # SAME FIPS normalisation  (mirrors cap_nws.py)
 # ---------------------------------------------------------------------------
 
+
 def _norm_same(s: str) -> str | None:
     return normalize_same_location(s)
 
@@ -212,6 +283,7 @@ def _norm_same(s: str) -> str | None:
 # ---------------------------------------------------------------------------
 # XML namespace-strip / Signature-drop
 # ---------------------------------------------------------------------------
+
 
 def _strip_namespaces(elem: ET.Element) -> ET.Element | None:
     """
@@ -249,6 +321,7 @@ _BLOCKED_EVENT_CODES: frozenset[str] = frozenset({"DMO", "RWT", "RMT"})
 # IpawsCapEvent dataclass
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True, slots=True)
 class IpawsCapEvent:
     """
@@ -258,22 +331,23 @@ class IpawsCapEvent:
     There is no VTEC on IPAWS civil alerts — event_code is the SAME EAS code
     (e.g. "CEM", "LAE").
     """
+
     # CAP message-level
     identifier: str
     sender: str | None
     sent: str | None
     status: str | None
-    message_type: str | None          # Alert / Update / Cancel
+    message_type: str | None  # Alert / Update / Cancel
 
     # From the best <info> block
-    event: str | None                 # Human-readable, e.g. "Civil Emergency Message"
-    event_code: str | None            # SAME code, e.g. "CEM"
+    event: str | None  # Human-readable, e.g. "Civil Emergency Message"
+    event_code: str | None  # SAME code, e.g. "CEM"
     severity: str | None
     urgency: str | None
     certainty: str | None
 
-    sender_name_raw: str | None       # <senderName> verbatim
-    sender_name_clean: str | None     # cleaned for TTS (may be None)
+    sender_name_raw: str | None  # <senderName> verbatim
+    sender_name_clean: str | None  # cleaned for TTS (may be None)
     headline: str | None
     description: str | None
     instruction: str | None
@@ -281,9 +355,9 @@ class IpawsCapEvent:
     effective: str | None
     expires: str | None
 
-    same_fips: list[str]              # 6-digit PSSCCC from <geocode>
+    same_fips: list[str]  # 6-digit PSSCCC from <geocode>
     parameters: dict[str, list[str]]
-    eas_org: str | None               # EAS-ORG param: CIV / WXR / …
+    eas_org: str | None  # EAS-ORG param: CIV / WXR / …
 
     # Compatibility alias so shared helpers can treat this like CapAlertEvent
     @property
@@ -294,6 +368,7 @@ class IpawsCapEvent:
 # ---------------------------------------------------------------------------
 # IpawsCapPoller
 # ---------------------------------------------------------------------------
+
 
 class IpawsCapPoller:
     """
@@ -313,10 +388,7 @@ class IpawsCapPoller:
       - Dedupe keys are prefixed "IPAWS:" to coexist in the shared cap_seen_ledger.
     """
 
-    _DEFAULT_URL = (
-        "https://apps.fema.gov/IPAWSOPEN_EAS_SERVICE/rest/eas/recent"
-        "/2019-12-31T11:59:59Z"
-    )
+    _DEFAULT_URL = "https://apps.fema.gov/IPAWSOPEN_EAS_SERVICE/rest/eas/recent/2019-12-31T11:59:59Z"
 
     def __init__(
         self,
@@ -350,17 +422,17 @@ class IpawsCapPoller:
             database=database,
         )
 
-        self._client: httpx.AsyncClient | None = None
+        self._client: httpx2.AsyncClient | None = None
 
-    async def _get_client(self) -> httpx.AsyncClient:
+    async def _get_client(self) -> httpx2.AsyncClient:
         if self._client is None or self._client.is_closed:
             # Use the system CA bundle rather than the certifi snapshot bundled
             # with the venv.  FEMA's cert is issued by Cloudflare TLS Issuing ECC
             # CA 1 which may not appear in an older certifi release, but is always
             # present in the Debian system store that curl uses successfully.
-            self._client = httpx.AsyncClient(
+            self._client = httpx2.AsyncClient(
                 headers={"User-Agent": self.user_agent},
-                timeout=httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=5.0),
+                timeout=httpx2.Timeout(connect=10.0, read=30.0, write=10.0, pool=5.0),
                 follow_redirects=True,
                 verify="/etc/ssl/certs/ca-certificates.crt",
             )
@@ -485,9 +557,7 @@ class IpawsCapPoller:
         eas_org = ((params.get("EAS-ORG") or [""])[0]).strip() or None
 
         sender_name_raw = (info_el.findtext("senderName") or "").strip() or None
-        sender_name_clean = (
-            _clean_ipaws_sender(sender_name_raw) if sender_name_raw else None
-        )
+        sender_name_clean = _clean_ipaws_sender(sender_name_raw) if sender_name_raw else None
 
         return IpawsCapEvent(
             identifier=identifier,

@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-import httpx
+import httpx2
 
 from .cap_ledger import CapLedger
 from ..database.core import SeasonalDatabase
@@ -33,10 +33,12 @@ from ..same.locations import (
 
 log = logging.getLogger("seasonalweather.cap")
 
+
 def _required_ledger_path(value: str | None) -> str:
     if not value:
         raise ValueError("ledger_path must be supplied from the configured operational state root")
     return value
+
 
 # Marine SAME FIPS "SS" (digits 1-2 of PSSCCC) that do not map to a state
 # abbreviation. These are translated into NWS marine UGC zone ids for ?zone=
@@ -261,13 +263,9 @@ class NwsCapPoller:
         if self._use_params:
             self._request_params_list: list[dict[str, str]] = []
             if self.area_states:
-                self._request_params_list.append(
-                    {"area": ",".join(self.area_states), "status": "actual"}
-                )
+                self._request_params_list.append({"area": ",".join(self.area_states), "status": "actual"})
             if self.marine_zones:
-                self._request_params_list.append(
-                    {"zone": ",".join(self.marine_zones), "status": "actual"}
-                )
+                self._request_params_list.append({"zone": ",".join(self.marine_zones), "status": "actual"})
             if not self._request_params_list:
                 self._request_params_list.append({"status": "actual"})
         else:
@@ -284,8 +282,8 @@ class NwsCapPoller:
             database=database,
         )
 
-        self._client = httpx.AsyncClient(
-            timeout=httpx.Timeout(15.0, connect=10.0),
+        self._client = httpx2.AsyncClient(
+            timeout=httpx2.Timeout(15.0, connect=10.0),
             headers={
                 "User-Agent": self.user_agent,
                 "Accept": "application/geo+json, application/json;q=0.9, */*;q=0.1",
@@ -318,7 +316,7 @@ class NwsCapPoller:
                 if not self._use_params:
                     r = await self._client.get(self.url)
                     if r.status_code in (429, 500, 502, 503, 504):
-                        raise httpx.HTTPStatusError(f"HTTP {r.status_code}", request=r.request, response=r)
+                        raise httpx2.HTTPStatusError(f"HTTP {r.status_code}", request=r.request, response=r)
                     r.raise_for_status()
                     data = r.json()
                     if not isinstance(data, dict):
@@ -331,7 +329,7 @@ class NwsCapPoller:
                 for params in self._request_params_list:
                     r = await self._client.get(self.url, params=params)
                     if r.status_code in (429, 500, 502, 503, 504):
-                        raise httpx.HTTPStatusError(f"HTTP {r.status_code}", request=r.request, response=r)
+                        raise httpx2.HTTPStatusError(f"HTTP {r.status_code}", request=r.request, response=r)
                     r.raise_for_status()
                     data = r.json()
                     if not isinstance(data, dict):
@@ -470,9 +468,7 @@ class NwsCapPoller:
             return None
 
         # IDs: NWS sometimes uses "id" at top-level and "@id"/"id" in properties.
-        alert_id = (
-            str(props.get("id") or props.get("@id") or feat.get("id") or "").strip()
-        )
+        alert_id = str(props.get("id") or props.get("@id") or feat.get("id") or "").strip()
         if not alert_id:
             return None
 
@@ -566,7 +562,9 @@ class NwsCapPoller:
                                 continue
                         except Exception:
                             # Ledger should never take the service down
-                            log.exception("CAP ledger has() failed (continuing without persistent dedupe for this check)")
+                            log.exception(
+                                "CAP ledger has() failed (continuing without persistent dedupe for this check)"
+                            )
 
                         # Mark seen (persist) *before* enqueue so a crash doesn't re-air on restart
                         try:

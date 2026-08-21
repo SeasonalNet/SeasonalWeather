@@ -59,8 +59,12 @@ forbidden_mounts = []
 
 [roles.worker]
 definition = "Dockerfile.worker"
-read_only_mounts = []
-secret_files = []
+read_only_mounts = [
+  "/run/secrets",
+]
+secret_files = [
+  "SEASONAL_WORKER_TOKEN",
+]
 writable_mounts = ["/var/lib/seasonalweather/artifacts"]
 forbidden_mounts = [
   "/var/lib/seasonalweather/state",

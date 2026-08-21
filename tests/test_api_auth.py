@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 import yaml
 from fastapi.routing import APIRoute
@@ -42,10 +42,10 @@ def _request(
     path: str,
     *,
     headers: dict[str, str] | None = None,
-) -> httpx.Response:
-    async def send() -> httpx.Response:
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
+) -> httpx2.Response:
+    async def send() -> httpx2.Response:
+        transport = httpx2.ASGITransport(app=app)
+        async with httpx2.AsyncClient(
             transport=transport,
             base_url="http://testserver",
         ) as client:

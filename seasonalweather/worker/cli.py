@@ -57,6 +57,11 @@ def _parser() -> argparse.ArgumentParser:
         default=os.environ.get("SEASONALWEATHER_WORKER_HEALTH_FILE"),
         help="local bounded health record path (or SEASONALWEATHER_WORKER_HEALTH_FILE)",
     )
+    parser.add_argument(
+        "--token",
+        default=os.environ.get("SEASONALWEATHER_WORKER_TOKEN", ""),
+        help="SWWP bearer token (or SEASONALWEATHER_WORKER_TOKEN)",
+    )
     return parser
 
 
@@ -109,9 +114,10 @@ def main(argv: list[str] | None = None) -> int:
     runtime = WorkerRuntime(
         session,
         handlers,
-        WebSocketWorkerTransport(args.controller_url),
+        WebSocketWorkerTransport(args.controller_url, token=args.token),
         health_file=args.health_file,
         image_profile=profile.value,
+        reconnect=True,
     )
     setup_logging(
         role="worker",

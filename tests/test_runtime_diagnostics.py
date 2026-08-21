@@ -11,7 +11,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import httpx
+import httpx2
 import pytest
 
 from seasonalweather.database import SeasonalDatabase
@@ -156,7 +156,7 @@ def test_remote_failure_runtime_evidence_excludes_provider_and_secret_sentinels(
     class Transport:
         async def request(self, method, url, *, headers, json, timeout):
             del method, url, headers, json, timeout
-            raise httpx.ConnectError("; ".join(sentinels))
+            raise httpx2.ConnectError("; ".join(sentinels))
 
         async def close(self):
             pass

@@ -13,9 +13,9 @@ WebSocket subprotocol token: seasonalweather.worker.v1
 P1-08 implements schemas, deterministic state machines, a durable scheduler
 adapter, and in-memory simulated peers. P2-03 adds the worker-side process,
 typed handler dispatch, capability-profile registration, and outbound
-WebSocket client seam. The controller-side live session endpoint, complete
-end-to-end operation, and removal of the transitional embedded executor remain
-P2-08 work.
+WebSocket client seam. P2-08 adds the controller-side live session endpoint,
+worker authentication, reconnect/reconciliation, lifecycle drain, and the
+production cutover: the controller no longer creates an embedded TTS executor.
 
 ## Authority
 
@@ -124,8 +124,12 @@ or authorized names. Remote sessions can never gain the `control` queue,
 controller executor, or `control.*` job authority through advertising. A
 rejected registration allocates no session ID.
 
-TLS, HTTP middleware, API-token reuse, file loading, and a worker credential
-database are intentionally absent.
+The live controller endpoint authenticates the WebSocket with the dedicated
+`SEASONAL_WORKER_TOKEN` bearer credential, loaded from the controller's
+per-service secret binding. The token is transport metadata only and never
+enters SWWP JSON, logs, diagnostics, or worker registration. Worker images
+receive only that dedicated credential; controller API credentials are not
+mounted into workers.
 
 ## Independent version negotiation
 
@@ -187,8 +191,9 @@ a gap or mismatch blocks new qualification and requests a full report.
 Matching active leases renew through P1-07, whose
 lease extension is capped by the absolute deadline. Unknown or stale leases
 are returned for reconciliation and are never recreated. Heartbeat timeout
-closes the session without deciding work outcomes. No production heartbeat
-loop exists in P1-08.
+closes the live session without deciding work outcomes. The controller's live
+session owns the heartbeat watchdog and assignment pump; deterministic peers
+remain test fixtures only.
 
 Progress must match a current session-local durable assignment and calls the
 P1-07 bounded progress port. Stale progress fails closed.
@@ -202,7 +207,7 @@ completion ID. It never contains a large artifact.
 The controller validates and commits through P1-07. Only a returned
 `ResultCommitReceipt` permits `result_committed`. Identical replay after a lost
 acknowledgment is idempotent; a conflicting completion or stale lease fails
-closed. The simulated worker retains completion metadata until it sees
+closed. The live worker retains completion metadata until it sees
 `result_committed` or reconciliation resolves it.
 
 `job_failed` maps to the P1-06 attempt outcome and failure category with a
@@ -228,7 +233,10 @@ state remains repository-owned.
 
 `drain` prevents new session assignments and carries a bounded deadline and
 reason. `drained` reports active leases and unacknowledged completions without
-claiming terminal outcomes. P1-08 adds no network task or lifecycle authority.
+claiming terminal outcomes. The live controller manager registers each
+WebSocket session as a supervised transport owner and sends `drain` to every
+active worker during controller shutdown. Durable job outcomes remain
+repository-owned.
 
 ## Reconnect and reconciliation
 
@@ -278,7 +286,7 @@ exceptions or operational logs. Simulated bounded worker diagnostic instances
 and controller-owned compatibility occurrences are documented in
 [`runtime-diagnostics.md`](runtime-diagnostics.md).
 
-## Simulation and deferred transport
+## Simulation and live transport
 
 Deterministic peers live under `tests/support`, use injected clocks and IDs,
 and provide bounded in-memory queues with drop, duplicate, reorder, disconnect,
@@ -287,12 +295,15 @@ Simulated workers only accept/reject assignments and emit preconstructed
 progress/result/failure messages. They execute no handler and access no
 database.
 
-Architecture checks prevent general SWWP code from importing API, Uvicorn,
-WebSocket libraries, broadcast, Liquidsoap, TTS, NWWS, worker handlers, SQLite,
-or test simulation. Only `seasonalweather.swwp.adapter` may import the P1-07
-job-store boundary. API and `control.py` cannot own or invoke simulation.
+The pure `seasonalweather.swwp` package remains transport-independent. The
+controller WebSocket adapter is isolated in `seasonalweather.api.worker_sessions`
+and the worker outbound adapter is isolated in `seasonalweather.worker.transport`.
+Only `seasonalweather.swwp.adapter` may import the P1-07 job-store boundary.
+API and `control.py` cannot own or invoke test simulation.
 
-Dynamic capability qualification is simulated through the P1-09 controller
-registry and scheduler boundary. Real WSS transport, file-backed bootstrap
-credentials, worker processes, health/metrics, and deployment remain Phase 2
-work.
+Dynamic capability qualification is controller-owned and is updated by live
+registration, capability probes, heartbeats, and disconnect cleanup. The
+worker CLI reconnects with bounded exponential backoff and reports prior
+session work after registration; the controller derives reconciliation from
+durable repository state. A missing worker never falls back to controller-local
+execution.

@@ -172,6 +172,7 @@ class ControllerSession(SessionMachine):
         diagnostics: WorkerDiagnosticPort | None = None,
         telemetry: WorkerTelemetryPort | None = None,
         traceparent: str | None = None,
+        require_worker_readiness: bool = False,
     ) -> None:
         super().__init__(clock=clock, id_factory=id_factory, limits=limits, traceparent=traceparent)
         if controller_epoch < 1:
@@ -188,6 +189,7 @@ class ControllerSession(SessionMachine):
         self.capabilities = capabilities
         self.diagnostics = diagnostics
         self.telemetry = telemetry
+        self.require_worker_readiness = require_worker_readiness
         self.state = ControllerState.AWAITING_REGISTRATION
         self.session_id: str | None = None
         self.worker_id: str | None = None
@@ -675,10 +677,11 @@ class ControllerSession(SessionMachine):
                 worker_instance_id=self.worker_instance_id,
                 update=update_from_wire(payload),
             )
-            if disposition.value in {"conflict", "gap"}:
-                recovery = CapabilityRecoveryAction.FULL_REPORT_REQUIRED
-            elif disposition.value == "stale":
-                recovery = CapabilityRecoveryAction.STALE_IGNORED
+            if disposition is not None:
+                if disposition.value in {"conflict", "gap"}:
+                    recovery = CapabilityRecoveryAction.FULL_REPORT_REQUIRED
+                elif disposition.value == "stale":
+                    recovery = CapabilityRecoveryAction.STALE_IGNORED
         return (
             self._out(
                 CapabilityUpdateAck(
@@ -735,12 +738,20 @@ class ControllerSession(SessionMachine):
         if self.assignments.get(self._lease_key(lease)) != "accepted":
             raise ValueError("job message requires an accepted assignment")
 
-    def assign_next(self) -> Envelope | None:
+    def _can_assign_work(self) -> bool:
         if self.state is not ControllerState.ACTIVE or self.worker_id is None:
+            return False
+        return not self.require_worker_readiness or (self.worker_ready and self.worker_accepting_new_jobs)
+
+    def assign_next(self) -> Envelope | None:
+        if not self._can_assign_work():
+            return None
+        worker_id = self.worker_id
+        if worker_id is None:
             return None
         scheduler = self.capabilities or self.durable
         assignment = scheduler.acquire(
-            owner=self.worker_id,
+            owner=worker_id,
             queues=self.accepted_queues,
             executors=remote_executors(self.authorized_job_types),
             capabilities=self.authorized_capabilities,

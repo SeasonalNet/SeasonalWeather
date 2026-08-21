@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 
 from seasonalweather.api.api import create_app
@@ -443,9 +443,7 @@ def test_durable_cancellation_is_checked_after_capture_validation_and_preparatio
     async def cancel_during_prepare(*args, **kwargs):
         plan = await original_prepare(*args, **kwargs)
         row = next(
-            item
-            for item in service.repository.incomplete(limit=500)
-            if item["phase"] == ReloadPhase.PREPARING.value
+            item for item in service.repository.incomplete(limit=500) if item["phase"] == ReloadPhase.PREPARING.value
         )
         await commands.request_cancellation(str(row["command_id"]))
         return plan
@@ -461,6 +459,7 @@ def test_durable_cancellation_is_checked_after_capture_validation_and_preparatio
             )
         )
     assert preparer.plans[-1].rolled_back
+
 
 def test_environment_secret_rotation_is_redacted_restart_required(tmp_path: Path, monkeypatch) -> None:
     service, commands, preparer, _jobs = _service(tmp_path, monkeypatch)
@@ -540,8 +539,8 @@ def test_authorized_api_acknowledgment_challenge_round_trip(tmp_path: Path, monk
     app.dependency_overrides[get_api_principal] = principal
 
     async def scenario() -> tuple[dict[str, object], dict[str, object]]:
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app),
+        async with httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=app),
             base_url="http://testserver",
         ) as client:
             accepted = await client.post(
@@ -606,8 +605,8 @@ def test_endpoint_secrets_never_reach_audit_diagnostics_logs_or_api(
     app.dependency_overrides[get_api_principal] = principal
 
     async def scenario() -> tuple[dict[str, object], str]:
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app),
+        async with httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=app),
             base_url="http://testserver",
         ) as client:
             accepted = await client.post(
@@ -841,7 +840,9 @@ def test_startup_resumes_captured_command_without_recapturing_source(
     restarted, restarted_commands, _preparer, _jobs = _service(tmp_path, monkeypatch)
     repaired = asyncio.run(restarted.reconcile_startup())
 
-    assert restarted.repository.get_by_command(command.command_id)["candidate_reference"] == admitted.candidate.reference
+    assert (
+        restarted.repository.get_by_command(command.command_id)["candidate_reference"] == admitted.candidate.reference
+    )
     assert asyncio.run(restarted_commands.get(command.command_id)).status.value == "succeeded"
     assert restarted.repository.get_by_command(command.command_id)["outcome"] == ReloadOutcome.DRY_RUN.value
     assert repaired
@@ -942,9 +943,7 @@ def test_startup_synchronizes_identical_durable_generation_without_preparation(t
         "dedupe:\n  ttl_seconds: 900",
         "dedupe:\n  ttl_seconds: 901",
     )
-    committed, _ = asyncio.run(
-        _execute(first, commands, ReloadRequest(actor="operator", source_path=str(candidate)))
-    )
+    committed, _ = asyncio.run(_execute(first, commands, ReloadRequest(actor="operator", source_path=str(candidate))))
     assert committed.final_generation == 1
 
     restarted, _commands, preparer, _jobs = _service(tmp_path, monkeypatch, config_path=candidate)

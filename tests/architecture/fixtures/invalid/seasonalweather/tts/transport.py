@@ -1,3 +1,3 @@
-import httpx
+import httpx2
 
-del httpx
+del httpx2

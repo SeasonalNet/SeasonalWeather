@@ -1,0 +1,33 @@
+name: Security
+
+on:
+  push:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  gitleaks:
+    name: Gitleaks
+    runs-on: ubuntu-latest
+    env:
+      GITLEAKS_VERSION: 8.30.1
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Gitleaks
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates tar
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o /tmp/gitleaks.tar.gz
+          sudo tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Scan for secrets
+        run: |
+          set -eu
+          test -f .gitleaks.toml
+          gitleaks dir . --config .gitleaks.toml --redact --verbose --no-banner

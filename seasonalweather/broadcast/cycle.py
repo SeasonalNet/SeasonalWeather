@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, cast
 from zoneinfo import ZoneInfo
 
-import httpx
+import httpx2
 
 from ..alerts.active import ActiveAlert
 from ..alerts.nws_api import NWSApi, NWSProduct
@@ -853,7 +853,7 @@ class CycleBuilder:
             return None
         try:
             url = f"https://api.weather.gov/stations/{st}"
-            async with httpx.AsyncClient(
+            async with httpx2.AsyncClient(
                 timeout=3.0,
                 headers={"User-Agent": "SeasonalWeather/SeasonalNet"},
             ) as client:
@@ -1025,7 +1025,7 @@ class CycleBuilder:
           - Use POST (form-encoded) whenever the request includes a 'geometry' parameter.
         """
         try:
-            async with httpx.AsyncClient(
+            async with httpx2.AsyncClient(
                 timeout=timeout_s,
                 headers={"User-Agent": "SeasonalWeather/SeasonalNet"},
             ) as client:

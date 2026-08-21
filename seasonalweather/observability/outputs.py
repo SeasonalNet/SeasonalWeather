@@ -401,7 +401,7 @@ def _bounded_secret_free(value: str, name: str) -> str:
 
 
 def _http_client_factory() -> _HttpClientFactory:
-    module = importlib.import_module("httpx")
+    module = importlib.import_module("httpx2")
     return cast(_HttpClientFactory, module.__dict__["Client"])
 
 

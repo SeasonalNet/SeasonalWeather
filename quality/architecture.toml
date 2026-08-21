@@ -296,7 +296,7 @@ runtime_diagnostics_roots = ["seasonalweather/runtime_diagnostics"]
 runtime_diagnostics_repository = "seasonalweather/runtime_diagnostics/repository.py"
 runtime_fatal_renderer = "seasonalweather/runtime_diagnostics/fatal.py"
 runtime_fatal_forbidden_imports = [
-  "httpx",
+  "httpx2",
   "requests",
   "seasonalweather.api",
   "seasonalweather.broadcast",
@@ -522,7 +522,7 @@ tts_provider_forbidden_imports = [
 ]
 tts_transport_roots = ["seasonalweather/tts"]
 tts_transport_allowed_roots = ["seasonalweather/tts/adapters"]
-tts_transport_imports = ["httpx", "requests", "aiohttp", "urllib3"]
+tts_transport_imports = ["httpx2", "requests", "aiohttp", "urllib3"]
 tts_caller_roots = [
   "seasonalweather/control.py",
   "seasonalweather/api",

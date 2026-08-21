@@ -52,4 +52,5 @@ clean stopped event only after bounded cleanup. Unexpected required-task
 failure does not emit a clean stopped event.
 
 P2-06 does not add Compose topology, deployment operations, production
-controller/worker cutover, metrics/telemetry, or embedded-executor removal.
+controller/worker observability beyond the bounded lifecycle records. P2-08
+owns the live SWWP cutover and removal of the controller-local executor.

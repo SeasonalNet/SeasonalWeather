@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import datetime as dt
 import inspect
 import logging
 import signal
@@ -19,6 +20,7 @@ from ..artifacts.composition import build_controller_artifact_composition
 from ..auth import AuthenticationRepository, AuthenticationService
 from ..broadcast.segment_service import SegmentApplicationService
 from ..build_metadata import BuildInfo, current_build_info
+from ..capabilities.service import CapabilitySchedulerService, declared_capability_names
 from ..commands import CommandStore
 from ..config import AuthMode, load_config
 from ..configuration_reload.candidate_store import CandidateStore
@@ -36,18 +38,25 @@ from ..job_store import (
     DurableJobService,
     JobDatabase,
     JobRepository,
+    JobScheduler,
 )
+from ..jobs.policies import JobType, QueueClass
 from ..lifecycle import Lifecycle, LifecycleState, TaskSupervisor
 from ..lifecycle_records import LifecycleRecordWriter, LifecycleStage
 from ..main import Orchestrator, _setup_logging
 from ..nwws.diagnostics import NwwsRuntimeDiagnosticSink
-from ..observability import create_default_metrics, set_correlation
+from ..observability import WorkerTelemetryMetricsPort, create_default_metrics, set_correlation
 from ..runtime_diagnostics.fatal import FatalBoundary, SecondaryFailureLedger, enable_faulthandler
 from ..runtime_diagnostics.marker import ProcessMarkerStore, controller_marker
 from ..runtime_diagnostics.models import CorrelationContext, DiagnosticRole, PromotionReason
 from ..runtime_diagnostics.repository import OccurrenceRepository
 from ..runtime_diagnostics.service import RuntimeDiagnosticService
+from ..runtime_diagnostics.worker import WorkerDiagnosticTranslator
+from ..swwp.adapter import JobStoreSwwpAdapter
+from ..swwp.auth import BearerTokenRegistrationPolicy
+from ..swwp.constants import DEFAULT_LIMITS, ProtocolLimits
 from .api import create_app
+from .worker_sessions import LiveWorkerSession, LiveWorkerSessionManager, WorkerSocket
 
 log = logging.getLogger("seasonalweather.api")
 
@@ -436,6 +445,8 @@ async def _run_api_server_impl(
         reconciliation_batch_size=cfg.jobs.reconciliation_batch_size,
     )
     artifact_composition = None
+    swwp_manager = LiveWorkerSessionManager()
+    swwp_session_factory = None
     if job_service is not None:
         artifact_composition = build_controller_artifact_composition(
             orch,
@@ -445,6 +456,70 @@ async def _run_api_server_impl(
         )
         orch.artifact_service = artifact_composition.service
         orch.artifact_results = artifact_composition.results
+        scheduler = JobScheduler(
+            job_service.repository,
+            lifecycle,
+            lease_seconds=cfg.jobs.lease_seconds,
+            acknowledgment_seconds=cfg.jobs.assignment_ack_seconds,
+        )
+        durable_swwp = JobStoreSwwpAdapter(
+            scheduler,
+            job_service.repository,
+            artifact_results=artifact_composition.results,
+        )
+        capability_swwp = CapabilitySchedulerService(
+            orch.capability_registry,
+            durable_swwp,
+            clock=lambda: dt.datetime.now(dt.UTC),
+            id_factory=lambda prefix: f"{prefix}-{uuid.uuid4().hex[:20]}",
+        )
+        diagnostic_swwp = (
+            WorkerDiagnosticTranslator(diagnostic_service, instance_id) if diagnostic_service is not None else None
+        )
+        telemetry_swwp = WorkerTelemetryMetricsPort(metrics_registry)
+        allowed_job_types = frozenset(job_type for job_type in JobType if not job_type.value.startswith("control."))
+        allowed_queues = frozenset({QueueClass.ROUTINE, QueueClass.MAINTENANCE})
+        allowed_capabilities = declared_capability_names()
+
+        def make_swwp_session(websocket: WorkerSocket) -> LiveWorkerSession:
+            authorization = str(websocket.headers.get("authorization", ""))
+            presented = authorization[7:].strip() if authorization.lower().startswith("bearer ") else ""
+            policy = BearerTokenRegistrationPolicy(
+                expected_token=cfg.secrets.worker_token,
+                presented_token=presented,
+                queues=allowed_queues,
+                job_types=allowed_job_types,
+                capabilities=allowed_capabilities,
+            )
+            swwp_cfg = cfg.network.swwp
+            return LiveWorkerSession(
+                websocket,
+                durable=durable_swwp,
+                policy=policy,
+                capabilities=capability_swwp,
+                diagnostics=diagnostic_swwp,
+                telemetry=telemetry_swwp,
+                heartbeat_interval_seconds=swwp_cfg.heartbeat_interval_seconds,
+                heartbeat_timeout_seconds=swwp_cfg.heartbeat_timeout_seconds,
+                lease_seconds=swwp_cfg.lease_seconds,
+                assignment_ack_seconds=swwp_cfg.assignment_ack_seconds,
+                controller_epoch=max(1, int(dt.datetime.now(dt.UTC).timestamp())),
+                limits=ProtocolLimits(
+                    max_message_bytes=swwp_cfg.max_message_bytes,
+                    max_string_chars=DEFAULT_LIMITS.max_string_chars,
+                    max_collection_items=DEFAULT_LIMITS.max_collection_items,
+                    max_map_items=DEFAULT_LIMITS.max_map_items,
+                    max_depth=DEFAULT_LIMITS.max_depth,
+                    max_version_entries=DEFAULT_LIMITS.max_version_entries,
+                    max_heartbeat_leases=DEFAULT_LIMITS.max_heartbeat_leases,
+                    max_reconciliation_items=DEFAULT_LIMITS.max_reconciliation_items,
+                    max_retained_errors=DEFAULT_LIMITS.max_retained_errors,
+                    min_heartbeat_seconds=DEFAULT_LIMITS.min_heartbeat_seconds,
+                    max_heartbeat_seconds=DEFAULT_LIMITS.max_heartbeat_seconds,
+                ),
+            )
+
+        swwp_session_factory = make_swwp_session
     reload_service = None
     if db is not None and job_service is not None:
         candidate_store = CandidateStore(_operational_state_root(cfg) / "configuration-candidates")
@@ -470,6 +545,7 @@ async def _run_api_server_impl(
         auth_service=auth_service,
         job_service=job_service,
         capability_registry=getattr(orch, "capability_registry", None),
+        swwp_manager=swwp_manager,
     )
     app = create_app(
         control,
@@ -482,6 +558,15 @@ async def _run_api_server_impl(
         build_info=build_info,
         metrics=metrics_registry,
         instance_id=instance_id,
+        swwp_manager=swwp_manager,
+        swwp_session_factory=swwp_session_factory,
+        swwp_path=str(
+            getattr(
+                getattr(getattr(cfg, "network", None), "swwp", None),
+                "controller_path",
+                "/v1/workers/connect",
+            )
+        ),
     )
     lifecycle_records.stage(LifecycleStage.CONTROL_PLANE_READY, ready=False)
 
@@ -525,6 +610,7 @@ async def _run_api_server_impl(
             database=db,
             job_service=job_service,
             cfg=cfg,
+            swwp_manager=swwp_manager,
             marker_integration=marker_integration,
             secondary_failures=fatal[0].secondary_failures,
         )
@@ -564,6 +650,7 @@ async def _run_controller_session(
     database: Any,
     job_service: DurableJobService | None,
     cfg: Any,
+    swwp_manager: LiveWorkerSessionManager,
     marker_integration: _MarkerLifecycleIntegration,
     secondary_failures: SecondaryFailureLedger,
 ) -> BaseException | None:
@@ -593,6 +680,7 @@ async def _run_controller_session(
                 database=database,
                 job_service=job_service,
                 cfg=cfg,
+                swwp_manager=swwp_manager,
             ),
             timeout=cfg.lifecycle.total_seconds,
         )
@@ -667,6 +755,7 @@ async def _shutdown_controller(
     database: Any,
     job_service: DurableJobService | None,
     cfg: Any,
+    swwp_manager: LiveWorkerSessionManager,
 ) -> tuple[tuple[str, BaseException], ...]:
     if not lifecycle.force_requested and not api_task.done():
         await _wait_task_or_force(
@@ -691,6 +780,10 @@ async def _shutdown_controller(
         if publication_idle is False:
             log.warning("publication_fence_timeout")
     if lifecycle.state is LifecycleState.DRAINING:
+        await swwp_manager.drain(
+            deadline_at=dt.datetime.now(dt.UTC) + dt.timedelta(seconds=cfg.lifecycle.active_request_seconds),
+            reason="controller_shutdown",
+        )
         lifecycle.mark_stopping()
     await supervisor.stop()
     return await _close_resources(

@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import cast
 
-import httpx
+import httpx2
 import pytest
 
 from seasonalweather.tts.adapters import (
@@ -702,7 +702,7 @@ def test_credential_bounds_and_transport_tls_failure_are_redacted(tmp_path: Path
     key.write_text("sk-test-secret", encoding="ascii")
     tls = OpenAICompatibleAdapter(
         OpenAICompatibleConfig(base_url="https://api.example.test/v1", api_key_file=str(key), model="m", voice="v"),
-        transport=FakeTransport([httpx.ConnectError("private detail")]),
+        transport=FakeTransport([httpx2.ConnectError("private detail")]),
     )
     with pytest.raises(ProcessFailure) as tls_error:
         tls.synthesize(
@@ -769,7 +769,7 @@ def test_remote_timeout_and_malformed_token_response_are_classified(tmp_path: Pa
     key.write_text("sk-test-secret", encoding="ascii")
     timeout_adapter = OpenAICompatibleAdapter(
         OpenAICompatibleConfig(base_url="https://api.example.test/v1", api_key_file=str(key), model="m", voice="v"),
-        transport=FakeTransport([httpx.ReadTimeout("provider detail")]),
+        transport=FakeTransport([httpx2.ReadTimeout("provider detail")]),
     )
     with pytest.raises(ProcessFailure) as timeout_error:
         timeout_adapter.synthesize(
@@ -1099,7 +1099,7 @@ def test_seasonal_401_retry_keeps_original_synthesis_subdeadline(tmp_path: Path)
     )
     assert result.path.exists()
     synthesis_timeouts = [
-        cast(httpx.Timeout, call["timeout"]).read
+        cast(httpx2.Timeout, call["timeout"]).read
         for call in transport.requests
         if str(call["url"]).endswith("/v1/syntheses")
     ]

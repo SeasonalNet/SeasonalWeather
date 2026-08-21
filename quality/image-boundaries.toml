@@ -42,7 +42,7 @@ forbidden_dockerfile_tokens = [
 ]
 required_controller_packages = [
   "fastapi==",
-  "httpx==",
+  "httpx2==",
   "slixmpp==",
   "SQLAlchemy==",
   "uvicorn==",

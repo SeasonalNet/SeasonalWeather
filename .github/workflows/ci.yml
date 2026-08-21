@@ -9,9 +9,9 @@ on:
 
 jobs:
   python:
-    runs-on: [docker, victus-fast]
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Select suppression comparison base
@@ -29,11 +29,11 @@ jobs:
             base="HEAD^"
           fi
           git cat-file -e "${base}^{commit}"
-          echo "QUALITY_SUPPRESSIONS_BASE=$base" >> "$FORGEJO_ENV"
+          echo "QUALITY_SUPPRESSIONS_BASE=$base" >> "$GITHUB_ENV"
       - name: Install Python tooling
         run: |
-          apt-get update
-          apt-get install -y --no-install-recommends make python3 python3-venv python3-pip
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends make python3 python3-venv python3-pip
           python3 -m venv .venv-ci
           . .venv-ci/bin/activate
           python -m pip install --upgrade pip

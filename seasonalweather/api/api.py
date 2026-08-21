@@ -8,9 +8,9 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from http import HTTPStatus
-from typing import Any
+from typing import Any, cast
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, Response, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, Response, UploadFile, WebSocket
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
@@ -70,6 +70,13 @@ from .openapi import (
     STANDARD_PROBLEM_RESPONSES,
     install_openapi,
     json_response,
+)
+from .worker_sessions import (
+    LiveWorkerSession,
+    LiveWorkerSessionManager,
+    WorkerSocket,
+    install_live_worker_route,
+    run_live_worker_session,
 )
 
 _CODE_RE = re.compile(r"[^a-z0-9_-]+")
@@ -321,6 +328,9 @@ def create_app(
     build_info: BuildInfo | None = None,
     metrics: MetricsRegistry | None = None,
     instance_id: str | None = None,
+    swwp_manager: LiveWorkerSessionManager | None = None,
+    swwp_session_factory: Callable[[WorkerSocket], LiveWorkerSession] | None = None,
+    swwp_path: str = "/v1/workers/connect",
 ) -> FastAPI:
     command_store = store or CommandStore()
     if health_service is None:
@@ -363,7 +373,23 @@ def create_app(
     app.state.build_info = runtime_build_info
     app.state.metrics = metrics_registry
     app.state.instance_id = instance_id
+    app.state.swwp_manager = swwp_manager
     install_openapi(app)
+
+    if swwp_manager is not None and swwp_session_factory is not None:
+
+        async def connect_worker(websocket: WebSocket) -> None:
+            await run_live_worker_session(
+                cast(WorkerSocket, websocket),
+                manager=swwp_manager,
+                session_factory=swwp_session_factory,
+            )
+
+        install_live_worker_route(
+            app,
+            endpoint=connect_worker,
+            path=swwp_path,
+        )
 
     @app.middleware("http")
     async def _lifecycle_admission(

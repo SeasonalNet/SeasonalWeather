@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-import httpx
+import httpx2
 
 from ..cancellation import explicit_cancellation
 from ..failures import ProcessFailure
@@ -37,7 +37,7 @@ class TransportLike(Protocol):
         *,
         headers: Mapping[str, str],
         json: object,
-        timeout: httpx.Timeout,
+        timeout: httpx2.Timeout,
     ) -> ResponseLike: ...
 
     async def close(self) -> None: ...
@@ -49,7 +49,7 @@ class HttpxTransport:
     def __init__(self, *, verify_tls: bool) -> None:
         if not verify_tls:
             raise ValueError("remote TTS requires strict TLS verification")
-        self._client = httpx.AsyncClient(verify=True, follow_redirects=False)
+        self._client = httpx2.AsyncClient(verify=True, follow_redirects=False)
 
     async def request(
         self,
@@ -58,7 +58,7 @@ class HttpxTransport:
         *,
         headers: Mapping[str, str],
         json: object,
-        timeout: httpx.Timeout,
+        timeout: httpx2.Timeout,
     ) -> ResponseLike:
         request = self._client.build_request(method, url, headers=headers, json=json, timeout=timeout)
         return cast(ResponseLike, await self._client.send(request, stream=True))
@@ -83,11 +83,11 @@ def remaining_timeout(
     connect: float,
     total: float,
     operation_deadline: float | None = None,
-) -> httpx.Timeout:
+) -> httpx2.Timeout:
     _transport_fence(deadline, None, "transport", operation_deadline=operation_deadline)
     effective_operation_deadline = deadline if operation_deadline is None else operation_deadline
     remaining = min(deadline, effective_operation_deadline) - time.monotonic()
-    return httpx.Timeout(
+    return httpx2.Timeout(
         timeout=min(remaining, max(0.001, total)),
         connect=min(remaining, max(0.001, connect)),
         read=remaining,
@@ -103,7 +103,7 @@ async def fenced_transport_request(
     *,
     headers: Mapping[str, str],
     payload: object,
-    timeout: httpx.Timeout,
+    timeout: httpx2.Timeout,
     deadline: float,
     operation_deadline: float | None = None,
     cancellation: object,

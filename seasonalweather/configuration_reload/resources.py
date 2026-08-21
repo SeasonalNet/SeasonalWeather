@@ -413,7 +413,6 @@ class OrchestratorResourcePreparer:
                 admission_check=lambda: self.orch.lifecycle.require(WorkClass.TTS),
                 activity_context=lambda: self.activities.activity(TTS_ACTIVITY),
                 capability_check=tts_capability_check or getattr(self.orch, "tts_capability_check", None),
-                execution_executor=getattr(self.orch, "tts_execution_port", None),
                 seasonal_ttsd_config=configuration.tts.seasonal_ttsd,
                 openai_compatible_config=configuration.tts.openai_compatible,
                 tts_data_base=configuration.paths.operational_state_dir,

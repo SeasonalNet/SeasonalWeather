@@ -158,7 +158,9 @@ def test_control_module_has_no_duplicate_job_repository_or_scheduler_authority()
 
 def test_control_and_api_have_no_swwp_or_simulation_authority():
     control = (ROOT / "seasonalweather/control.py").read_text(encoding="utf-8")
-    api = "\n".join(path.read_text(encoding="utf-8") for path in (ROOT / "seasonalweather/api").glob("*.py"))
+    # server.py is the approved live-SWWP composition owner; this assertion is
+    # for the route layer, while architecture_check scans the complete tree.
+    api = (ROOT / "seasonalweather/api/api.py").read_text(encoding="utf-8")
 
     for source in (control, api):
         assert "seasonalweather.swwp" not in source
@@ -168,7 +170,9 @@ def test_control_and_api_have_no_swwp_or_simulation_authority():
 
 def test_control_and_api_have_no_capability_scheduler_authority():
     control = (ROOT / "seasonalweather/control.py").read_text(encoding="utf-8")
-    api = "\n".join(path.read_text(encoding="utf-8") for path in (ROOT / "seasonalweather/api").glob("*.py"))
+    # server.py is the approved live-SWWP composition owner; this assertion is
+    # for the route layer, while architecture_check scans the complete tree.
+    api = (ROOT / "seasonalweather/api/api.py").read_text(encoding="utf-8")
 
     for source in (control, api):
         assert "CapabilityRegistry" not in source

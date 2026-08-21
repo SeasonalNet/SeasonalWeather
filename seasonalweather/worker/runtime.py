@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime as dt
+import logging
 from collections.abc import Callable
 
 from ..build_metadata import current_build_info
@@ -27,6 +28,8 @@ from .handlers import HandlerContext, HandlerRegistry, WorkerHandlerError
 from .health import WorkerHealthStore, health_path
 from .transport import WorkerConnection, WorkerTransport
 
+log = logging.getLogger("seasonalweather.worker")
+
 
 class WorkerRuntime:
     def __init__(
@@ -39,6 +42,7 @@ class WorkerRuntime:
         health_file: str | None = None,
         image_profile: str | None = None,
         records: LifecycleRecordWriter | None = None,
+        reconnect: bool = False,
     ) -> None:
         self.session = session
         self.handlers = handlers
@@ -51,6 +55,7 @@ class WorkerRuntime:
             clock=self.clock,
         )
         self.image_profile = image_profile
+        self.reconnect = reconnect
         self.health = WorkerHealthStore(health_path(health_file), clock=self.clock)
         self._send_lock = asyncio.Lock()
         self._stop = asyncio.Event()
@@ -62,31 +67,16 @@ class WorkerRuntime:
         self._failure: BaseException | None = None
         self._shutdown_requested = False
         self._draining_recorded = False
+        self._prior_session_id: str | None = None
+        self._prior_controller_epoch: int | None = None
+        self._reconnect_attempt = 0
 
     async def run(self) -> None:
         self.records.startup_identity(image_profile=self.image_profile)
         self.records.stage(LifecycleStage.SERVICE_STARTING, ready=False)
         self._publish_health(state="starting", ready=False, accepting_new_jobs=False, reason="connecting")
         try:
-            connection = await self.transport.connect()
-        except BaseException as exc:
-            self._failure = exc
-            self.records.stage(LifecycleStage.SERVICE_STARTED_DEGRADED, ready=False, reason="connect_failed")
-            self._publish_health(state="failed", ready=False, accepting_new_jobs=False, reason="connect_failed")
-            raise
-        self._connection = connection
-        try:
-            await self._send(self.session.connect())
-            receiver = asyncio.create_task(self._receive_loop(), name="seasonalweather-worker-receiver")
-            heartbeat = asyncio.create_task(self._heartbeat_loop(), name="seasonalweather-worker-heartbeat")
-            try:
-                await receiver
-            finally:
-                self._stop.set()
-                heartbeat.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await heartbeat
-                await self._drain_assignment_tasks()
+            await self._run_connection_loop()
         except asyncio.CancelledError:
             if self._shutdown_requested:
                 return
@@ -106,9 +96,7 @@ class WorkerRuntime:
             self._publish_health(state="failed", ready=False, accepting_new_jobs=False, reason="worker_failed")
             raise
         finally:
-            with contextlib.suppress(Exception):
-                await connection.close()
-            self._connection = None
+            await self._drain_assignment_tasks()
             if self._failure is None:
                 self.session.set_readiness(
                     WorkerReadinessState.STOPPED,
@@ -117,6 +105,74 @@ class WorkerRuntime:
                 )
                 self.records.stage(LifecycleStage.SERVICE_STOPPED, ready=False)
                 self._publish_health(state="stopped", ready=False, accepting_new_jobs=False, reason="stopped")
+
+    async def _run_connection_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                await self._connect_once()
+                self._reconnect_attempt = 0
+                if self.session.state in {WorkerState.CLOSED, WorkerState.FAILED}:
+                    raise RuntimeError("worker session closed by controller")
+                if not self.reconnect:
+                    return
+            except asyncio.CancelledError:
+                raise
+            except BaseException as exc:
+                if self._shutdown_requested:
+                    return
+                if self.session.state in {WorkerState.CLOSED, WorkerState.FAILED}:
+                    raise
+                await self._schedule_reconnect(exc)
+
+    async def _schedule_reconnect(self, exc: BaseException) -> None:
+        self._reconnect_attempt += 1
+        delay = min(30.0, 0.5 * (2 ** min(self._reconnect_attempt - 1, 6)))
+        log.warning(
+            "worker_swwp_reconnect_scheduled attempt=%s delay_seconds=%s error=%s",
+            self._reconnect_attempt,
+            delay,
+            type(exc).__name__,
+        )
+        self.records.stage(
+            LifecycleStage.SERVICE_STARTED_DEGRADED,
+            ready=False,
+            reason="connection_lost",
+        )
+        self._publish_health(
+            state="reconnecting",
+            ready=False,
+            accepting_new_jobs=False,
+            reason="connection_lost",
+        )
+        try:
+            await asyncio.wait_for(self._stop.wait(), timeout=delay)
+        except TimeoutError:
+            return
+
+    async def _connect_once(self) -> None:
+        self._registered.clear()
+        connection = await self.transport.connect()
+        self._connection = connection
+        try:
+            await self._send(self.session.connect())
+            receiver = asyncio.create_task(self._receive_loop(), name="seasonalweather-worker-receiver")
+            heartbeat = asyncio.create_task(self._heartbeat_loop(), name="seasonalweather-worker-heartbeat")
+            try:
+                await receiver
+            finally:
+                heartbeat.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await heartbeat
+        finally:
+            with contextlib.suppress(Exception):
+                await connection.close()
+            self._connection = None
+            if self._shutdown_requested:
+                self._stop.set()
+            elif not self._stop.is_set():
+                self._prior_session_id = self.session.session_id
+                self._prior_controller_epoch = self.session.controller_epoch
+                self.session.transport_lost()
 
     async def stop(self) -> None:
         self._shutdown_requested = True
@@ -146,7 +202,18 @@ class WorkerRuntime:
 
     async def _handle_payload(self, payload: object) -> None:
         if isinstance(payload, Registered):
+            prior_session_id = self._prior_session_id
+            prior_controller_epoch = self._prior_controller_epoch
             self._handle_registered(payload)
+            if prior_session_id is not None and self.session.state is WorkerState.ACTIVE:
+                self._prior_session_id = None
+                self._prior_controller_epoch = None
+                await self._send(
+                    self.session.reconnect_report(
+                        prior_session_id=prior_session_id,
+                        prior_controller_epoch=prior_controller_epoch,
+                    )
+                )
         elif isinstance(payload, JobAssignmentPayload):
             self._handle_assignment(payload)
         elif isinstance(payload, Cancel):

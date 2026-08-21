@@ -115,10 +115,11 @@ def _check_mount_policy(config: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     controller = config["roles"]["controller"]
     worker = config["roles"]["worker"]
-    if tuple(controller["secret_files"]) != SECRET_ENVIRONMENT_NAMES:
+    controller_secret_names = tuple(name for name in SECRET_ENVIRONMENT_NAMES if name != "SEASONAL_WORKER_TOKEN")
+    if tuple(controller["secret_files"]) != controller_secret_names:
         errors.append("controller secret allowlist must match the known secret file bindings")
-    if worker["secret_files"] != []:
-        errors.append("worker secret allowlist must be empty until worker authentication requires credentials")
+    if worker["secret_files"] != ["SEASONAL_WORKER_TOKEN"]:
+        errors.append("worker secret allowlist must contain only the SWWP worker credential")
     if any(path in controller["writable_mounts"] for path in controller["read_only_mounts"]):
         errors.append("controller read-only and writable mount policies overlap")
     if any(path in worker["writable_mounts"] for path in worker["read_only_mounts"]):

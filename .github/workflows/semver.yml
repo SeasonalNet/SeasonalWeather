@@ -1,0 +1,43 @@
+name: SemVer guardrails
+
+on:
+  push:
+  pull_request:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  semver:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch release tag object
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          echo "release tag: ${TAG}"
+          echo "tag object type: $(git cat-file -t "${TAG}")"
+          git show --no-patch "${TAG}"
+
+      - name: Show Python version
+        run: python3 --version
+
+      - name: Validate package version
+        run: python3 tools/semver_guard.py check-working
+
+      - name: Compile guardrail tooling
+        run: python3 -m py_compile tools/semver_guard.py
+
+      - name: Validate release tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          python3 tools/semver_guard.py check-tag "${GITHUB_REF_NAME}"
+          python3 tools/semver_guard.py check-tag-order "${GITHUB_REF_NAME}"

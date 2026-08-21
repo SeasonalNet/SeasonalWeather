@@ -306,6 +306,8 @@ _DECLARED_POLICY: dict[tuple[str, ...], ReloadDisposition] = {
     ("logs", "runtime", "conductor_alert_push"): ReloadDisposition.RESTART_REQUIRED,
     ("logs", "runtime", "conductor_cycle_push"): ReloadDisposition.RESTART_REQUIRED,
     ("logs", "runtime", "conductor_live_time_push"): ReloadDisposition.RESTART_REQUIRED,
+    ("logs", "runtime", "httpcore2_level"): ReloadDisposition.RESTART_REQUIRED,
+    ("logs", "runtime", "httpx2_level"): ReloadDisposition.RESTART_REQUIRED,
     ("logs", "runtime", "httpcore_level"): ReloadDisposition.RESTART_REQUIRED,
     ("logs", "runtime", "httpx_level"): ReloadDisposition.RESTART_REQUIRED,
     ("logs", "runtime", "ipaws_poll_summary"): ReloadDisposition.RESTART_REQUIRED,

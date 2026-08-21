@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-import httpx
+import httpx2
 
 from seasonalweather.api.api import create_app
 from seasonalweather.api.auth import ApiPrincipal, get_api_principal
@@ -18,10 +18,10 @@ class FakeControl:
         return {"ok": True, "reason": reason, "actor": actor}
 
 
-def _request(app: Any, method: str, path: str, **kwargs: Any) -> httpx.Response:
-    async def send() -> httpx.Response:
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app),
+def _request(app: Any, method: str, path: str, **kwargs: Any) -> httpx2.Response:
+    async def send() -> httpx2.Response:
+        async with httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=app),
             base_url="http://testserver",
         ) as client:
             return await client.request(method, path, **kwargs)

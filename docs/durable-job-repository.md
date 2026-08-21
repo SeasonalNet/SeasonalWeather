@@ -157,8 +157,8 @@ Readiness requires this component only when `jobs.required` is true.
 
 ```yaml
 jobs:
-  enabled: false
-  required: false
+  enabled: true
+  required: true
   path: "/var/lib/seasonalweather/jobs/jobs.sqlite3"
   busy_timeout_ms: 5000
   lease_seconds: 60
@@ -176,11 +176,11 @@ change `/etc/seasonalweather/config.yaml`.
 
 ## Deferred boundaries
 
-P1-07 deliberately does not own SWWP. P1-08 adds a separate
-`seasonalweather.swwp` package whose sole concrete adapter calls these public
-repository/scheduler ports; its schemas, session machines, and test-only
-simulated peers are documented in [`swwp.md`](swwp.md). There is still no live
-connection, worker handler/process, embedded production executor, artifact
-staging or promotion, active-file mutation, result fencing/publication,
-PostgreSQL, Redis, container, or deployment behavior. P1-09 dynamic capability
-state remains simulated-only and ephemeral.
+P1-07 deliberately does not own SWWP. P2-08 composes the separate
+`seasonalweather.swwp` adapter with the live controller WebSocket session;
+schemas, session machines, and deterministic peers are documented in
+[`swwp.md`](swwp.md). The controller owns durable scheduling, artifact staging
+and promotion, active-file mutation, and result fencing/publication; workers
+own handler execution only. PostgreSQL, Redis, and deployment topology remain
+separate boundaries. Dynamic capability state is controller memory refreshed
+by live sessions and is reconciled on disconnect.

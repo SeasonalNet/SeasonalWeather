@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import secrets
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -48,6 +49,35 @@ class StaticRegistrationPolicy:
         if principal.worker_id != registration.worker_id:
             raise PermissionError("transport principal does not match worker identity")
         return principal
+
+
+@dataclass(frozen=True)
+class BearerTokenRegistrationPolicy:
+    """Authorize a live worker transport without putting credentials on SWWP."""
+
+    expected_token: str
+    presented_token: str
+    queues: frozenset[QueueClass]
+    job_types: frozenset[JobType]
+    capabilities: frozenset[str]
+
+    def principal(self) -> AuthenticatedPrincipal | None:
+        return None
+
+    def authorize(self, registration: Register, now: dt.datetime) -> AuthenticatedPrincipal:
+        del now
+        if not self.expected_token or not secrets.compare_digest(self.presented_token, self.expected_token):
+            raise PermissionError("worker transport bearer token is invalid")
+        return AuthenticatedPrincipal(
+            principal_id="worker-bearer-token",
+            worker_id=registration.worker_id,
+            enabled=True,
+            revoked=False,
+            expires_at=None,
+            queues=self.queues,
+            job_types=self.job_types,
+            capabilities=self.capabilities,
+        )
 
 
 @dataclass(frozen=True)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-import httpx
+import httpx2
 
 from seasonalweather.api.api import create_app
 from seasonalweather.api.auth import ApiPrincipal, get_api_principal
@@ -28,10 +28,10 @@ def _request(
     path: str,
     *,
     json: dict[str, Any] | None = None,
-) -> httpx.Response:
-    async def send() -> httpx.Response:
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
+) -> httpx2.Response:
+    async def send() -> httpx2.Response:
+        transport = httpx2.ASGITransport(app=app)
+        async with httpx2.AsyncClient(
             transport=transport,
             base_url="http://testserver",
         ) as client:

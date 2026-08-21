@@ -2,7 +2,7 @@ aiodns
 bcrypt
 coloredlogs
 fastapi
-httpx
+httpx2
 passlib
 PyMySQL
 PyYAML

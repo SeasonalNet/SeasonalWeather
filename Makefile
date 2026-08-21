@@ -5,12 +5,13 @@ BUILD_INFO ?= build/build-info.json
 BUILD_PROFILE ?= source
 TARGET_PLATFORM ?= unknown
 
-.PHONY: format-check lint typecheck basedpyright architecture-check dependency-check
+.PHONY: format-check lint typecheck basedpyright architecture-check dependency-check suppressions-check
 .PHONY: dead-code-check security-check complexity-check image-boundaries-check container-security-check
 .PHONY: exceptions-check diagnostics-check diagnostics-build diagnostics-export
 .PHONY: quality test compile check build-info version image images compose-check release
 
 DIAGNOSTICS_EXPORT_DIR ?= build/diagnostics
+QUALITY_SUPPRESSIONS_BASE ?= HEAD
 
 format-check:
 	$(PYTHON) -m tools.quality.run_check format
@@ -30,6 +31,9 @@ architecture-check:
 
 dependency-check:
 	$(PYTHON) -m tools.quality.run_check dependency
+
+suppressions-check:
+	$(PYTHON) -m tools.quality.suppressions_check --base-ref "$(QUALITY_SUPPRESSIONS_BASE)"
 
 dead-code-check:
 	$(PYTHON) -m tools.quality.run_check dead-code
@@ -58,7 +62,7 @@ diagnostics-build:
 diagnostics-export:
 	$(PYTHON) -m seasonalweather diagnostics export --output $(DIAGNOSTICS_EXPORT_DIR)
 
-quality: exceptions-check diagnostics-check format-check lint typecheck basedpyright architecture-check dependency-check dead-code-check security-check complexity-check image-boundaries-check container-security-check
+quality: exceptions-check diagnostics-check format-check lint typecheck basedpyright architecture-check dependency-check suppressions-check dead-code-check security-check complexity-check image-boundaries-check container-security-check
 
 test:
 	$(PYTHON) -m pytest

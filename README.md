@@ -78,18 +78,16 @@ Freeze products are supported natively. `FZ.W` maps to SAME `FZW` (**Freeze Warn
 - RFC 9457 Problem Details error responses (`application/problem+json`) with `code`, `details`, and `request_id` extensions for operator/debug use.
 - Typed command and bounded-job contracts are documented in
   [`docs/command-job-contracts.md`](docs/command-job-contracts.md). A separate
-  controller-owned WAL job database and non-executing durable scheduler are
-  documented in
-  [`docs/durable-job-repository.md`](docs/durable-job-repository.md); external
-  workers are not yet implemented. SWWP/1 schemas, controller/worker state
-  machines, and simulated-only protocol validation are documented in
-  [`docs/swwp.md`](docs/swwp.md); there is no production socket or worker
-  process yet.
+  controller-owned WAL job database and durable scheduler are documented in
+  [`docs/durable-job-repository.md`](docs/durable-job-repository.md). SWWP/1
+  live WebSocket sessions, worker authentication, reconnect/reconciliation,
+  and deterministic protocol validation are documented in
+  [`docs/swwp.md`](docs/swwp.md) and [`docs/worker-runtime.md`](docs/worker-runtime.md).
 - Dynamic worker capability records, epochs/digests, freshness, probes,
-  qualification, and capacity reservations are implemented for deterministic
-  simulated peers and documented in
+  qualification, and capacity reservations are updated by live workers and
+  deterministic peers and documented in
   [`docs/worker-capabilities.md`](docs/worker-capabilities.md). They do not add
-  a live worker or execution path.
+  the controller's live assignment path.
 - Controller and worker container health commands, startup identity records,
   readiness gating, and bounded lifecycle/shutdown behavior are documented in
   [`docs/p2-06-health-lifecycle.md`](docs/p2-06-health-lifecycle.md).
@@ -239,7 +237,8 @@ read-only `0400` files under `paths.secret_dir` (default `/run/secrets`), using
 the environment variable name as the filename. Present mounted files override
 environment compatibility values; host/systemd deployments may continue using
 `seasonalweather.env`. The controller allowlist is checked by
-`make container-security-check`; worker profiles receive no secret files.
+`make container-security-check`; worker profiles receive only
+`SEASONAL_WORKER_TOKEN`.
 
 ### API authentication modes
 
@@ -364,7 +363,9 @@ For the wrapper install/runtime contract, see `docs/runtime-wrappers.md`.
 ## Contributing
 
 Development setup, change standards, architecture ownership, and required
-quality checks are documented in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+quality checks are documented in [`CONTRIBUTING.md`](CONTRIBUTING.md) and
+[`docs/quality-and-ci.md`](docs/quality-and-ci.md), including Forgejo/GitHub
+workflow parity and the no-net-new-suppressions guardrail.
 
 ---
 
@@ -489,7 +490,7 @@ SeasonalWeather now has a central runtime logging policy in `seasonalweather/log
 
 The defaults are intentionally quieter for systemd/journalctl:
 
-- suppress `httpx` and `httpcore` request lines unless you opt back in
+- suppress `httpx2` and `httpcore2` request lines unless you opt back in
 - suppress routine CAP/IPAWS zero-change poll summaries
 - suppress routine cycle conductor push chatter and segment refresher synthesis chatter
 - keep normal `INFO`/`WARNING`/`ERROR` application logs for real state changes and failures
@@ -501,8 +502,8 @@ logs:
   runtime:
     level: INFO
     color: never        # never|auto|always; ANSI output is presentation-only
-    httpx_level: WARNING
-    httpcore_level: WARNING
+    httpx2_level: WARNING
+    httpcore2_level: WARNING
     uvicorn_access_level: WARNING
     uvicorn_error_level: INFO
     cap_poll_summary: false

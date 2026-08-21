@@ -102,7 +102,6 @@ from .same.locations import normalize_same_allow_set as _normalize_same_allow_se
 from .same.targeting import SameTargetResolver
 from .tts.audio import wav_duration_seconds
 from .tts.tts import TTS
-from .tts.async_bridge import EmbeddedExecutionPort
 from .tts.admission import (
     ControllerLocalPublicationFence,
     ControllerLocalQualificationSource,
@@ -172,7 +171,6 @@ class Orchestrator:
         self.artifact_service: object | None = None
         self.artifact_results: object | None = None
         self.configuration_generation = 0
-        self.tts_execution_port = EmbeddedExecutionPort()
         self.tts_publication_fence = ControllerLocalPublicationFence()
         self.capability_registry = capability_registry or CapabilityRegistry(
             allowed_capabilities=declared_capability_names() | LocalEngineRegistry.capability_names()
@@ -233,7 +231,6 @@ class Orchestrator:
             admission_check=lambda: self.lifecycle.require(WorkClass.TTS),
             activity_context=lambda: self.reload_activities.activity(RELOAD_TTS_ACTIVITY),
             capability_check=self.tts_capability_check,
-            execution_executor=self.tts_execution_port,
             seasonal_ttsd_config=cfg.tts.seasonal_ttsd,
             openai_compatible_config=cfg.tts.openai_compatible,
             tts_data_base=cfg.paths.operational_state_dir,
@@ -978,12 +975,9 @@ class Orchestrator:
 
     async def run(self) -> None:
         """Run the SeasonalWeather service runtime."""
-        try:
-            await self.service_runtime.run()
-            if self.lifecycle.state is LifecycleState.FAILED:
-                raise await self.supervisor.wait_for_fatal()
-        finally:
-            self.tts_execution_port.shutdown(wait=True)
+        await self.service_runtime.run()
+        if self.lifecycle.state is LifecycleState.FAILED:
+            raise await self.supervisor.wait_for_fatal()
 
 
 def _version_command(argv: list[str]) -> int:

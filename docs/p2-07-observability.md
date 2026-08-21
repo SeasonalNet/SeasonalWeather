@@ -88,5 +88,6 @@ or unavailable. Queue drops and delivery failures are represented by local
 metrics and the SWOBS diagnostic catalog.
 
 P2-07 does not replace P2-06 lifecycle ownership, P1-13 runtime diagnostic
-ownership, or implement real worker cutover and embedded-executor removal from
-P2-08.
+ownership. P2-08 now supplies the live worker session and removes the
+controller-local embedded executor; this document's telemetry boundary remains
+unchanged.

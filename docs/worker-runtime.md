@@ -12,7 +12,9 @@ seasonalweather worker \
 The same values may be supplied through `SEASONALWEATHER_CONTROLLER_URL`,
 `SEASONALWEATHER_WORKER_ID`, `SEASONALWEATHER_WORKER_INSTANCE_ID`,
 `SEASONALWEATHER_WORKER_EPOCH`, `SEASONALWEATHER_WORKER_SLOTS`, and
-`SEASONALWEATHER_WORKER_PROFILE`.
+`SEASONALWEATHER_WORKER_PROFILE`. The live connection credential is supplied
+through `--token` or `SEASONALWEATHER_WORKER_TOKEN`; that value is mounted only
+as the worker service's dedicated secret.
 
 ## Profiles
 
@@ -45,8 +47,10 @@ and lease reconciliation.
 The worker initiates an outbound SWWP/1 connection using the exact
 `seasonalweather.worker.v1` subprotocol. It sends registration, responds to
 controller assignments, propagates cancellation, emits bounded typed results
-or sanitized typed failures, sends heartbeats, and retains the existing
-session-machine reconciliation behavior.
+or sanitized typed failures, sends heartbeats, and retains the session-machine
+reconciliation behavior. A dropped connection is retried with bounded
+exponential backoff; after a new registration the worker reports prior-session
+leases and unacknowledged completions for controller-owned reconciliation.
 
 Handlers receive only the typed assignment and a bounded cancellation/deadline
 context. They do not import controller databases, API, broadcast, Liquidsoap,
@@ -54,8 +58,8 @@ NWWS, or artifact-publication authorities. The default reference handlers fail
 closed when a deployment has not supplied its controller-owned input/artifact
 resolver; they never fabricate a successful result from an opaque reference.
 
-P2-03 does not implement the controller WebSocket endpoint, complete live
-controller/worker cutover, or removal of the transitional embedded executor.
-Those boundaries remain owned by later Phase 2 packets as specified by
-Revision 10. P2-06 adds process health and lifecycle reporting without adding
-a worker-facing HTTP health server.
+P2-08 owns the controller WebSocket endpoint, live controller/worker cutover,
+and removal of the controller's transitional embedded TTS executor. A missing
+or unqualified worker leaves job readiness unavailable; the controller never
+falls back to local execution. P2-06 adds process health and lifecycle
+reporting without adding a worker-facing HTTP health server.

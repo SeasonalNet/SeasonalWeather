@@ -9,7 +9,7 @@ import shutil
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-import httpx
+import httpx2
 
 from ..config import AppConfig
 from ..broadcast.product_text import (
@@ -35,7 +35,7 @@ class SameTargetResolver:
         self._same_fips_allow_set = same_fips_allow_set
         self._cache_dir = Path(cfg.paths.cache_dir)
 
-        self._zone_client: httpx.AsyncClient | None = None
+        self._zone_client: httpx2.AsyncClient | None = None
         self._zone_cache_same: dict[str, list[str]] = {}
         self._zone_cache_fail: dict[str, dt.datetime] = {}
         self._zone_lock = asyncio.Lock()
@@ -83,9 +83,7 @@ class SameTargetResolver:
         c3 = "".join(ch for ch in (county3 or "") if ch.isdigit()).zfill(3)
         if len(c3) != 3:
             return None
-        return _ugc.same_from_county_zone(
-            f"{(state_abbr or '').strip().upper()}C{c3}"
-        )
+        return _ugc.same_from_county_zone(f"{(state_abbr or '').strip().upper()}C{c3}")
 
     def _same6_to_county_zone_id(self, same6: str) -> tuple[str | None, str | None]:
         """Convert SAME PSSCCC (6 digits) to NWS county-zone ID like 'MDC031'."""
@@ -264,8 +262,18 @@ class SameTargetResolver:
 
                 token_re = re.compile(r"\bbp\d{2}[a-z]{2}\d{2}\.dbx\b", re.IGNORECASE)
                 mon_map = {
-                    "ja": 1, "fe": 2, "mr": 3, "ap": 4, "my": 5, "jn": 6,
-                    "jl": 7, "au": 8, "se": 9, "oc": 10, "no": 11, "de": 12,
+                    "ja": 1,
+                    "fe": 2,
+                    "mr": 3,
+                    "ap": 4,
+                    "my": 5,
+                    "jn": 6,
+                    "jl": 7,
+                    "au": 8,
+                    "se": 9,
+                    "oc": 10,
+                    "no": 11,
+                    "de": 12,
                 }
 
                 def tok_key(tok: str) -> tuple[int, int, int]:
@@ -283,7 +291,9 @@ class SameTargetResolver:
                     client = await self._ensure_zone_client()
                     r = await client.get(index_url)
                     if r.status_code == 200 and r.text:
-                        toks = sorted({m.group(0).lower() for m in token_re.finditer(r.text)}, key=tok_key, reverse=True)
+                        toks = sorted(
+                            {m.group(0).lower() for m in token_re.finditer(r.text)}, key=tok_key, reverse=True
+                        )
                         # Try newest-first; cap tries to avoid hammering.
                         for tok in toks[:20]:
                             cand = base_url + tok
@@ -367,12 +377,17 @@ class SameTargetResolver:
                         tmp.replace(path)
                         log.info("Marine areas .txt database refreshed: %s (%d bytes)", path, len(r.content))
                     else:
-                        log.warning("Marine areas .txt database fetch failed (status=%s). Using cache if present.", r.status_code)
+                        log.warning(
+                            "Marine areas .txt database fetch failed (status=%s). Using cache if present.",
+                            r.status_code,
+                        )
                 except Exception:
                     log.exception("Marine areas .txt database download failed; using cache if present")
 
             if not path.exists():
-                log.info("Marine areas .txt database not available (no cache file). Marine zone->SAME mapping unavailable.")
+                log.info(
+                    "Marine areas .txt database not available (no cache file). Marine zone->SAME mapping unavailable."
+                )
                 self._mareas_loaded = True
                 self._mareas_map = {}
                 return
@@ -386,7 +401,7 @@ class SameTargetResolver:
 
             self._mareas_loaded = True
 
-    async def _ensure_zone_client(self) -> httpx.AsyncClient:
+    async def _ensure_zone_client(self) -> httpx2.AsyncClient:
         if self._zone_client is not None:
             return self._zone_client
 
@@ -397,8 +412,8 @@ class SameTargetResolver:
         if not ua:
             ua = "SeasonalWeather (NWS zone mapper)"
 
-        self._zone_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(15.0, connect=8.0),
+        self._zone_client = httpx2.AsyncClient(
+            timeout=httpx2.Timeout(15.0, connect=8.0),
             headers={
                 "User-Agent": ua,
                 "Accept": "application/geo+json, application/json;q=0.9, */*;q=0.8",
@@ -514,8 +529,6 @@ class SameTargetResolver:
             except Exception:
                 pass
 
-
-
         # Marine zones: try mareas crosswalk (ANZ/AMZ/GMZ/LMZ/PZZ/etc)
         if re.fullmatch(r"[A-Z]{3}\d{3}", zid):
             try:
@@ -526,7 +539,7 @@ class SameTargetResolver:
                     return list(lst2)
             except Exception:
                 pass
-# Otherwise, ask NWS API. Most UGC tokens are forecast zones; marine ones might be under "marine".
+        # Otherwise, ask NWS API. Most UGC tokens are forecast zones; marine ones might be under "marine".
         # We try a small ordered list.
         async with self._zone_lock:
             # Check again after acquiring lock (double-checked caching)
@@ -553,7 +566,9 @@ class SameTargetResolver:
             self._zone_cache_fail[zid] = dt.datetime.now(tz=self._tz)
             return []
 
-    async def _nwws_same_targets_from_texts(self, primary_text: str, secondary_text: str) -> tuple[list[str], list[str], str, bool, "dt.datetime | None"]:
+    async def _nwws_same_targets_from_texts(
+        self, primary_text: str, secondary_text: str
+    ) -> tuple[list[str], list[str], str, bool, "dt.datetime | None"]:
         """
         Returns:
           zones_found, in_area_same, source_label, mapping_success, ugc_expires_utc
