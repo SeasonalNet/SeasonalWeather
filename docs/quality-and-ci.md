@@ -49,13 +49,15 @@ inline suppressions.
 
 Forgejo is the canonical SeasonalWeather CI authority:
 
-- `.forgejo/workflows/ci.yml` runs `make check` with the explicit suppression
-  comparison base.
+- `.forgejo/workflows/ci.yml` provisions or reuses Docker/Buildx in the job,
+  then runs `make phase2-gate` with the explicit suppression comparison base.
 - `.forgejo/workflows/security.yml` runs the repository Gitleaks contract.
 - `.forgejo/workflows/semver.yml` validates working and release-tag versions.
 
 GitHub parity is maintained in the corresponding `.github/workflows/` files.
 GitHub uses `ubuntu-latest` and the equivalent hosted-runner package setup;
-the repository check, suppression base selection, security scan, and SemVer
-guardrails remain the same. GitHub results are supporting parity evidence and
-do not replace Forgejo acceptance.
+the repository phase gate, suppression base selection, security scan, and
+SemVer guardrails remain the same. GitHub uses its native Docker support;
+Forgejo's CI-only bootstrap reuses a working endpoint or starts an ephemeral
+daemon when the Docker job container needs one. GitHub results are supporting
+parity evidence and do not replace Forgejo acceptance.

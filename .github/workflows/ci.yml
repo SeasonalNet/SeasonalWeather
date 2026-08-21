@@ -38,7 +38,7 @@ jobs:
           . .venv-ci/bin/activate
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-dev.txt
-      - name: Run the repository check interface
+      - name: Run the Phase 2 exit gate
         run: |
           . .venv-ci/bin/activate
-          make check
+          make phase2-gate

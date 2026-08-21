@@ -5,6 +5,7 @@ The stable entrypoints are:
 
 ```text
 make check
+make phase2-gate
 make image
 make images
 make compose-check
@@ -12,7 +13,8 @@ make release
 ```
 
 `make check` runs compilation, the repository quality gates, and the complete
-test suite. CI calls the same target. `make image` and `make images` invoke the
+test suite. `make phase2-gate` adds the complete image matrix and built-image
+contract inspection used by CI. `make image` and `make images` invoke the
 declarative `docker-bake.hcl` matrix through the thin
 `tools.build_interface` wrapper. Each image target generates its own
 profile-specific build record before the target is built. P2-02 owns the

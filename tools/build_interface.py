@@ -13,6 +13,14 @@ from seasonalweather.build_metadata import BuildInfo, BuildInfoError
 ROOT = Path(__file__).resolve().parents[1]
 BAKE_FILE = ROOT / "docker-bake.hcl"
 IMAGE_TARGETS = ("controller", "routine-worker", "piper", "legacy-tts", "maintenance", "development")
+DOCKER_ENVIRONMENT_KEYS = (
+    "DOCKER_CONFIG",
+    "DOCKER_CONTEXT",
+    "DOCKER_HOST",
+    "DOCKER_CERT_PATH",
+    "DOCKER_TLS_VERIFY",
+    "BUILDX_CONFIG",
+)
 
 
 def _load(path: Path) -> BuildInfo:
@@ -28,7 +36,7 @@ def _load(path: Path) -> BuildInfo:
 def _controlled_environment(info: BuildInfo) -> dict[str, str]:
     """Pass only build inputs explicitly represented in the build record."""
 
-    return {
+    environment = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "SW_PROJECT": info.project,
         "SW_VERSION": info.software_version,
@@ -52,13 +60,15 @@ def _controlled_environment(info: BuildInfo) -> dict[str, str]:
         "SW_DIAGNOSTIC_CATALOG_VERSION": str(info.diagnostic_catalog_version),
         "SW_CAPABILITY_MANIFEST_VERSION": str(info.capability_manifest_version),
     }
+    environment.update({key: os.environ[key] for key in DOCKER_ENVIRONMENT_KEYS if key in os.environ})
+    return environment
 
 
 def run_image(*, build_info: Path, targets: tuple[str, ...]) -> int:
     if not BAKE_FILE.is_file():
         raise SystemExit(f"image matrix is missing: {BAKE_FILE}")
     info = _load(build_info)
-    command = ["docker", "buildx", "bake", "--file", str(BAKE_FILE), *targets]
+    command = ["docker", "buildx", "bake", "--load", "--file", str(BAKE_FILE), *targets]
     try:
         completed = subprocess.run(command, cwd=ROOT, env=_controlled_environment(info), check=False)
     except OSError as exc:

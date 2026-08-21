@@ -113,6 +113,16 @@ def test_bake_environment_contains_only_controlled_identity_inputs() -> None:
     assert "SECRET_TOKEN" not in environment
 
 
+def test_bake_environment_preserves_only_docker_transport_inputs(monkeypatch) -> None:
+    monkeypatch.setenv("DOCKER_HOST", "unix:///tmp/docker.sock")
+    monkeypatch.setenv("SECRET_TOKEN", "must-not-forward")
+
+    environment = _controlled_environment(_info())
+
+    assert environment["DOCKER_HOST"] == "unix:///tmp/docker.sock"
+    assert "SECRET_TOKEN" not in environment
+
+
 def test_swwp_registration_defaults_to_current_build_identity() -> None:
     fields = Register.model_fields
 

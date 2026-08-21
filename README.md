@@ -113,6 +113,7 @@ Freeze products are supported natively. `FZ.W` maps to SAME `FZW` (**Freeze Warn
   Persisted station-feed rows remain authoritative across restarts; startup does not synthesize degraded public records from AlertTracker state.
 - Transactional configuration reload behavior and operator boundaries are documented in [docs/configuration-reload.md](docs/configuration-reload.md).
 - Phase 1 integration validation, ownership boundaries, representative comparisons, and the exit review are documented in [docs/phase-1-exit-gate.md](docs/phase-1-exit-gate.md).
+- Phase 2 image and worker-boundary validation is documented in [docs/p2-09-exit-gate.md](docs/p2-09-exit-gate.md).
 
 ---
 

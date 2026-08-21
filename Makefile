@@ -8,7 +8,7 @@ TARGET_PLATFORM ?= unknown
 .PHONY: format-check lint typecheck basedpyright architecture-check dependency-check suppressions-check
 .PHONY: dead-code-check security-check complexity-check image-boundaries-check container-security-check
 .PHONY: exceptions-check diagnostics-check diagnostics-build diagnostics-export
-.PHONY: quality test compile check build-info version image images compose-check release
+.PHONY: quality test compile check phase2-gate build-info version image images compose-check release
 
 DIAGNOSTICS_EXPORT_DIR ?= build/diagnostics
 QUALITY_SUPPRESSIONS_BASE ?= HEAD
@@ -71,6 +71,10 @@ compile:
 	PYTHONPYCACHEPREFIX="$(CURDIR)/build/pycache" $(PYTHON) -m compileall -q seasonalweather tools tests
 
 check: quality compile test
+
+phase2-gate: check
+	$(MAKE) images
+	$(PYTHON) -m tools.quality.phase2_exit_gate --images
 
 build-info:
 	$(PYTHON) -m seasonalweather.build_metadata \
