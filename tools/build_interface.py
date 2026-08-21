@@ -35,7 +35,7 @@ def _load(path: Path) -> BuildInfo:
         raise SystemExit(f"invalid build-info: {exc}") from exc
 
 
-def _controlled_environment(info: BuildInfo) -> dict[str, str]:
+def _controlled_environment(info: BuildInfo, *, build_network: str | None = None) -> dict[str, str]:
     """Pass only build inputs explicitly represented in the build record."""
 
     environment = {
@@ -63,8 +63,8 @@ def _controlled_environment(info: BuildInfo) -> dict[str, str]:
         "SW_CAPABILITY_MANIFEST_VERSION": str(info.capability_manifest_version),
     }
     environment.update({key: os.environ[key] for key in DOCKER_ENVIRONMENT_KEYS if key in os.environ})
-    if _BUILD_NETWORK_ENVIRONMENT in os.environ:
-        environment[_BUILD_NETWORK_ENVIRONMENT] = os.environ[_BUILD_NETWORK_ENVIRONMENT]
+    if build_network is not None:
+        environment[_BUILD_NETWORK_ENVIRONMENT] = build_network
     return environment
 
 
@@ -80,7 +80,12 @@ def run_image(*, build_info: Path, targets: tuple[str, ...]) -> int:
         command.append("--allow=network.host")
     command.extend(targets)
     try:
-        completed = subprocess.run(command, cwd=ROOT, env=_controlled_environment(info), check=False)
+        completed = subprocess.run(
+            command,
+            cwd=ROOT,
+            env=_controlled_environment(info, build_network=network),
+            check=False,
+        )
     except OSError as exc:
         raise SystemExit(f"cannot start Docker Buildx: {exc}") from exc
     return completed.returncode

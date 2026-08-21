@@ -123,6 +123,12 @@ def test_bake_environment_preserves_only_docker_transport_inputs(monkeypatch) ->
     assert "SECRET_TOKEN" not in environment
 
 
+def test_bake_environment_forwards_explicit_build_network_only() -> None:
+    environment = _controlled_environment(_info(), build_network="host")
+
+    assert environment["SEASONALWEATHER_DOCKER_BUILD_NETWORK"] == "host"
+
+
 def test_swwp_registration_defaults_to_current_build_identity() -> None:
     fields = Register.model_fields
 
