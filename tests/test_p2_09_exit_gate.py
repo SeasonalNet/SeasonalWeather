@@ -30,6 +30,10 @@ def test_p2_09_forgejo_bootstraps_docker_inside_the_gate_step() -> None:
     assert "make phase2-gate" in workflow
     assert workflow.index("bootstrap_docker.sh") < workflow.index("make phase2-gate")
 
+    bootstrap = (ROOT / "tools/ci/bootstrap_docker.sh").read_text(encoding="utf-8")
+    assert '--pidfile="$pid_file"' in bootstrap
+    assert '--pid-file="$pid_file"' not in bootstrap
+
 
 def test_p2_09_github_keeps_the_native_docker_path() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")

@@ -103,7 +103,7 @@ start_ephemeral_daemon() {
         --host="unix://${socket}" \
         --data-root="${state_dir}/data" \
         --exec-root="${state_dir}/exec" \
-        --pid-file="$pid_file" \
+        --pidfile="$pid_file" \
         >"$log_file" 2>&1 &
     EPHEMERAL_DOCKER_PID=$!
 
