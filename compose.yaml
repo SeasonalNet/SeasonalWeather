@@ -1,0 +1,213 @@
+name: ${SEASONALWEATHER_COMPOSE_PROJECT:-seasonalweather}
+
+x-seasonal-security: &seasonal-security
+  init: true
+  read_only: true
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  tmpfs:
+    - /tmp:rw,nosuid,nodev,noexec
+    - /run:rw,nosuid,nodev,noexec
+
+services:
+  controller:
+    image: ${SEASONALWEATHER_CONTROLLER_IMAGE:-seasonalweather:standard}
+    <<: *seasonal-security
+    user: "10001:10001"
+    entrypoint:
+      - python
+      - -m
+      - seasonalweather.api.server
+    command:
+      - --config
+      - /etc/seasonalweather/config.yaml
+      - --host
+      - 0.0.0.0
+      - --port
+      - "9080"
+    expose:
+      - "9080"
+    environment:
+      LIQUIDSOAP_TELNET_HOST: liquidsoap
+      LIQUIDSOAP_TELNET_PORT: "1234"
+    volumes:
+      - ${SEASONALWEATHER_CONFIG_FILE:-./config/config.yaml}:/etc/seasonalweather/config.yaml:ro
+      - seasonalweather-state:/var/lib/seasonalweather/state
+      - seasonalweather-jobs:/var/lib/seasonalweather/jobs
+      - seasonalweather-artifacts:/var/lib/seasonalweather/artifacts
+      - seasonalweather-logs:/var/log/seasonalweather
+    secrets:
+      - source: ICECAST_SOURCE_PASSWORD
+        target: ICECAST_SOURCE_PASSWORD
+        uid: "10001"
+        gid: "10001"
+        mode: "0400"
+      - source: SEASONAL_API_TOKEN
+        target: SEASONAL_API_TOKEN
+        uid: "10001"
+        gid: "10001"
+        mode: "0400"
+      - source: SEASONAL_WORKER_TOKEN
+        target: SEASONAL_WORKER_TOKEN
+        uid: "10001"
+        gid: "10001"
+        mode: "0400"
+    depends_on:
+      liquidsoap:
+        condition: service_started
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -m
+        - seasonalweather
+        - health
+        - controller
+        - --mode
+        - readiness
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  routine-worker:
+    image: ${SEASONALWEATHER_ROUTINE_WORKER_IMAGE:-seasonalweather-worker:standard}
+    <<: *seasonal-security
+    user: "10001:10001"
+    entrypoint:
+      - python
+      - -m
+      - seasonalweather
+      - worker
+    command:
+      - --controller-url
+      - ws://controller:9080/v1/workers/connect
+      - --profile
+      - routine-worker
+      - --worker-id
+      - ${SEASONALWEATHER_ROUTINE_WORKER_ID:-routine-worker}
+    environment:
+      SEASONALWEATHER_CONTROLLER_URL: ws://controller:9080/v1/workers/connect
+      SEASONALWEATHER_WORKER_ID: ${SEASONALWEATHER_ROUTINE_WORKER_ID:-routine-worker}
+      SEASONALWEATHER_WORKER_PROFILE: routine-worker
+      SEASONALWEATHER_WORKER_HEALTH_FILE: /tmp/seasonalweather-worker-health.json
+    volumes:
+      - seasonalweather-artifacts:/var/lib/seasonalweather/artifacts
+    secrets:
+      - source: SEASONAL_WORKER_TOKEN
+        target: SEASONAL_WORKER_TOKEN
+        uid: "10001"
+        gid: "10001"
+        mode: "0400"
+    depends_on:
+      controller:
+        condition: service_started
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -m
+        - seasonalweather
+        - health
+        - worker
+        - --mode
+        - liveness
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  maintenance-worker:
+    profiles:
+      - maintenance
+    image: ${SEASONALWEATHER_MAINTENANCE_WORKER_IMAGE:-seasonalweather-worker:maintenance}
+    <<: *seasonal-security
+    user: "10001:10001"
+    entrypoint:
+      - python
+      - -m
+      - seasonalweather
+      - worker
+    command:
+      - --controller-url
+      - ws://controller:9080/v1/workers/connect
+      - --profile
+      - maintenance
+      - --worker-id
+      - ${SEASONALWEATHER_MAINTENANCE_WORKER_ID:-maintenance-worker}
+    environment:
+      SEASONALWEATHER_CONTROLLER_URL: ws://controller:9080/v1/workers/connect
+      SEASONALWEATHER_WORKER_ID: ${SEASONALWEATHER_MAINTENANCE_WORKER_ID:-maintenance-worker}
+      SEASONALWEATHER_WORKER_PROFILE: maintenance
+      SEASONALWEATHER_WORKER_HEALTH_FILE: /tmp/seasonalweather-maintenance-health.json
+    volumes:
+      - seasonalweather-artifacts:/var/lib/seasonalweather/artifacts
+    secrets:
+      - source: SEASONAL_WORKER_TOKEN
+        target: SEASONAL_WORKER_TOKEN
+        uid: "10001"
+        gid: "10001"
+        mode: "0400"
+    depends_on:
+      controller:
+        condition: service_started
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -m
+        - seasonalweather
+        - health
+        - worker
+        - --mode
+        - liveness
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  liquidsoap:
+    image: ${SEASONALWEATHER_LIQUIDSOAP_IMAGE:-savonet/liquidsoap:v2.3.3}
+    <<: *seasonal-security
+    command:
+      - /etc/seasonalweather/radio.liq
+    environment:
+      SEASONALWEATHER_CONTAINER: "true"
+      SEASONALWEATHER_LIQUIDSOAP_TELNET_BIND_ADDR: 0.0.0.0
+      SEASONALWEATHER_ICECAST_HOST: ${SEASONALWEATHER_ICECAST_HOST:-icecast}
+      SEASONALWEATHER_ICECAST_PORT: ${SEASONALWEATHER_ICECAST_PORT:-8000}
+      SEASONALWEATHER_ICECAST_PASSWORD_FILE: /run/secrets/ICECAST_SOURCE_PASSWORD
+    volumes:
+      - ./liquidsoap/radio.liq:/etc/seasonalweather/radio.liq:ro
+    secrets:
+      - source: ICECAST_SOURCE_PASSWORD
+        target: ICECAST_SOURCE_PASSWORD
+        uid: "1000"
+        gid: "1000"
+        mode: "0400"
+
+  icecast:
+    profiles:
+      - icecast
+    image: ${SEASONALWEATHER_ICECAST_IMAGE:-ghcr.io/libretime/icecast:2.5.0}
+    <<: *seasonal-security
+    ports:
+      - ${SEASONALWEATHER_ICECAST_PUBLISHED_PORT:-8000}:8000
+    volumes:
+      - ${SEASONALWEATHER_ICECAST_CONFIG_FILE:-./config/icecast.xml}:/etc/icecast.xml:ro
+
+secrets:
+  ICECAST_SOURCE_PASSWORD:
+    file: ${SEASONALWEATHER_SECRET_DIR:-./secrets}/ICECAST_SOURCE_PASSWORD
+  SEASONAL_API_TOKEN:
+    file: ${SEASONALWEATHER_SECRET_DIR:-./secrets}/SEASONAL_API_TOKEN
+  SEASONAL_WORKER_TOKEN:
+    file: ${SEASONALWEATHER_SECRET_DIR:-./secrets}/SEASONAL_WORKER_TOKEN
+
+volumes:
+  seasonalweather-state:
+  seasonalweather-jobs:
+  seasonalweather-artifacts:
+  seasonalweather-logs:

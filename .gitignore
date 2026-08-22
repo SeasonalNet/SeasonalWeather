@@ -37,3 +37,7 @@ tools/print_cycle_preview.py
 # ===========
 target/
 **/target/
+
+# Compose-only credentials and rendered local service configuration.
+secrets/
+config/icecast.xml

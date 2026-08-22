@@ -5,7 +5,7 @@ version = 1
 # downward; increases require a separately governed exception.
 
 [checks.format]
-maximum = 64
+maximum = 63
 owner = "SeasonalWeather maintainers"
 rationale = "Remaining v0.17.0 Ruff formatter debt after touched-file cleanup."
 scope = "seasonalweather/, tests/, and tools/"

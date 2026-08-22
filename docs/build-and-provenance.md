@@ -24,8 +24,11 @@ entrypoint, and the routine-worker, Piper, legacy-TTS, maintenance, and
 development profiles. The controller Dockerfile rejects non-controller
 profiles, while worker definitions reject controller-only profiles and
 dependencies.
-`compose-check` remains a bounded placeholder until the Phase 3 Compose packet
-introduces a topology.
+`compose-check` validates the checked-in `compose.yaml` when Docker Compose is
+available. The topology is defined by P3-01; it does not build images or
+start services. Compose deployment still requires operator-provided
+configuration, mode-0400 secret files, and compatible controller/worker image
+references.
 
 ## Build record
 

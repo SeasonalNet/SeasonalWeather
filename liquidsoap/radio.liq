@@ -5,12 +5,37 @@
 # - alert bus: FULL > VOICE, then routine cycle, with non-track-sensitive fallback
 # - output mounts: Ogg/Vorbis and MP3 Icecast streams
 
-set("log.stdout", false)
-set("log.file", true)
-set("log.file.path", "/var/log/seasonalweather/liquidsoap.log")
+container_mode = getenv("SEASONALWEATHER_CONTAINER") == "true"
+if container_mode then
+  set("log.stdout", true)
+  set("log.file", false)
+else
+  set("log.stdout", false)
+  set("log.file", true)
+  set("log.file.path", "/var/log/seasonalweather/liquidsoap.log")
+end
+
+def env_or(name, fallback) =
+  value = getenv(name)
+  if value == "" then fallback else value end
+end
+
+telnet_bind_addr = env_or("SEASONALWEATHER_LIQUIDSOAP_TELNET_BIND_ADDR", "127.0.0.1")
+icecast_host = env_or("SEASONALWEATHER_ICECAST_HOST", "127.0.0.1")
+icecast_port = int_of_string(env_or("SEASONALWEATHER_ICECAST_PORT", "8000"))
+icecast_password_file = getenv("SEASONALWEATHER_ICECAST_PASSWORD_FILE")
+icecast_password =
+  if icecast_password_file == "" then
+    getenv("ICECAST_SOURCE_PASSWORD")
+  else
+    secret_reader = file.read(icecast_password_file)
+    secret = string.trim(secret_reader())
+    secret_reader.close()
+    secret
+  end
 
 set("server.telnet", true)
-set("server.telnet.bind_addr", "127.0.0.1")
+set("server.telnet.bind_addr", telnet_bind_addr)
 set("server.telnet.port", 1234)
 
 # Internal request queues.  Liquidsoap 2.3.x may expose these built-in
@@ -120,9 +145,9 @@ radio = fallback(track_sensitive=false, [full_alert, voice_alert, cycle, silence
 # Primary low-bandwidth web stream.
 output.icecast(
   %vorbis(samplerate=48000, channels=2, quality=0.5),
-  host="127.0.0.1",
-  port=8000,
-  password="seasonal-source",
+  host=icecast_host,
+  port=icecast_port,
+  password=icecast_password,
   mount="seasonalweather.ogg",
   name="SeasonalWeather Ogg",
   description="Unofficial automated IP weather broadcast (not NOAA Weather Radio)",
@@ -133,13 +158,12 @@ output.icecast(
 # Compatibility stream for clients that do not reliably support Ogg/Vorbis.
 output.icecast(
   %mp3(bitrate=128, samplerate=48000),
-  host="127.0.0.1",
-  port=8000,
-  password="seasonal-source",
+  host=icecast_host,
+  port=icecast_port,
+  password=icecast_password,
   mount="seasonalweather.mp3",
   name="SeasonalWeather MP3",
   description="Unofficial automated IP weather broadcast (not NOAA Weather Radio)",
   genre="Weather",
   radio
 )
-

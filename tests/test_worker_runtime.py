@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import os
+import stat
 from collections import deque
+from pathlib import Path
 from typing import cast
 
 from seasonalweather.jobs.policies import ExecutorClass, JobType, QueueClass
@@ -78,6 +81,19 @@ def test_worker_cli_requires_an_outbound_controller_url() -> None:
         assert "--controller-url is required" in str(exc)
     else:
         raise AssertionError("worker CLI must reject an empty controller URL")
+
+
+def test_worker_cli_resolves_the_mounted_worker_secret(tmp_path: Path, monkeypatch) -> None:
+    secret = tmp_path / "SEASONAL_WORKER_TOKEN"
+    secret.write_text("worker-secret\n", encoding="utf-8")
+    secret.chmod(stat.S_IRUSR)
+    monkeypatch.setenv("SEASONALWEATHER_SECRET_DIR", str(tmp_path))
+    monkeypatch.delenv("SEASONALWEATHER_WORKER_TOKEN", raising=False)
+
+    from seasonalweather.worker import cli
+
+    assert cli._worker_token() == "worker-secret"
+    assert os.environ.get("SEASONALWEATHER_WORKER_TOKEN") is None
 
 
 def test_registration_advertises_only_profile_jobs_and_queues() -> None:

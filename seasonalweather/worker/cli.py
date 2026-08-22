@@ -11,6 +11,7 @@ import uuid
 
 from ..build_metadata import current_build_info
 from ..logging_config import setup_logging
+from ..secret_files import SecretFileError, merge_secret_files
 from ..swwp.worker import WorkerSession
 from .handlers import HandlerRegistry
 from .profiles import WorkerProfile, registration_for_profile, worker_id_from_environment
@@ -65,6 +66,23 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _worker_token() -> str:
+    """Resolve the worker credential from compatibility env or its secret file."""
+
+    token = os.environ.get("SEASONALWEATHER_WORKER_TOKEN", "")
+    if token:
+        return token
+    secret_directory = os.environ.get("SEASONALWEATHER_SECRET_DIR", "/run/secrets")
+    try:
+        merged = merge_secret_files(
+            os.environ,
+            config_value={"paths": {"secret_dir": secret_directory}},
+        )
+    except SecretFileError as exc:
+        raise SystemExit(f"seasonalweather worker: invalid secret file: {exc}") from None
+    return merged.get("SEASONAL_WORKER_TOKEN", "")
+
+
 async def _run_worker(runtime: WorkerRuntime) -> None:
     loop = asyncio.get_running_loop()
     stop_tasks: set[asyncio.Task[None]] = set()
@@ -114,7 +132,7 @@ def main(argv: list[str] | None = None) -> int:
     runtime = WorkerRuntime(
         session,
         handlers,
-        WebSocketWorkerTransport(args.controller_url, token=args.token),
+        WebSocketWorkerTransport(args.controller_url, token=args.token or _worker_token()),
         health_file=args.health_file,
         image_profile=profile.value,
         reconnect=True,
