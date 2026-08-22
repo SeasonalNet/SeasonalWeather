@@ -14,6 +14,7 @@ from .integration import ArtifactResultCoordinator, CurrentArtifactAuthority
 from .promotion import PromotionService
 from .service import ArtifactService
 from .staging import StagingService
+from .transport import ArtifactTransport, SharedVolumeArtifactTransport
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,7 @@ class ControllerArtifactComposition:
     service: ArtifactService
     results: ArtifactResultCoordinator
     activities: ActivityRegistry
+    transport: ArtifactTransport
 
 
 def build_controller_artifact_composition(
@@ -30,13 +32,14 @@ def build_controller_artifact_composition(
     work_root: Path,
     maximum_bytes: int,
 ) -> ControllerArtifactComposition:
-    """Compose P1-10 production owners without creating a worker or transport."""
+    """Compose P1-10 production owners without creating a worker process."""
 
     activities = orchestrator.reload_activities
-    root = Path(work_root) / "worker-artifacts"
+    transport = SharedVolumeArtifactTransport(Path(work_root))
+    paths = transport.paths
     service = ArtifactService(
-        StagingService(root / "staging", root / "blobs", maximum_bytes=maximum_bytes),
-        PromotionService(root / "active", maximum_bytes=maximum_bytes),
+        StagingService(paths.staging, paths.blobs, maximum_bytes=maximum_bytes),
+        PromotionService(paths.active, maximum_bytes=maximum_bytes),
         repository,
         admission_check=lambda: orchestrator.lifecycle.require(WorkClass.PUBLICATION),
         activity_context=lambda: activities.activity(PUBLICATION),
@@ -68,7 +71,7 @@ def build_controller_artifact_composition(
         target_policy=target_policy,
         activity_context=lambda: activities.activity(WORKER_RESULT),
     )
-    return ControllerArtifactComposition(service=service, results=results, activities=activities)
+    return ControllerArtifactComposition(service=service, results=results, activities=activities, transport=transport)
 
 
 def _identity(value: object) -> str | None:

@@ -37,6 +37,11 @@ services:
       - seasonalweather-state:/var/lib/seasonalweather/state
       - seasonalweather-jobs:/var/lib/seasonalweather/jobs
       - seasonalweather-artifacts:/var/lib/seasonalweather/artifacts
+      - type: volume
+        source: seasonalweather-artifact-staging
+        target: /var/lib/seasonalweather/artifacts/worker-artifacts/staging
+        volume:
+          nocopy: true
       - seasonalweather-logs:/var/log/seasonalweather
     secrets:
       - source: ICECAST_SOURCE_PASSWORD
@@ -94,7 +99,15 @@ services:
       SEASONALWEATHER_WORKER_PROFILE: routine-worker
       SEASONALWEATHER_WORKER_HEALTH_FILE: /tmp/seasonalweather-worker-health.json
     volumes:
-      - seasonalweather-artifacts:/var/lib/seasonalweather/artifacts
+      - type: volume
+        source: seasonalweather-artifacts
+        target: /var/lib/seasonalweather/artifacts
+        read_only: true
+      - type: volume
+        source: seasonalweather-artifact-staging
+        target: /var/lib/seasonalweather/artifacts/worker-artifacts/staging
+        volume:
+          nocopy: true
     secrets:
       - source: SEASONAL_WORKER_TOKEN
         target: SEASONAL_WORKER_TOKEN
@@ -143,7 +156,15 @@ services:
       SEASONALWEATHER_WORKER_PROFILE: maintenance
       SEASONALWEATHER_WORKER_HEALTH_FILE: /tmp/seasonalweather-maintenance-health.json
     volumes:
-      - seasonalweather-artifacts:/var/lib/seasonalweather/artifacts
+      - type: volume
+        source: seasonalweather-artifacts
+        target: /var/lib/seasonalweather/artifacts
+        read_only: true
+      - type: volume
+        source: seasonalweather-artifact-staging
+        target: /var/lib/seasonalweather/artifacts/worker-artifacts/staging
+        volume:
+          nocopy: true
     secrets:
       - source: SEASONAL_WORKER_TOKEN
         target: SEASONAL_WORKER_TOKEN
@@ -181,6 +202,7 @@ services:
       SEASONALWEATHER_ICECAST_PASSWORD_FILE: /run/secrets/ICECAST_SOURCE_PASSWORD
     volumes:
       - ./liquidsoap/radio.liq:/etc/seasonalweather/radio.liq:ro
+      - seasonalweather-artifacts:/var/lib/seasonalweather/artifacts:ro
     secrets:
       - source: ICECAST_SOURCE_PASSWORD
         target: ICECAST_SOURCE_PASSWORD
@@ -210,4 +232,5 @@ volumes:
   seasonalweather-state:
   seasonalweather-jobs:
   seasonalweather-artifacts:
+  seasonalweather-artifact-staging:
   seasonalweather-logs:

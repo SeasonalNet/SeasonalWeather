@@ -97,6 +97,9 @@ Freeze products are supported natively. `FZ.W` maps to SAME `FZW` (**Freeze Warn
 - Deployment filesystem mounts, controller/worker state authority, and
   parameterized service endpoints are documented in
   [`docs/p2-04-filesystem-network.md`](docs/p2-04-filesystem-network.md).
+- Compose volume authority, worker staging permissions, and controller-owned
+  artifact promotion are documented in
+  [`docs/p3-02-authority-separated-volumes.md`](docs/p3-02-authority-separated-volumes.md).
 - The versioned read-only diagnostic namespace registry, stable configuration
   codes, curated explanations, deterministic catalog build/export, and
   `seasonalweather diagnostics list|explain` commands are documented in
