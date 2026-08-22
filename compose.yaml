@@ -132,6 +132,120 @@ services:
       start_period: 30s
       retries: 3
 
+  piper-worker:
+    profiles:
+      - piper
+    image: ${SEASONALWEATHER_PIPER_WORKER_IMAGE:-seasonalweather-worker:piper}
+    <<: *seasonal-security
+    user: "10001:10001"
+    entrypoint:
+      - python
+      - -m
+      - seasonalweather
+      - worker
+    command:
+      - --controller-url
+      - ws://controller:9080/v1/workers/connect
+      - --profile
+      - piper
+      - --worker-id
+      - ${SEASONALWEATHER_PIPER_WORKER_ID:-piper-worker}
+    environment:
+      SEASONALWEATHER_CONTROLLER_URL: ws://controller:9080/v1/workers/connect
+      SEASONALWEATHER_WORKER_ID: ${SEASONALWEATHER_PIPER_WORKER_ID:-piper-worker}
+      SEASONALWEATHER_WORKER_PROFILE: piper
+      SEASONALWEATHER_WORKER_HEALTH_FILE: /tmp/seasonalweather-piper-worker-health.json
+    volumes:
+      - type: volume
+        source: seasonalweather-artifacts
+        target: /var/lib/seasonalweather/artifacts
+        read_only: true
+      - type: volume
+        source: seasonalweather-artifact-staging
+        target: /var/lib/seasonalweather/artifacts/worker-artifacts/staging
+        volume:
+          nocopy: true
+    secrets:
+      - source: SEASONAL_WORKER_TOKEN
+        target: SEASONAL_WORKER_TOKEN
+        uid: "10001"
+        gid: "10001"
+        mode: "0400"
+    depends_on:
+      controller:
+        condition: service_started
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -m
+        - seasonalweather
+        - health
+        - worker
+        - --mode
+        - liveness
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  legacy-tts-worker:
+    profiles:
+      - legacy-tts
+    image: ${SEASONALWEATHER_LEGACY_TTS_WORKER_IMAGE:-seasonalweather-worker:legacy-tts}
+    <<: *seasonal-security
+    user: "10001:10001"
+    entrypoint:
+      - python
+      - -m
+      - seasonalweather
+      - worker
+    command:
+      - --controller-url
+      - ws://controller:9080/v1/workers/connect
+      - --profile
+      - legacy-tts
+      - --worker-id
+      - ${SEASONALWEATHER_LEGACY_TTS_WORKER_ID:-legacy-tts-worker}
+    environment:
+      SEASONALWEATHER_CONTROLLER_URL: ws://controller:9080/v1/workers/connect
+      SEASONALWEATHER_WORKER_ID: ${SEASONALWEATHER_LEGACY_TTS_WORKER_ID:-legacy-tts-worker}
+      SEASONALWEATHER_WORKER_PROFILE: legacy-tts
+      SEASONALWEATHER_WORKER_HEALTH_FILE: /tmp/seasonalweather-legacy-tts-worker-health.json
+    volumes:
+      - type: volume
+        source: seasonalweather-artifacts
+        target: /var/lib/seasonalweather/artifacts
+        read_only: true
+      - type: volume
+        source: seasonalweather-artifact-staging
+        target: /var/lib/seasonalweather/artifacts/worker-artifacts/staging
+        volume:
+          nocopy: true
+    secrets:
+      - source: SEASONAL_WORKER_TOKEN
+        target: SEASONAL_WORKER_TOKEN
+        uid: "10001"
+        gid: "10001"
+        mode: "0400"
+    depends_on:
+      controller:
+        condition: service_started
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -m
+        - seasonalweather
+        - health
+        - worker
+        - --mode
+        - liveness
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
   maintenance-worker:
     profiles:
       - maintenance

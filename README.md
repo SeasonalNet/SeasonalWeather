@@ -100,6 +100,9 @@ Freeze products are supported natively. `FZ.W` maps to SAME `FZW` (**Freeze Warn
 - Compose volume authority, worker staging permissions, and controller-owned
   artifact promotion are documented in
   [`docs/p3-02-authority-separated-volumes.md`](docs/p3-02-authority-separated-volumes.md).
+- Local-only TTS Compose profiles, including isolated Piper and legacy-TTS
+  workers, are documented in
+  [`docs/p3-03-local-only-tts.md`](docs/p3-03-local-only-tts.md).
 - The versioned read-only diagnostic namespace registry, stable configuration
   codes, curated explanations, deterministic catalog build/export, and
   `seasonalweather diagnostics list|explain` commands are documented in
