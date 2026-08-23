@@ -301,6 +301,7 @@ class SeasonalWeatherServiceRuntime:
                     ledger_path=o.cfg.cap.ledger_path,
                     ledger_max_age_days=o.cfg.cap.ledger_max_age_days,
                     database=o.database,
+                    diagnostic_sink=getattr(o, "cap_diagnostic_sink", None),
                 )
                 url = o.cfg.cap.url.strip()
                 if url:
@@ -336,6 +337,7 @@ class SeasonalWeatherServiceRuntime:
                     ledger_path=o.cfg.ipaws.ledger_path,
                     ledger_max_age_days=o.cfg.ipaws.ledger_max_age_days,
                     database=o.database,
+                    diagnostic_sink=getattr(o, "cap_diagnostic_sink", None),
                 )
                 supervisor.create_task(
                     ipaws_poller.run_forever(),
@@ -377,6 +379,7 @@ class SeasonalWeatherServiceRuntime:
                         confidence_min=ern_cfg.confidence_min,
                         name=ern_cfg.name,
                         decoder_backend=ern_cfg.decoder_backend,
+                        diagnostic_sink=getattr(o, "ern_diagnostic_sink", None),
                     )
                     supervisor.create_task(
                         mon.run_forever(),

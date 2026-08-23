@@ -23,6 +23,7 @@ from typing import cast
 from ..artifacts.hashing import ContentIdentity
 from ..artifacts.media import WavPolicy, inspect_wav
 from ..artifacts.models import MediaMetadata
+from ..diagnostics.bindings import FOUNDATION_CODES
 from .adapters.base import ProviderAdapter
 from .adapters.models import ProviderAudio
 from .admission import LocalQualification, LocalQualificationDisposition, validate_synthesis_request
@@ -110,6 +111,7 @@ class SynthesisService:
         current_generation: GenerationCheck | None = None,
         lkg_resolver: LkgResolver | None = None,
         provider_adapters: dict[BackendId, ProviderAdapter] | None = None,
+        diagnostic_sink: object | None = None,
     ) -> None:
         self._admission_check = admission_check
         self._activity_context = activity_context
@@ -121,6 +123,7 @@ class SynthesisService:
         self._lkg_resolver = lkg_resolver
         self._voicetext_counters: dict[int | None, _InvocationCounter] = {}
         self._provider_adapters = dict(provider_adapters or {})
+        self._diagnostic_sink = diagnostic_sink
 
     def availability(self, request: SynthesisRequest) -> tuple[bool, str]:
         if request.backend is not BackendId.LOCAL:
@@ -339,6 +342,14 @@ class SynthesisService:
                     started,
                     disposition=SynthesisDisposition.FAILED,
                 )
+        if result.last_known_good_reused:
+            self._emit_tts(
+                FOUNDATION_CODES["tts.fallback_used"],
+                request,
+                message="A controller-accepted last-known-good TTS artifact was reused.",
+                operational_effect="Synthesis continued from previously accepted audio.",
+                recovery_action="Verify the selected backend and restore normal synthesis when its dependency recovers.",
+            )
         return result
 
     def _reserve_capacity(self, request: SynthesisRequest, cancellation: object) -> object | None:
@@ -465,6 +476,13 @@ class SynthesisService:
     ) -> tuple[float, SynthesisResult | None]:
         deadline = self._operation_deadline(request)
         if deadline <= time.monotonic() or deadline_expired(cancellation):
+            self._emit_tts(
+                FOUNDATION_CODES["tts.deadline_exceeded"],
+                request,
+                message="TTS synthesis reached its declared deadline.",
+                operational_effect="The current synthesis operation cannot produce a timely result.",
+                recovery_action="Retain the current artifact or use only the configured bounded fallback policy.",
+            )
             return deadline, self._failed(
                 request, SynthesisFailure.DEADLINE_EXPIRED, started, disposition=SynthesisDisposition.TIMED_OUT
             )
@@ -560,6 +578,7 @@ class SynthesisService:
         prepared_text: str | None = None,
         reservation_box: list[object] | None = None,
     ) -> SynthesisResult:
+        self._emit_tts_failure(request, primary_error)
         fallback_result, fallback_metadata = self._try_fallback(
             request,
             primary_error,
@@ -573,6 +592,13 @@ class SynthesisService:
             reservation_box,
         )
         if fallback_result is not None:
+            self._emit_tts(
+                FOUNDATION_CODES["tts.fallback_used"],
+                request,
+                message="Configured local TTS fallback supplied the synthesis result.",
+                operational_effect="Synthesis continued with the configured fallback backend.",
+                recovery_action="Inspect the primary backend failure and restore it before the fallback policy is exhausted.",
+            )
             return fallback_result
         failure = self._failure_class(primary_error)
         if policy.suppress_on_failure:
@@ -584,6 +610,52 @@ class SynthesisService:
             "timed_out": SynthesisDisposition.TIMED_OUT,
         }.get(primary_error.classification, SynthesisDisposition.FAILED)
         return self._failed(request, failure, started, disposition=disposition, fallback=fallback_metadata)
+
+    def _emit_tts_failure(self, request: SynthesisRequest, error: ProcessFailure) -> None:
+        code = FOUNDATION_CODES["tts.provider_failed"]
+        if error.classification in {"authentication_failed", "authorization_failed", "tls_failed", "redirect_rejected"}:
+            code = FOUNDATION_CODES["tts.trust_failed"]
+        elif error.classification in {"timed_out", "provider_timed_out"}:
+            code = FOUNDATION_CODES["tts.deadline_exceeded"]
+        elif error.classification in {"output_invalid", "malformed_response", "unsupported_audio_format"}:
+            code = FOUNDATION_CODES["tts.response_invalid"]
+        self._emit_tts(
+            code,
+            request,
+            message="The selected TTS backend failed within the bounded synthesis operation.",
+            operational_effect="The requested synthesis result was not accepted as the primary result.",
+            recovery_action="Inspect the bounded backend failure and use the configured fallback or last-known-good policy.",
+            exception=error,
+        )
+
+    def _emit_tts(
+        self,
+        code: str,
+        request: SynthesisRequest,
+        *,
+        message: str,
+        operational_effect: str,
+        recovery_action: str,
+        exception: BaseException | None = None,
+    ) -> None:
+        sink = self._diagnostic_sink
+        if sink is None:
+            return
+        emit = getattr(sink, "emit", None)
+        if not callable(emit):
+            return
+        try:
+            emit(
+                code,
+                component="tts",
+                message=message,
+                operational_effect=operational_effect,
+                recovery_action=recovery_action,
+                exception=exception,
+                source_id=request.backend.value,
+            )
+        except Exception:
+            return
 
     def _try_fallback(
         self,

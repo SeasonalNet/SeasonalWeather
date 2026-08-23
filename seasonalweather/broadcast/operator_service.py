@@ -7,6 +7,7 @@ import datetime as dt
 from typing import Any
 
 from seasonalweather.application.errors import ConflictError, DependencyUnavailableError
+from seasonalweather.diagnostics.bindings import FOUNDATION_CODES
 
 
 class BroadcastOperatorService:
@@ -28,11 +29,28 @@ class BroadcastOperatorService:
         try:
             available = bool(self.orch.telnet.ping())
         except Exception as exc:
+            self._diagnose(FOUNDATION_CODES["liquidsoap.control_failed"], exc)
             raise DependencyUnavailableError(
                 "liquidsoap_unreachable", "Liquidsoap telnet backend is unavailable."
             ) from exc
         if not available:
+            self._diagnose(FOUNDATION_CODES["liquidsoap.control_failed"])
             raise DependencyUnavailableError("liquidsoap_unreachable", "Liquidsoap telnet backend is unavailable.")
+
+    def _diagnose(self, code: str, exception: BaseException | None = None) -> None:
+        sink = getattr(self.orch, "liquidsoap_diagnostic_sink", None)
+        emit = getattr(sink, "emit", None)
+        if not callable(emit):
+            return
+        emit(
+            code,
+            component="liquidsoap-control",
+            message="Liquidsoap control was unavailable for a broadcast operation.",
+            operational_effect="The requested broadcast control operation was not applied.",
+            recovery_action="Inspect Liquidsoap readiness and retry through the bounded control path.",
+            exception=exception,
+            source_id="liquidsoap",
+        )
 
     async def rebuild_cycle(self, *, reason: str | None, actor: str) -> dict[str, Any]:
         self._ensure_backend_ready()

@@ -19,7 +19,9 @@ from seasonalweather import __version__
 from ..artifacts.composition import build_controller_artifact_composition
 from ..auth import AuthenticationRepository, AuthenticationService
 from ..broadcast.segment_service import SegmentApplicationService
+from ..broadcast.station_feed_runtime import set_diagnostic_sink as set_station_feed_diagnostic_sink
 from ..build_metadata import BuildInfo, current_build_info
+from ..build_metadata.compatibility import BuildCompatibilityError, ensure_runtime_compatibility
 from ..capabilities.service import CapabilitySchedulerService, declared_capability_names
 from ..commands import CommandStore
 from ..config import AuthMode, load_config
@@ -31,7 +33,7 @@ from ..configuration_reload.validation_job import ValidationJobRunner
 from ..control import OrchestratorControl
 from ..database.bootstrap import bootstrap_database_from_config
 from ..database.configuration_reload import ReloadRepository
-from ..diagnostics.bindings import RELOAD_CODES, RUNTIME_CODES
+from ..diagnostics.bindings import FOUNDATION_CODES, OBS_CODES, RELOAD_CODES, RUNTIME_CODES, SEGMENT_CODES
 from ..health_service import build_runtime_health_service
 from ..job_store import (
     CommandJobCoordinator,
@@ -43,6 +45,7 @@ from ..job_store import (
 from ..jobs.policies import JobType, QueueClass
 from ..lifecycle import Lifecycle, LifecycleState, TaskSupervisor
 from ..lifecycle_records import LifecycleRecordWriter, LifecycleStage
+from ..logging_config import set_runtime_diagnostic_sink
 from ..main import Orchestrator, _setup_logging
 from ..nwws.diagnostics import NwwsRuntimeDiagnosticSink
 from ..observability import WorkerTelemetryMetricsPort, create_default_metrics, set_correlation
@@ -51,6 +54,7 @@ from ..runtime_diagnostics.marker import ProcessMarkerStore, controller_marker
 from ..runtime_diagnostics.models import CorrelationContext, DiagnosticRole, PromotionReason
 from ..runtime_diagnostics.repository import OccurrenceRepository
 from ..runtime_diagnostics.service import RuntimeDiagnosticService
+from ..runtime_diagnostics.sink import RuntimeDiagnosticSink
 from ..runtime_diagnostics.worker import WorkerDiagnosticTranslator
 from ..swwp.adapter import JobStoreSwwpAdapter
 from ..swwp.auth import BearerTokenRegistrationPolicy
@@ -127,7 +131,12 @@ class _MarkerLifecycleIntegration:
         self.secondary_failures.retain(event, error)
 
 
-def _build_job_service(cfg: Any, lifecycle: Lifecycle) -> DurableJobService | None:
+def _build_job_service(
+    cfg: Any,
+    lifecycle: Lifecycle,
+    *,
+    diagnostic_sink: object | None = None,
+) -> DurableJobService | None:
     if not cfg.jobs.enabled:
         return None
     job_database = JobDatabase(
@@ -145,6 +154,7 @@ def _build_job_service(cfg: Any, lifecycle: Lifecycle) -> DurableJobService | No
         job_repository,
         lifecycle,
         reconciliation_batch_size=cfg.jobs.reconciliation_batch_size,
+        diagnostic_sink=diagnostic_sink,
     )
 
 
@@ -309,7 +319,27 @@ def _reload_diagnostic_promoter(
 
 async def run_api_server(*, config_path: str, host: str | None = None, port: int | None = None) -> None:
     instance_id = f"controller_{uuid.uuid4().hex}"
-    build_info = current_build_info()
+    set_runtime_diagnostic_sink(None)
+    try:
+        build_info = current_build_info()
+        ensure_runtime_compatibility(build_info, role="controller")
+    except BuildCompatibilityError as exc:
+        logging.getLogger("seasonalweather.build").critical(
+            "Build identity is incompatible with the controller runtime.",
+            extra={
+                "event": "build_compatibility_rejected",
+                "code": FOUNDATION_CODES["build.compatibility_rejected"],
+                "reason": str(exc),
+            },
+        )
+        raise
+    except Exception:
+        logging.getLogger("seasonalweather.build").critical(
+            "Build identity metadata could not be loaded.",
+            extra={"event": "build_identity_invalid", "code": FOUNDATION_CODES["build.identity_invalid"]},
+            exc_info=True,
+        )
+        raise
     context = CorrelationContext(
         role=DiagnosticRole.CONTROLLER,
         instance_id=instance_id,
@@ -333,6 +363,8 @@ async def run_api_server(*, config_path: str, host: str | None = None, port: int
     except BaseException as exc:
         fatal[0].report(exc)
         raise
+    finally:
+        set_runtime_diagnostic_sink(None)
 
 
 async def _run_api_server_impl(
@@ -416,18 +448,63 @@ async def _run_api_server_impl(
         instance_id=instance_id,
         build_info=build_info,
     )
+    foundation_sink: Callable[[str], RuntimeDiagnosticSink] | None = None
     if diagnostic_service is not None:
         orch.nwws_diagnostic_sink = NwwsRuntimeDiagnosticSink(
             diagnostic_service,
             context,
             generation_provider=lambda: orch.configuration_generation,
         )
+
+        def build_foundation_sink(prefix: str) -> RuntimeDiagnosticSink:
+            return RuntimeDiagnosticSink(
+                diagnostic_service,
+                context,
+                codes={key: code for key, code in FOUNDATION_CODES.items() if key.startswith(prefix)},
+                generation_provider=lambda: orch.configuration_generation,
+            )
+
+        foundation_sink = build_foundation_sink
+        orch.cap_diagnostic_sink = build_foundation_sink("cap.")
+        orch.ern_diagnostic_sink = build_foundation_sink("ern.")
+        if hasattr(orch, "tts"):
+            orch.tts.diagnostic_sink = build_foundation_sink("tts.")
+        orch.database_diagnostic_sink = build_foundation_sink("database.")
+        set_station_feed_diagnostic_sink(orch.database_diagnostic_sink)
+        if hasattr(orch, "alert_tracker"):
+            orch.alert_tracker._diagnostic_sink = orch.database_diagnostic_sink
+        orch.liquidsoap_diagnostic_sink = build_foundation_sink("liquidsoap.")
+        if hasattr(orch, "conductor"):
+            orch.conductor._diagnostic_sink = orch.liquidsoap_diagnostic_sink
+        if hasattr(orch, "refresher"):
+            orch.refresher._diagnostic_sink = RuntimeDiagnosticSink(
+                diagnostic_service,
+                context,
+                codes=SEGMENT_CODES,
+                generation_provider=lambda: orch.configuration_generation,
+            )
+        set_runtime_diagnostic_sink(
+            RuntimeDiagnosticSink(
+                diagnostic_service,
+                context,
+                codes=OBS_CODES,
+                generation_provider=lambda: orch.configuration_generation,
+            )
+        )
+        if hasattr(orch, "db_housekeeper"):
+            housekeeper = orch.db_housekeeper
+            if housekeeper is not None:
+                housekeeper._diagnostic_sink = orch.database_diagnostic_sink
     fatal[0] = FatalBoundary(
         diagnostic_service,
         context,
         fatal[0].secondary_failures,
     )
-    job_service = _build_job_service(cfg, lifecycle)
+    job_service = _build_job_service(
+        cfg,
+        lifecycle,
+        diagnostic_sink=(foundation_sink("job.") if foundation_sink is not None else None),
+    )
     auth_service = _build_auth_service(cfg, db)
     command_store = CommandStore(
         database=db,

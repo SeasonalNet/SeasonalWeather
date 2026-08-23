@@ -53,6 +53,7 @@ from typing import AsyncContextManager
 from zoneinfo import ZoneInfo
 
 from ..alerts.active import AlertTracker
+from ..diagnostics.bindings import SEGMENT_CODES
 from ..tts.tts import TTS
 from .cycle import CycleBuilder, CycleContext, CycleSegment, station_id_text
 from .segment_builders import SegmentBuildInput, sanitize_error
@@ -106,6 +107,7 @@ class SegmentRefresher:
         on_alert_segments_changed: Callable[[str], None] | None = None,
         on_warmup_complete: Callable[[], None] | None = None,
         activity_context: Callable[[], AsyncContextManager[None]] | None = None,
+        diagnostic_sink: object | None = None,
     ) -> None:
         self._store = store
         self._builder = cycle_builder
@@ -123,6 +125,7 @@ class SegmentRefresher:
         self._on_alert_segments_changed = on_alert_segments_changed
         self._on_warmup_complete = on_warmup_complete
         self._activity_context = activity_context
+        self._diagnostic_sink: object | None = diagnostic_sink
 
         # Immediate-refresh request queue
         self._pending: set[str] = set()
@@ -244,6 +247,14 @@ class SegmentRefresher:
                 outcome = await reconcile(key)
             except Exception:
                 log.exception("SegmentRefresher: commandless ambiguity reconciliation failed key=%s", key)
+                self._diagnose(
+                    SEGMENT_CODES["publication_reconciliation"],
+                    "Segment publication ambiguity reconciliation failed.",
+                )
+        self._diagnose(
+            SEGMENT_CODES["publication_reconciliation"],
+            "Segment publication evidence is ambiguous and refresh remains deferred.",
+        )
         outcome_value = getattr(outcome, "value", outcome)
         if outcome_value is None or outcome_value == "still_unresolved":
             log.warning("SegmentRefresher: deferred ambiguous background publication key=%s", key)
@@ -274,6 +285,10 @@ class SegmentRefresher:
                 outcome = await reconcile(key)
             except Exception:
                 log.exception("SegmentRefresher: deferred ambiguity retry failed key=%s", key)
+                self._diagnose(
+                    SEGMENT_CODES["publication_reconciliation"],
+                    "Deferred segment publication reconciliation failed.",
+                )
                 continue
             if getattr(outcome, "value", outcome) != "still_unresolved":
                 self._deferred_ambiguities.discard(key)
@@ -332,6 +347,11 @@ class SegmentRefresher:
             # service or startup reconciliation must resolve it first.
             raise
         except Exception as exc:
+            self._diagnose(
+                SEGMENT_CODES["refresh_failed"],
+                f"Segment refresh failed for {key[:64]}; bounded freshness policy is applying.",
+                exc,
+            )
             if hasattr(self._store, "record_failure"):
                 await self._store.record_failure(
                     key,
@@ -350,6 +370,11 @@ class SegmentRefresher:
                     max_age_s=self._registry.max_age(key),
                 )
                 log.exception("SegmentRefresher: refresh failed key=%s; marked placeholder", key)
+            self._diagnose(
+                SEGMENT_CODES["fallback_used"],
+                f"Segment refresh fallback was used for {key[:64]}.",
+                exc,
+            )
 
     async def _dispatch_refresh(
         self, kind, key: str, *, commit_guard=None, commit_won=None, commit_aborted=None, commit_identity=None
@@ -579,6 +604,28 @@ class SegmentRefresher:
 
         except Exception:
             log.exception("SegmentRefresher: alert segment sync failed")
+            self._diagnose(
+                SEGMENT_CODES["refresh_failed"],
+                "Active-alert segment synchronization failed.",
+            )
+
+    def _diagnose(self, code: str, message: str, exception: BaseException | None = None) -> None:
+        sink = self._diagnostic_sink
+        emit = getattr(sink, "emit", None)
+        if not callable(emit):
+            return
+        try:
+            _ = emit(
+                code,
+                component="segment-refresher",
+                message=message,
+                operational_effect="One or more broadcast segments may be stale, deferred, or represented by a placeholder.",
+                recovery_action="Inspect the segment refresh evidence and allow bounded retry or reconciliation to proceed.",
+                exception=exception,
+                source_id="segment-refresher",
+            )
+        except Exception:
+            return
 
     # ------------------------------------------------------------------
     #  Audio synthesis helper

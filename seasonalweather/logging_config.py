@@ -46,6 +46,44 @@ _SECRET_LOG_PATTERN = re.compile(
     r"(?i)\b(password|secret|token|api[_-]?key|authorization|webhook)(\s*[=:]\s*)(?:bearer\s+)?[^\s,;]+"
 )
 _output_hub: OutputHub[OutputEvent] | None = None
+_runtime_diagnostic_sink: object | None = None
+
+
+def set_runtime_diagnostic_sink(sink: object | None) -> None:
+    """Attach the controller-owned runtime diagnostic port after startup."""
+
+    global _runtime_diagnostic_sink
+    _runtime_diagnostic_sink = sink
+
+
+def _emit_observability_diagnostic(code: str, destination: str, exception: BaseException | None = None) -> None:
+    sink = _runtime_diagnostic_sink
+    emit = getattr(sink, "emit", None)
+    if not callable(emit):
+        return
+    try:
+        emit(
+            code,
+            component="observability",
+            message=f"Optional observability destination {destination[:64]} encountered a bounded failure.",
+            operational_effect="The canonical controller path continues while optional observability is degraded.",
+            recovery_action="Inspect the destination configuration and bounded transport health.",
+            exception=exception,
+            source_id=destination,
+        )
+    except Exception:
+        return
+
+
+def _observability_failure_code(exception: BaseException) -> str:
+    """Classify transport failures at the optional-output authority boundary."""
+
+    text = f"{type(exception).__name__} {exception}".lower()
+    if isinstance(exception, PermissionError) or any(
+        marker in text for marker in ("unauthorized", "forbidden", "permission denied", "authentication failed")
+    ):
+        return OBS_CODES["destination_unauthorized"]
+    return OBS_CODES["transport_failed"]
 
 
 def _redact_secret_values(text: str) -> str:
@@ -253,10 +291,13 @@ def _build_output_hub(
     def on_drop(name: str) -> None:
         if metrics is not None:
             metrics.inc("seasonalweather_observability_sink_dropped_total", labels={"sink": name})
+        _emit_observability_diagnostic(OBS_CODES["sink_degraded"], name)
+        _emit_observability_diagnostic(OBS_CODES["queue_dropped"], name)
 
-    def on_failure(name: str, _exception: BaseException) -> None:
+    def on_failure(name: str, exception: BaseException) -> None:
         if metrics is not None:
             metrics.inc("seasonalweather_observability_sink_failed_total", labels={"sink": name})
+        _emit_observability_diagnostic(_observability_failure_code(exception), name, exception)
 
     if not transports:
         return None

@@ -58,10 +58,9 @@ RULE_BINDINGS = (
 SEGMENT_BINDINGS = (
     RuleCodeBinding("segment.registry.invalid_definition", "SWSEG1001", "semantic"),
     RuleCodeBinding("segment.registry.policy_invariant", "SWSEG2001", "semantic"),
-)
-
-_BINDING_BY_RULE = MappingProxyType(
-    {binding.rule_id: binding for binding in (*RULE_BINDINGS, *SEGMENT_BINDINGS)}
+    RuleCodeBinding("segment.refresh_failed", "SWSEG3001", "runtime"),
+    RuleCodeBinding("segment.fallback_used", "SWSEG4001", "recovery"),
+    RuleCodeBinding("segment.publication_reconciliation", "SWSEG8001", "reconciliation"),
 )
 
 RUNTIME_CODES = MappingProxyType(
@@ -108,6 +107,40 @@ OBS_CODES = MappingProxyType(
         "destination_unauthorized": "SWOBS6001",
         "queue_dropped": "SWOBS7001",
     }
+)
+
+SEGMENT_CODES = MappingProxyType(
+    {
+        "refresh_failed": "SWSEG3001",
+        "fallback_used": "SWSEG4001",
+        "publication_reconciliation": "SWSEG8001",
+    }
+)
+
+FOUNDATION_BINDINGS = (
+    RuleCodeBinding("build.identity_invalid", "SWBUILD1001", "build"),
+    RuleCodeBinding("build.compatibility_rejected", "SWBUILD2001", "startup"),
+    RuleCodeBinding("cap.product_invalid", "SWCAP1001", "runtime"),
+    RuleCodeBinding("cap.source_failed", "SWCAP3001", "runtime"),
+    RuleCodeBinding("database.operation_failed", "SWDB3001", "runtime"),
+    RuleCodeBinding("database.reconciliation_required", "SWDB8001", "recovery"),
+    RuleCodeBinding("ern.transport_failed", "SWERN3001", "runtime"),
+    RuleCodeBinding("ern.stream_degraded", "SWERN4001", "runtime"),
+    RuleCodeBinding("job.contract_incompatible", "SWJOB2001", "admission"),
+    RuleCodeBinding("job.reconciliation_required", "SWJOB8001", "recovery"),
+    RuleCodeBinding("liquidsoap.control_failed", "SWLQS3001", "runtime"),
+    RuleCodeBinding("liquidsoap.publication_reconciliation", "SWLQS8001", "recovery"),
+    RuleCodeBinding("tts.response_invalid", "SWTTS1001", "runtime"),
+    RuleCodeBinding("tts.provider_failed", "SWTTS3001", "runtime"),
+    RuleCodeBinding("tts.fallback_used", "SWTTS4001", "recovery"),
+    RuleCodeBinding("tts.trust_failed", "SWTTS6001", "runtime"),
+    RuleCodeBinding("tts.deadline_exceeded", "SWTTS7001", "runtime"),
+)
+
+FOUNDATION_CODES = MappingProxyType({binding.rule_id: binding.code for binding in FOUNDATION_BINDINGS})
+
+_BINDING_BY_RULE = MappingProxyType(
+    {binding.rule_id: binding for binding in (*RULE_BINDINGS, *SEGMENT_BINDINGS, *FOUNDATION_BINDINGS)}
 )
 
 

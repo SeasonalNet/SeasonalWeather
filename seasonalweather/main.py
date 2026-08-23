@@ -279,6 +279,10 @@ class Orchestrator:
         self.nwws_queue: asyncio.Queue[NwwsProductEnvelope] = asyncio.Queue(maxsize=200)
         self.nwws_source: NwwsSource | None = None
         self.nwws_diagnostic_sink: NwwsDiagnosticSink | None = None
+        self.cap_diagnostic_sink: object | None = None
+        self.ern_diagnostic_sink: object | None = None
+        self.database_diagnostic_sink: object | None = None
+        self.liquidsoap_diagnostic_sink: object | None = None
         self.nwws_admission_fence = NwwsSourceAdmissionFence()
 
         # CAP queue (only used if CAP enabled and import succeeded)
@@ -630,6 +634,21 @@ class Orchestrator:
         """
         log.info("Liquidsoap startup queue reset skipped; restart Liquidsoap to clear stale request queues")
 
+    def _diagnose_liquidsoap(self, code: str, message: str, exception: BaseException | None = None) -> None:
+        sink = getattr(self, "liquidsoap_diagnostic_sink", None)
+        emit = getattr(sink, "emit", None)
+        if not callable(emit):
+            return
+        emit(
+            code,
+            component="liquidsoap-publication",
+            message=message,
+            operational_effect="Liquidsoap publication or control is degraded at the broadcast boundary.",
+            recovery_action="Inspect Liquidsoap readiness and reconcile the publication boundary before retrying.",
+            exception=exception,
+            source_id="liquidsoap",
+        )
+
     # ---- dedupe helpers ----
     def _sha1_12(self, s: str) -> str:
         h = hashlib.sha1((s or "").encode("utf-8", errors="ignore"), usedforsecurity=False).hexdigest()
@@ -668,6 +687,8 @@ class Orchestrator:
         After a successful push, only the guarded cycle reset may run.
         """
 
+        from .diagnostics.bindings import FOUNDATION_CODES
+
         def _notify_refill_after_failed_push() -> None:
             # If an interrupt push fails, wake the conductor so cycle generation
             # continues promptly.  Cycle is not cut for alert admission, but this
@@ -694,8 +715,13 @@ class Orchestrator:
                         self.telnet.push_full_alert(str(wav_path), meta=meta)
                     else:
                         self.telnet.push_alert(str(wav_path), meta=meta)
-                except Exception:
+                except Exception as exc:
                     _notify_refill_after_failed_push()
+                    self._diagnose_liquidsoap(
+                        FOUNDATION_CODES["liquidsoap.control_failed"],
+                        "Liquidsoap rejected a full-alert publication command.",
+                        exc,
+                    )
                     raise
             else:
                 # Same rule for VOICE updates: avoid same-plane skip/flush before
@@ -706,8 +732,13 @@ class Orchestrator:
                         self.telnet.push_voice_alert(str(wav_path), meta=meta)
                     else:
                         self.telnet.push_alert(str(wav_path), meta=meta)
-                except Exception:
+                except Exception as exc:
                     _notify_refill_after_failed_push()
+                    self._diagnose_liquidsoap(
+                        FOUNDATION_CODES["liquidsoap.control_failed"],
+                        "Liquidsoap rejected a voice-alert publication command.",
+                        exc,
+                    )
                     raise
 
             # The interrupt is now admitted and available to the priority
@@ -726,8 +757,13 @@ class Orchestrator:
                 reset_ok = bool(self.telnet.reset_cycle_safely())
             except AttributeError:
                 reset_ok = False
-            except Exception:
+            except Exception as exc:
                 log.exception("Safe cycle reset failed after %s interrupt admission", mode)
+                self._diagnose_liquidsoap(
+                    FOUNDATION_CODES["liquidsoap.publication_reconciliation"],
+                    "Liquidsoap cycle reset did not prove the post-publication state.",
+                    exc,
+                )
 
             if reset_ok:
                 try:

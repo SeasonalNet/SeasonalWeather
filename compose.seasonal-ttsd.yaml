@@ -1,0 +1,16 @@
+# Optional overlay for a controller connection to an externally managed
+# seasonal-ttsd service.  The base Compose graph remains local-only unless
+# this file is explicitly supplied.
+
+services:
+  controller:
+    secrets:
+      - source: SEASONAL_TTSD_CLIENT_CREDENTIAL
+        target: SEASONAL_TTSD_CLIENT_CREDENTIAL
+        uid: "10001"
+        gid: "10001"
+        mode: "0400"
+
+secrets:
+  SEASONAL_TTSD_CLIENT_CREDENTIAL:
+    file: ${SEASONALWEATHER_SECRET_DIR:-./secrets}/SEASONAL_TTSD_CLIENT_CREDENTIAL

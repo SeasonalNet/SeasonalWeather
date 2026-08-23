@@ -586,6 +586,8 @@ tts:
   # unless selected as backend or fallback_backend.
   seasonal_ttsd:
     base_url: ""
+    # With compose.seasonal-ttsd.yaml, use
+    # /run/secrets/SEASONAL_TTSD_CLIENT_CREDENTIAL when this backend is selected.
     client_credential_file: ""
     voice: "voicetext-paul"
     profile: "wav-48k-stereo"

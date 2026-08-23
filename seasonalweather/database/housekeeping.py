@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from ..diagnostics.bindings import FOUNDATION_CODES
 from .assets import AudioAssetRepository
 from .commands import CommandRepository
 from .core import SeasonalDatabase
@@ -50,9 +51,10 @@ def _safe_unlink(path: Path) -> bool:
 
 
 class DatabaseHousekeeper:
-    def __init__(self, cfg: Any, db: SeasonalDatabase) -> None:
+    def __init__(self, cfg: Any, db: SeasonalDatabase, diagnostic_sink: object | None = None) -> None:
         self.cfg = cfg
         self.db = db
+        self._diagnostic_sink = diagnostic_sink
         self._assets = AudioAssetRepository(db)
         self._commands = CommandRepository(db)
         self._segments = SegmentRepository(db)
@@ -124,14 +126,39 @@ class DatabaseHousekeeper:
                 stats = self.run_once()
                 if any(v for v in stats.values()):
                     log.info("Database housekeeping: %s", ", ".join(f"{k}={v}" for k, v in sorted(stats.items()) if v))
-            except Exception:
+                if stats.get("segment_placeholders_marked", 0):
+                    self._diagnose(
+                        FOUNDATION_CODES["database.reconciliation_required"],
+                        "Database reconciliation marked missing segment artifacts as placeholders.",
+                    )
+            except Exception as exc:
                 log.exception("Database housekeeping: pass failed")
+                self._diagnose(
+                    FOUNDATION_CODES["database.operation_failed"],
+                    "Database housekeeping failed within the bounded maintenance pass.",
+                    exc,
+                )
 
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=float(self._interval_seconds()))
                 break
             except asyncio.TimeoutError:
                 continue
+
+    def _diagnose(self, code: str, message: str, exception: BaseException | None = None) -> None:
+        sink = self._diagnostic_sink
+        emit = getattr(sink, "emit", None)
+        if not callable(emit):
+            return
+        emit(
+            code,
+            component="database-housekeeping",
+            message=message,
+            operational_effect="Database maintenance is degraded; canonical state remains controller-owned.",
+            recovery_action="Inspect the bounded database failure and allow the next maintenance pass to retry.",
+            exception=exception,
+            source_id="sqlite",
+        )
 
     def run_once(self) -> dict[str, int]:
         now = _utc_now()

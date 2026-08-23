@@ -5,11 +5,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import datetime as dt
+import logging
 import os
 import signal
 import uuid
 
 from ..build_metadata import current_build_info
+from ..build_metadata.compatibility import BuildCompatibilityError, ensure_runtime_compatibility
+from ..diagnostics.bindings import FOUNDATION_CODES
 from ..logging_config import setup_logging
 from ..secret_files import SecretFileError, merge_secret_files
 from ..swwp.worker import WorkerSession
@@ -113,6 +116,23 @@ def main(argv: list[str] | None = None) -> int:
     profile = WorkerProfile(args.profile)
     if not args.controller_url:
         raise SystemExit("seasonalweather worker: --controller-url is required")
+    build_info = current_build_info()
+    try:
+        ensure_runtime_compatibility(
+            build_info,
+            role="worker",
+            expected_profile=profile.value,
+        )
+    except BuildCompatibilityError as exc:
+        logging.getLogger("seasonalweather.build").critical(
+            "Build identity is incompatible with the worker runtime.",
+            extra={
+                "event": "build_compatibility_rejected",
+                "code": FOUNDATION_CODES["build.compatibility_rejected"],
+                "reason": str(exc),
+            },
+        )
+        raise SystemExit(f"seasonalweather worker: incompatible build: {exc}") from None
     worker_id = args.worker_id or worker_id_from_environment(profile)
     handlers = HandlerRegistry.for_profile(profile.value)
     registration = registration_for_profile(
@@ -140,7 +160,7 @@ def main(argv: list[str] | None = None) -> int:
     setup_logging(
         role="worker",
         instance_id=registration.worker_instance_id,
-        build_info=current_build_info(),
+        build_info=build_info,
     )
     asyncio.run(_run_worker(runtime))
     return 0

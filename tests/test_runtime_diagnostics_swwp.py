@@ -232,7 +232,7 @@ def test_worker_schema_mismatch_and_same_catalog_unknown_code(tmp_path: Path) ->
     assert mismatch.accepted and mismatch.compatibility
 
     unknown = translator.handle(
-        _diagnostic(code="SWTTS4001", diagnostic_id="diagnostic_00000002"),
+        _diagnostic(code="SWBUILD1999", diagnostic_id="diagnostic_00000002"),
         worker_id="worker_00000001",
         worker_instance_id="instance_00000001",
         session_id="session_00000001",

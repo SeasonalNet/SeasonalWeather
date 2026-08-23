@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence, Tuple
 
+from ..diagnostics.bindings import FOUNDATION_CODES
 from ..same.locations import normalize_same_allow_set, same_locations_intersect_service_area
 
 
@@ -164,6 +165,7 @@ class ErnGwesMonitor:
         confidence_min: float = 0.25,
         name: str = "ERN/JON",
         decoder_backend: str = "auto",
+        diagnostic_sink: object | None = None,
     ) -> None:
         self.out_queue = out_queue
         self.same_fips_allow = normalize_same_allow_set(same_fips_allow)
@@ -175,9 +177,25 @@ class ErnGwesMonitor:
         self.confidence_min = float(confidence_min)
         self.name = str(name)
         self.decoder_backend = _normalize_decoder_backend(decoder_backend)
+        self._diagnostic_sink = diagnostic_sink
 
         if not self.url:
             raise ValueError("ERN monitor requires a non-empty url")
+
+    def _diagnose(self, code: str, message: str, exception: BaseException | None = None) -> None:
+        sink = self._diagnostic_sink
+        emit = getattr(sink, "emit", None)
+        if not callable(emit):
+            return
+        emit(
+            code,
+            component="ern-monitor",
+            message=message,
+            operational_effect="ERN continuous audio or SAME decoding is degraded within its bounded monitor policy.",
+            recovery_action="Inspect the decoder process and retain the existing alert-source fallback behavior.",
+            exception=exception,
+            source_id=self.name[:128],
+        )
 
     def _service_area_hit(self, locs: Sequence[str]) -> bool:
         if not self.same_fips_allow:
@@ -255,13 +273,24 @@ class ErnGwesMonitor:
         log.info("ERN monitor starting (%s backend=%s): %s", self.name, active_decoder_backend, " ".join(cmd))
 
         while True:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                cwd=str(root),
-                env=env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    cwd=str(root),
+                    env=env,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._diagnose(
+                    FOUNDATION_CODES["ern.transport_failed"],
+                    "The ERN decoder process could not be started.",
+                    exc,
+                )
+                await asyncio.sleep(2.0)
+                continue
 
             assert proc.stdout is not None
             assert proc.stderr is not None
@@ -318,6 +347,10 @@ class ErnGwesMonitor:
                         self.out_queue.put_nowait(ev)
                     except asyncio.QueueFull:
                         log.warning("ERN queue full; dropping event %s %s", ev.kind, ev.text[:32])
+                        self._diagnose(
+                            FOUNDATION_CODES["ern.stream_degraded"],
+                            "The ERN event queue reached its bounded capacity.",
+                        )
 
             finally:
                 stderr_task.cancel()
@@ -332,4 +365,8 @@ class ErnGwesMonitor:
 
             # Restart backoff
             log.warning("ERN monitor exited; restarting in 2s (%s)", self.name)
+            self._diagnose(
+                FOUNDATION_CODES["ern.stream_degraded"],
+                "The ERN decoder stream exited and is restarting within its bounded policy.",
+            )
             await asyncio.sleep(2.0)

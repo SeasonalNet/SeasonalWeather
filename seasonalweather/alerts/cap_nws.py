@@ -25,6 +25,7 @@ import httpx2
 
 from .cap_ledger import CapLedger
 from ..database.core import SeasonalDatabase
+from ..diagnostics.bindings import FOUNDATION_CODES
 from ..same.locations import (
     normalize_same_allow_set,
     normalize_same_location,
@@ -248,6 +249,7 @@ class NwsCapPoller:
         ledger_path: str | None = None,
         ledger_max_age_days: int = 14,
         database: SeasonalDatabase | None = None,
+        diagnostic_sink: object | None = None,
     ) -> None:
         self.out_queue = out_queue
         self.poll_seconds = max(15, int(poll_seconds))
@@ -281,6 +283,7 @@ class NwsCapPoller:
             max_age_days=ledger_max_age_days,
             database=database,
         )
+        self._diagnostic_sink = diagnostic_sink
 
         self._client = httpx2.AsyncClient(
             timeout=httpx2.Timeout(15.0, connect=10.0),
@@ -296,6 +299,21 @@ class NwsCapPoller:
             await self._client.aclose()
         except Exception:
             pass
+
+    def _diagnose(self, code: str, message: str, exception: BaseException | None = None) -> None:
+        sink = self._diagnostic_sink
+        emit = getattr(sink, "emit", None)
+        if not callable(emit):
+            return
+        emit(
+            code,
+            component="cap-poller",
+            message=message,
+            operational_effect="CAP alert ingestion is degraded within its bounded polling policy.",
+            recovery_action="Inspect the bounded source or ledger failure; the next poll remains the recovery boundary.",
+            exception=exception,
+            source_id="cap-api",
+        )
 
     async def _fetch_json(self) -> dict[str, Any]:
         """
@@ -547,6 +565,10 @@ class NwsCapPoller:
                             continue
                         ev = self._event_from_feature(feat)
                         if ev is None:
+                            self._diagnose(
+                                FOUNDATION_CODES["cap.product_invalid"],
+                                "A CAP feature was rejected before normalized alert admission.",
+                            )
                             continue
 
                         k = self._dedupe_key(ev)
@@ -565,6 +587,10 @@ class NwsCapPoller:
                             log.exception(
                                 "CAP ledger has() failed (continuing without persistent dedupe for this check)"
                             )
+                            self._diagnose(
+                                FOUNDATION_CODES["cap.source_failed"],
+                                "CAP persistent dedupe lookup failed; continuing without that lookup.",
+                            )
 
                         # Mark seen (persist) *before* enqueue so a crash doesn't re-air on restart
                         try:
@@ -572,6 +598,10 @@ class NwsCapPoller:
                             marked_any = True
                         except Exception:
                             log.exception("CAP ledger mark() failed (continuing)")
+                            self._diagnose(
+                                FOUNDATION_CODES["cap.source_failed"],
+                                "CAP persistent dedupe mark failed; continuing with bounded in-memory state.",
+                            )
 
                         self._seen_keys.add(k)
 
@@ -587,6 +617,10 @@ class NwsCapPoller:
                             self._ledger.flush()
                         except Exception:
                             log.exception("CAP ledger flush() failed (non-fatal)")
+                            self._diagnose(
+                                FOUNDATION_CODES["cap.source_failed"],
+                                "CAP persistent dedupe flush failed after the poll.",
+                            )
 
                     log.info("CAP poll: emitted %d matching alerts (features=%d)", emitted, len(feats))
 
@@ -598,8 +632,13 @@ class NwsCapPoller:
 
                 except asyncio.CancelledError:
                     raise
-                except Exception:
+                except Exception as exc:
                     log.exception("CAP poll loop error")
+                    self._diagnose(
+                        FOUNDATION_CODES["cap.source_failed"],
+                        "CAP polling failed within the bounded source operation.",
+                        exc,
+                    )
 
                 # sleep to next poll, accounting for runtime
                 elapsed = time.time() - t0

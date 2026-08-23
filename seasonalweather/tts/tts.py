@@ -85,6 +85,7 @@ class TTS:
     seasonal_ttsd_config: object | None = None
     openai_compatible_config: object | None = None
     tts_data_base: str | None = None
+    diagnostic_sink: object | None = None
     _synthesis_service: SynthesisService | None = field(default=None, init=False, repr=False)
 
     def _request(self, text: str, *, purpose: str = "routine", deadline_at: dt.datetime | None = None):
@@ -225,6 +226,7 @@ class TTS:
                 capability_check=qualify,
                 lkg_resolver=self.lkg_resolver,  # controller-owned P1-10 evidence port
                 provider_adapters=providers,
+                diagnostic_sink=self.diagnostic_sink,
             )
         return self._synthesis_service
 

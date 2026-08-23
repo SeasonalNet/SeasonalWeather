@@ -10,7 +10,16 @@ import tempfile
 from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 
-from .bindings import NWWS_CODES, RELOAD_CODES, RULE_BINDINGS, RUNTIME_CODES, SEGMENT_BINDINGS, RuleCodeBinding
+from .bindings import (
+    FOUNDATION_BINDINGS,
+    FOUNDATION_CODES,
+    NWWS_CODES,
+    RELOAD_CODES,
+    RULE_BINDINGS,
+    RUNTIME_CODES,
+    SEGMENT_BINDINGS,
+    RuleCodeBinding,
+)
 from .codes import ConditionClass, DiagnosticCode, DiagnosticCodeError
 from .models import (
     DIAGNOSTIC_CATALOG_VERSION,
@@ -428,6 +437,7 @@ def _validate_bindings(definitions: tuple[DiagnosticDefinition, ...]) -> None:
     _validate_configuration_bindings(by_code)
     _validate_segment_bindings(by_code)
     _validate_runtime_bindings(by_code)
+    _validate_foundation_bindings(by_code)
 
 
 def _validate_configuration_bindings(by_code: dict[str, DiagnosticDefinition]) -> None:
@@ -458,6 +468,29 @@ def _validate_runtime_bindings(by_code: dict[str, DiagnosticDefinition]) -> None
         raise CatalogCompileError("runtime code bindings are incomplete or duplicated")
     if len(nwws_codes) != len(NWWS_CODES) or not nwws_codes.issubset(by_code):
         raise CatalogCompileError("NWWS source diagnostic bindings are incomplete or duplicated")
+
+
+def _validate_foundation_bindings(by_code: dict[str, DiagnosticDefinition]) -> None:
+    expected = set(FOUNDATION_CODES.values())
+    namespaces = {_foundation_namespace(code) for code in expected}
+    actual = {code for code in by_code if _foundation_namespace(code) in namespaces}
+    if expected != actual:
+        raise CatalogCompileError("active foundation namespace codes and bindings differ")
+    if len({binding.rule_id for binding in FOUNDATION_BINDINGS}) != len(FOUNDATION_BINDINGS):
+        raise CatalogCompileError("duplicate foundation diagnostic binding")
+    for binding in FOUNDATION_BINDINGS:
+        _validate_foundation_binding(binding, by_code.get(binding.code))
+
+
+def _foundation_namespace(code: str) -> str:
+    return code.rstrip("0123456789")
+
+
+def _validate_foundation_binding(binding: RuleCodeBinding, definition: DiagnosticDefinition | None) -> None:
+    if definition is None:
+        raise CatalogCompileError(f"foundation binding has no active catalog definition: {binding.rule_id}")
+    if definition.namespace != _foundation_namespace(binding.code) or binding.phase not in definition.supported_phases:
+        raise CatalogCompileError(f"foundation binding contradicts catalog definition: {binding.rule_id}")
 
 
 def _validate_segment_bindings(by_code: dict[str, DiagnosticDefinition]) -> None:

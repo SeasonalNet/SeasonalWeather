@@ -103,11 +103,17 @@ Freeze products are supported natively. `FZ.W` maps to SAME `FZW` (**Freeze Warn
 - Local-only TTS Compose profiles, including isolated Piper and legacy-TTS
   workers, are documented in
   [`docs/p3-03-local-only-tts.md`](docs/p3-03-local-only-tts.md).
+- Optional external `seasonal-ttsd` Compose credential integration, strict
+  response validation, and fallback behavior are documented in
+  [`docs/p3-04-seasonal-ttsd.md`](docs/p3-04-seasonal-ttsd.md).
 - The versioned read-only diagnostic namespace registry, stable configuration
   codes, curated explanations, deterministic catalog build/export, and
   `seasonalweather diagnostics list|explain` commands are documented in
   [`docs/diagnostic-catalog.md`](docs/diagnostic-catalog.md). The catalog is
   packaged software content, not mutable runtime occurrence state.
+- Active namespace ownership, binding coverage, and the reserved namespace
+  boundary are mapped in
+  [`docs/diagnostic-namespaces.md`](docs/diagnostic-namespaces.md).
 - Deterministic staged configuration semantic/compatibility/advisory
   validation, opt-in bounded environmental preflight, independently bound
   candidate/report verification, and reusable admission diagnostics are documented in

@@ -557,6 +557,35 @@ def test_remote_backend_fails_without_network_and_explicit_local_fallback_works(
     assert failed.failure is SynthesisFailure.BACKEND_UNAVAILABLE
 
 
+def test_tts_runtime_diagnostics_promote_primary_failure_and_fallback(monkeypatch, tmp_path: Path) -> None:
+    service = transitional_service()
+    calls: list[str] = []
+
+    class Sink:
+        def emit(self, code, **_kwargs):
+            calls.append(code)
+
+    def fake_local(req, output, engine, deadline, cancellation):
+        del deadline, cancellation
+        write_silence_wav(output, 0.1, req.output.sample_rate_hz)
+        from seasonalweather.artifacts.hashing import hash_file
+        from seasonalweather.artifacts.media import inspect_wav
+        from seasonalweather.tts.service import _artifact_evidence
+
+        identity = hash_file(output, maximum_bytes=req.output.maximum_bytes)
+        return _artifact_evidence(identity.sha256, identity.size_bytes, inspect_wav(output))
+
+    service._diagnostic_sink = Sink()
+    monkeypatch.setattr(service, "_run_local", fake_local)
+    result = service.synthesize(
+        request(backend=BackendId.SEASONAL_TTSD, fallback_backend=BackendId.LOCAL),
+        tmp_path / "diagnostic-fallback.wav",
+    )
+
+    assert result.fallback is not None and result.fallback.succeeded
+    assert calls == ["SWTTS3001", "SWTTS4001"]
+
+
 def test_capability_gate_accepts_degraded_and_rejects_unknown(tmp_path: Path) -> None:
     allowed = SynthesisService(
         capability_check=lambda _request, _engine: type("Decision", (), {"disposition": "degraded"})()

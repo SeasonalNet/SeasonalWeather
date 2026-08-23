@@ -38,6 +38,7 @@ from zoneinfo import ZoneInfo
 
 from ..alerts.active import AlertTracker
 from ..alerts.focus import AlertFocusPolicy, alert_holds_focus
+from ..diagnostics.bindings import FOUNDATION_CODES
 from ..liquidsoap_telnet import LiquidsoapTelnet
 from ..tts.async_bridge import FinalizationEvidence, synthesize_completed_wav_async
 from ..tts.audio import concat_wavs, wav_duration_seconds, write_silence_wav
@@ -195,6 +196,7 @@ class CycleConductor:
         mark_insert_aired_fn: Callable[[str, int], Any] | None = None,
         mark_segment_aired_fn: Callable[[str], Any] | None = None,
         activity_context: Callable[[], AsyncContextManager[None]] | None = None,
+        diagnostic_sink: object | None = None,
     ) -> None:
         """
         Parameters
@@ -240,6 +242,7 @@ class CycleConductor:
         self._mark_insert_aired_fn = mark_insert_aired_fn
         self._mark_segment_aired_fn = mark_segment_aired_fn
         self._activity_context = activity_context
+        self._diagnostic_sink: object | None = diagnostic_sink
         self._seg_gap_s = seg_gap_s
         self._lookahead_s = lookahead_s
         self._tick_s = tick_s
@@ -439,11 +442,16 @@ class CycleConductor:
             active = self._telnet.interrupt_active()
         except AttributeError:
             active = None
-        except Exception:
+        except Exception as exc:
             # A failed state query must not prematurely return stale cycle audio.
             log.warning(
                 "CycleConductor: interrupt status query failed; retaining cycle hold",
                 exc_info=True,
+            )
+            self._diagnose_liquidsoap(
+                FOUNDATION_CODES["liquidsoap.control_failed"],
+                "Liquidsoap interrupt state could not be queried.",
+                exc,
             )
             active = True
 
@@ -461,6 +469,10 @@ class CycleConductor:
             reset_ok = False
         except Exception:
             log.exception("CycleConductor: final safe cycle reset failed")
+            self._diagnose_liquidsoap(
+                FOUNDATION_CODES["liquidsoap.publication_reconciliation"],
+                "Liquidsoap cycle reset failed while releasing an interrupt hold.",
+            )
 
         self._interrupt_hold = False
         self._interrupt_expected_end = 0.0
@@ -857,8 +869,13 @@ class CycleConductor:
         )
         try:
             self._telnet.push_cycle(str(audio), meta=meta)
-        except Exception:
+        except Exception as exc:
             log.exception("CycleConductor: telnet push_cycle failed for scheduled insert id=%s", insert_id)
+            self._diagnose_liquidsoap(
+                FOUNDATION_CODES["liquidsoap.control_failed"],
+                "Liquidsoap rejected a scheduled cycle insert publication command.",
+                exc,
+            )
             return 0.0
 
         self._rotation_seg_count += 1
@@ -893,8 +910,13 @@ class CycleConductor:
         )
         try:
             self._telnet.push_cycle(str(audio), meta=meta)
-        except Exception:
+        except Exception as exc:
             log.exception("CycleConductor: telnet push_cycle failed key=%s", key)
+            self._diagnose_liquidsoap(
+                FOUNDATION_CODES["liquidsoap.control_failed"],
+                f"Liquidsoap rejected cycle segment publication for {key[:64]}.",
+                exc,
+            )
             return 0.0
 
         self._rotation_seg_count += 1
@@ -939,10 +961,15 @@ class CycleConductor:
                 extra={"sw_cycle_key": "alert", "sw_alert_id": alert_id},
             )
             self._telnet.push_cycle(str(audio), meta=meta)
-        except Exception:
+        except Exception as exc:
             log.exception(
                 "CycleConductor: failed pushing tracker alert id=%s",
                 alert_id,
+            )
+            self._diagnose_liquidsoap(
+                FOUNDATION_CODES["liquidsoap.control_failed"],
+                "Liquidsoap rejected active-alert cycle segment publication.",
+                exc,
             )
             return 0.0
 
@@ -1012,7 +1039,15 @@ class CycleConductor:
                 kind="cycle",
                 extra={"sw_cycle_key": "time"},
             )
-            self._telnet.push_cycle(str(wav), meta=meta)
+            try:
+                self._telnet.push_cycle(str(wav), meta=meta)
+            except Exception as exc:
+                self._diagnose_liquidsoap(
+                    FOUNDATION_CODES["liquidsoap.control_failed"],
+                    "Liquidsoap rejected live-time cycle segment publication.",
+                    exc,
+                )
+                raise
 
             self._rotation_seg_count += 1
             log.info("CycleConductor: → time (%.1fs) %r", dur, text)
@@ -1021,3 +1056,26 @@ class CycleConductor:
         except Exception:
             log.exception("CycleConductor: failed to synth/push live time segment")
             return 0.0
+
+    def _diagnose_liquidsoap(
+        self,
+        code: str,
+        message: str,
+        exception: BaseException | None = None,
+    ) -> None:
+        sink = self._diagnostic_sink
+        emit = getattr(sink, "emit", None)
+        if not callable(emit):
+            return
+        try:
+            _ = emit(
+                code,
+                component="cycle-conductor",
+                message=message,
+                operational_effect="Routine or interrupt broadcast publication is degraded at the Liquidsoap boundary.",
+                recovery_action="Inspect Liquidsoap readiness and reconcile the publication boundary before retrying.",
+                exception=exception,
+                source_id="cycle-conductor",
+            )
+        except Exception:
+            return

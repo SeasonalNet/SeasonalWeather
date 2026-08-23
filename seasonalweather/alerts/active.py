@@ -23,6 +23,7 @@ from typing import Callable, Optional
 
 from ..database.alerts import AlertStateRepository
 from ..database.core import SeasonalDatabase
+from ..diagnostics.bindings import FOUNDATION_CODES
 
 log = logging.getLogger("seasonalweather.active_alerts")
 
@@ -229,11 +230,17 @@ class AlertTracker:
     is required (Python GIL + single-threaded asyncio protect the dict).
     """
 
-    def __init__(self, state_path: str | Path, database: SeasonalDatabase | None = None) -> None:
+    def __init__(
+        self,
+        state_path: str | Path,
+        database: SeasonalDatabase | None = None,
+        diagnostic_sink: object | None = None,
+    ) -> None:
         self._path = Path(state_path)
         self._alerts: dict[str, ActiveAlert] = {}
         self._db = database
         self._repo = AlertStateRepository(database) if database is not None else None
+        self._diagnostic_sink: object | None = diagnostic_sink
         self._on_change: Callable[[str], None] | None = None
         self._warned_no_repo = False
 
@@ -451,8 +458,9 @@ class AlertTracker:
             if self._alerts:
                 log.info("AlertTracker: loaded %d entries from SQLite", len(self._alerts))
             return len(self._alerts)
-        except Exception:
+        except Exception as exc:
             log.exception("AlertTracker: SQLite load failed")
+            self._diagnose(exc)
             return 0
 
     def _persist(self) -> None:
@@ -470,5 +478,24 @@ class AlertTracker:
                 raw["updated_at"] = now_iso
                 payload.append(raw)
             self._repo.replace_active_alerts(payload)
-        except Exception:
+        except Exception as exc:
             log.exception("AlertTracker: SQLite persist failed; legacy JSON fallback is disabled")
+            self._diagnose(exc)
+
+    def _diagnose(self, exception: BaseException) -> None:
+        sink = self._diagnostic_sink
+        emit = getattr(sink, "emit", None)
+        if not callable(emit):
+            return
+        try:
+            _ = emit(
+                FOUNDATION_CODES["database.operation_failed"],
+                component="alert-tracker",
+                message="Active-alert state persistence failed at the SQLite authority boundary.",
+                operational_effect="Active-alert continuity across restart or subsequent cycle updates may be degraded.",
+                recovery_action="Inspect the bounded database failure and reconcile active-alert state before relying on restart recovery.",
+                exception=exception,
+                source_id="alert-tracker",
+            )
+        except Exception:
+            return

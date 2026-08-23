@@ -8,7 +8,8 @@ from typing import cast
 from unittest.mock import patch
 
 from seasonalweather.diagnostics import load_catalog
-from seasonalweather.logging_config import setup_logging
+from seasonalweather.diagnostics.bindings import OBS_CODES
+from seasonalweather.logging_config import _observability_failure_code, setup_logging
 from seasonalweather.observability import (
     AlertmanagerTransport,
     MetricsRegistry,
@@ -44,6 +45,13 @@ def test_structured_logging_is_json_by_default() -> None:
 def test_observability_diagnostic_namespace_is_catalogued() -> None:
     codes = {str(definition.code) for definition in load_catalog().definitions}
     assert {"SWOBS2001", "SWOBS3001", "SWOBS4001", "SWOBS6001", "SWOBS7001"} <= codes
+
+
+def test_optional_output_failures_use_trust_code_for_authorization_errors() -> None:
+    assert (
+        _observability_failure_code(PermissionError("destination forbidden")) == OBS_CODES["destination_unauthorized"]
+    )
+    assert _observability_failure_code(OSError("connection reset")) == OBS_CODES["transport_failed"]
 
 
 def test_metrics_registry_renders_bounded_prometheus_text() -> None:

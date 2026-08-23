@@ -5,7 +5,7 @@ version = 1
 # downward; increases require a separately governed exception.
 
 [checks.format]
-maximum = 63
+maximum = 62
 owner = "SeasonalWeather maintainers"
 rationale = "Remaining v0.17.0 Ruff formatter debt after touched-file cleanup."
 scope = "seasonalweather/, tests/, and tools/"
@@ -13,7 +13,7 @@ review_date = "2026-10-23"
 removal_condition = "Reduce whenever legacy files are materially changed; reach zero."
 
 [checks.lint]
-maximum = 870
+maximum = 869
 owner = "SeasonalWeather maintainers"
 rationale = "Initial v0.17.0 Ruff debt."
 scope = "seasonalweather/, tests/, and tools/"
@@ -61,7 +61,7 @@ review_date = "2026-10-23"
 removal_condition = "Remediate or replace each finding with a narrow governed exception."
 
 [checks.complexity]
-maximum = 180
+maximum = 179
 owner = "SeasonalWeather maintainers"
 rationale = "Initial v0.17.0 functions rated C or worse by Radon."
 scope = "seasonalweather/"

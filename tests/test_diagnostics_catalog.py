@@ -10,12 +10,15 @@ from pathlib import Path
 import pytest
 
 from seasonalweather.diagnostics.bindings import (
+    FOUNDATION_BINDINGS,
+    FOUNDATION_CODES,
     NWWS_CODES,
     OBS_CODES,
     RELOAD_CODES,
     RULE_BINDINGS,
     RUNTIME_CODES,
     SEGMENT_BINDINGS,
+    SEGMENT_CODES,
     binding_for_rule,
 )
 from seasonalweather.diagnostics.codes import (
@@ -152,6 +155,7 @@ def test_canonical_catalog_is_immutable_complete_and_deterministic() -> None:
         + len(RUNTIME_CODES)
         + len(NWWS_CODES)
         + len(OBS_CODES)
+        + len(FOUNDATION_CODES)
     )
     assert len(first.definitions) == expected_count
     assert {definition.introduction_version for definition in first.definitions} == {"0.18.0"}
@@ -402,6 +406,7 @@ def test_package_data_metadata_covers_compiled_source_and_explanations() -> None
         + len(RUNTIME_CODES)
         + len(NWWS_CODES)
         + len(OBS_CODES)
+        + len(FOUNDATION_CODES)
     )
 
 
@@ -440,7 +445,9 @@ def test_every_configuration_validation_rule_has_one_active_explainable_mapping(
         for package in ("configuration", "validation", "broadcast")
         for path in (ROOT / f"seasonalweather/{package}").glob("*.py")
     )
-    emitted = set(CODE_PATTERN.findall(source)) - set(RULE_BY_ID)
+    emitted = (set(CODE_PATTERN.findall(source)) - set(RULE_BY_ID)) | {
+        f"segment.{rule_id}" for rule_id in SEGMENT_CODES
+    }
     all_bindings = (*RULE_BINDINGS, *SEGMENT_BINDINGS)
     mapped = {binding.rule_id for binding in all_bindings}
     catalog = load_catalog()
@@ -462,6 +469,17 @@ def test_every_configuration_validation_rule_has_one_active_explainable_mapping(
         item.code for item in SEGMENT_BINDINGS
     }
     assert set(RUNTIME_CODES.values()).issubset({str(item.code) for item in catalog.definitions})
+    assert set(FOUNDATION_CODES.values()).issubset({str(item.code) for item in catalog.definitions})
+
+
+def test_every_active_namespace_has_a_bound_catalog_definition() -> None:
+    catalog = load_catalog()
+    expected = {item.token for item in NAMESPACES if item.state is NamespaceState.ACTIVE}
+    implemented = {item.namespace for item in catalog.definitions}
+
+    assert implemented == expected
+    assert {binding.code for binding in FOUNDATION_BINDINGS} == set(FOUNDATION_CODES.values())
+    assert all(binding_for_rule(binding.rule_id) is binding for binding in FOUNDATION_BINDINGS)
 
 
 def test_public_representations_are_pure_deterministic_and_api_ready() -> None:

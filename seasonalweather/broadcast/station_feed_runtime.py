@@ -11,13 +11,20 @@ from ..alerts.active import _vtec_track_id
 from ..alerts.builder import strip_nws_product_headers
 from ..alerts.vtec import (
     VTEC_FIND_RE as _VTEC_FIND_RE,
+)
+from ..alerts.vtec import (
     VTEC_PARSE_RE as _VTEC_PARSE_RE,
+)
+from ..alerts.vtec import (
     phen_sig_label as _vtec_phen_sig_label,
 )
 from ..config import AppConfig
 from ..database.station_feed import StationFeedRepository
+from ..diagnostics.bindings import FOUNDATION_CODES
 from ..same.events import (
     label_or_code as _same_label_or_code,
+)
+from ..same.events import (
     org_broadcast_prefix as _eas_org_broadcast_prefix,
 )
 from .station_feed import FeedSender, StationFeedAlert, build_station_feed_payload
@@ -30,11 +37,35 @@ _NWS_HEADER_ISSUED_RE = re.compile(
 )
 
 _APP_CFG: AppConfig | None = None
+_station_feed_diagnostic_sink: object | None = None
 
 
 def set_app_config(cfg: AppConfig | None) -> None:
     global _APP_CFG
     _APP_CFG = cfg
+
+
+def set_diagnostic_sink(sink: object | None) -> None:
+    global _station_feed_diagnostic_sink
+    _station_feed_diagnostic_sink = sink
+
+
+def _sf_diagnose(exception: BaseException, message: str) -> None:
+    emit = getattr(_station_feed_diagnostic_sink, "emit", None)
+    if not callable(emit):
+        return
+    try:
+        _ = emit(
+            FOUNDATION_CODES["database.operation_failed"],
+            component="station-feed",
+            message=message,
+            operational_effect="The public handled-alerts read model may be stale while canonical alert processing continues.",
+            recovery_action="Inspect the bounded database failure and allow the next station-feed maintenance or update operation to retry.",
+            exception=exception,
+            source_id="station-feed",
+        )
+    except Exception:
+        return
 
 def _sf_now_iso() -> str:
     return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
@@ -124,8 +155,9 @@ def _sf_repo_upsert(alert, *, expires_at=None) -> None:
                 payload=payload,
                 expires_at=expires_at or payload.get("expires") or payload.get("ends"),
             )
-    except Exception:
+    except Exception as exc:
         log.exception("Station feed: failed to persist alert to SQLite read model")
+        _sf_diagnose(exc, "Station-feed alert persistence failed.")
 
 
 def _sf_repo_delete(ids) -> None:
@@ -133,8 +165,9 @@ def _sf_repo_delete(ids) -> None:
         return
     try:
         _STATION_FEED_REPO.delete_alerts(str(x) for x in (ids or []))
-    except Exception:
+    except Exception as exc:
         log.exception("Station feed: failed to delete alerts from SQLite read model")
+        _sf_diagnose(exc, "Station-feed alert deletion failed.")
 
 
 def _sf_repo_housekeep(now_ts: float, *, max_items: int) -> int:
@@ -145,8 +178,9 @@ def _sf_repo_housekeep(now_ts: float, *, max_items: int) -> int:
         removed = _STATION_FEED_REPO.prune_expired(now=now, grace_seconds=_sf_hk_grace_s())
         removed += _STATION_FEED_REPO.trim_to_max(max_items)
         return removed
-    except Exception:
+    except Exception as exc:
         log.exception("Station feed housekeeping: SQLite read model prune failed")
+        _sf_diagnose(exc, "Station-feed read-model housekeeping failed.")
         return 0
 
 
@@ -185,8 +219,9 @@ def _sf_purge_legacy_synthetic_alerts() -> int:
     if _STATION_FEED_REPO is not None:
         try:
             removed_ids.update(_STATION_FEED_REPO.delete_legacy_synthetic_alerts())
-        except Exception:
+        except Exception as exc:
             log.exception("Station feed: failed removing legacy synthetic CAP rows")
+            _sf_diagnose(exc, "Station-feed legacy-row cleanup failed.")
 
     return len(removed_ids)
 
@@ -200,8 +235,9 @@ def _sf_hydrate_persisted_alerts() -> int:
     _station_id, _source, max_items, _ttl_s = _sf_cfg()
     try:
         payloads = _STATION_FEED_REPO.load_alerts(now=now, max_items=max_items)
-    except Exception:
+    except Exception as exc:
         log.exception("Station feed: failed loading persisted rows into runtime cache")
+        _sf_diagnose(exc, "Station-feed persisted-state hydration failed.")
         return 0
 
     hydrated = 0
@@ -991,8 +1027,9 @@ def _sf_station_feed_housekeeping_once():
 
         _sf_prune(now_ts, max_items=max_items)
         _sf_repo_housekeep(now_ts, max_items=max_items)
-    except Exception:
+    except Exception as exc:
         log.exception("Station feed housekeeping: tick failed")
+        _sf_diagnose(exc, "Station-feed housekeeping tick failed.")
 
 def _sf_station_feed_hk_loop():
     while True:

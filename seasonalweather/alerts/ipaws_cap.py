@@ -401,6 +401,7 @@ class IpawsCapPoller:
         ledger_path: str | None = None,
         ledger_max_age_days: int = 14,
         database: Any | None = None,
+        diagnostic_sink: object | None = None,
     ) -> None:
         self.out_queue = out_queue
         self.poll_seconds = max(30, int(poll_seconds))
@@ -421,8 +422,24 @@ class IpawsCapPoller:
             max_age_days=max(3, int(ledger_max_age_days)),
             database=database,
         )
+        self._diagnostic_sink = diagnostic_sink
 
         self._client: httpx2.AsyncClient | None = None
+
+    def _diagnose(self, code: str, message: str, exception: BaseException | None = None) -> None:
+        sink = self._diagnostic_sink
+        emit = getattr(sink, "emit", None)
+        if not callable(emit):
+            return
+        emit(
+            code,
+            component="ipaws-poller",
+            message=message,
+            operational_effect="IPAWS CAP ingestion is degraded within its bounded polling policy.",
+            recovery_action="Inspect the bounded source or parser failure; the next poll remains the recovery boundary.",
+            exception=exception,
+            source_id="ipaws-cap",
+        )
 
     async def _get_client(self) -> httpx2.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -458,10 +475,17 @@ class IpawsCapPoller:
 
     def _parse_alerts(self, xml_text: str) -> list[IpawsCapEvent]:
         """Parse the IPAWS envelope and return matching IpawsCapEvent objects."""
+        from ..diagnostics.bindings import FOUNDATION_CODES
+
         try:
             root = ET.fromstring(xml_text.strip())
         except ET.ParseError as exc:
             log.warning("IPAWS XML parse error: %s", exc)
+            self._diagnose(
+                FOUNDATION_CODES["cap.product_invalid"],
+                "An IPAWS CAP XML envelope could not be parsed.",
+                exc,
+            )
             return []
 
         # The envelope is <ns1:alerts>.  Its direct children are <alert>
@@ -600,6 +624,8 @@ class IpawsCapPoller:
 
     async def run_forever(self) -> None:
         """Poll loop. Never returns unless cancelled."""
+        from ..diagnostics.bindings import FOUNDATION_CODES
+
         log.info(
             "IPAWS CAP poller starting (poll=%ss url=%s service_area_fips=%d)",
             self.poll_seconds,
@@ -669,8 +695,13 @@ class IpawsCapPoller:
 
                 except asyncio.CancelledError:
                     raise
-                except Exception:
+                except Exception as exc:
                     log.exception("IPAWS poll loop error")
+                    self._diagnose(
+                        FOUNDATION_CODES["cap.source_failed"],
+                        "IPAWS polling failed within the bounded source operation.",
+                        exc,
+                    )
 
                 elapsed = time.time() - t0
                 sleep_s = max(1.0, float(self.poll_seconds) - elapsed)

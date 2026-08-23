@@ -49,6 +49,8 @@ abbreviations, and package-name inference are prohibited.
 
 Reserved namespaces are visible but cannot contain active or retired codes.
 Activation requires a future architecture and catalog-version decision.
+The active namespace implementation map and binding surfaces are documented in
+[`docs/diagnostic-namespaces.md`](diagnostic-namespaces.md).
 
 ## Universal numbering taxonomy
 

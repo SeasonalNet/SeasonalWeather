@@ -68,3 +68,19 @@ The runtime loads the embedded record when present and uses a bounded source
 fallback for unbuilt checkouts. The same identity feeds `seasonalweather
 version [--json]`, authenticated `GET /v1/version`, controller startup logs,
 configuration validator stamps, and default SWWP registration fields.
+
+## Runtime compatibility admission
+
+Before normal controller work begins, the runtime compares the immutable build
+record with the supported release contract. It requires the current software
+release family, an overlapping SWWP, validation, job, configuration,
+diagnostic, and capability schema version, and a role-appropriate image
+profile. Controllers accept `controller` and the unbuilt `source` profile;
+workers additionally require the embedded profile to match the selected worker
+profile, with `source` retained as the development fallback.
+
+A well-formed record that fails this comparison is rejected with
+`SWBUILD2001` and startup does not proceed. A record that cannot be parsed or
+validated remains `SWBUILD1001`. The check is implemented in
+`seasonalweather.build_metadata.compatibility` and is shared by controller
+and worker entrypoints.
