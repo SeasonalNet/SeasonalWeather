@@ -52,6 +52,8 @@ def test_specialized_worker_profiles_carry_their_runtime_engines() -> None:
     assert "wine32:i386" in dockerfile
     assert "xvfb" in dockerfile.lower()
     assert "docker/spfy/voice-manifest.txt" in dockerfile
+    assert "apt-get purge --yes curl tar" not in dockerfile
+    assert "apt-get purge --yes curl;" in dockerfile
 
 
 def test_worker_dependency_locks_exclude_controller_runtime() -> None:

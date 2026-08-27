@@ -127,7 +127,7 @@ RUN set -eux; \
         done < /tmp/spfy-voice-manifest.txt; \
         test -x /opt/spfy/bin/spfy_synth; test -d /opt/spfy/en-US/tom; \
         rm -rf /tmp/spfy.tar.gz /tmp/spfy-release; \
-        apt-get purge --yes curl tar; \
+        apt-get purge --yes curl; \
         rm -rf /var/lib/apt/lists/* ;; \
       *) rm -f /tmp/spfy-voice-manifest.txt ;; \
     esac
