@@ -13,7 +13,16 @@ from seasonalweather.build_metadata import BuildInfo, BuildInfoError
 
 ROOT = Path(__file__).resolve().parents[1]
 BAKE_FILE = ROOT / "docker-bake.hcl"
-IMAGE_TARGETS = ("controller", "routine-worker", "piper", "legacy-tts", "maintenance", "development")
+IMAGE_TARGETS = (
+    "controller",
+    "routine-worker",
+    "piper",
+    "legacy-tts",
+    "voicetext-paul",
+    "spfy",
+    "maintenance",
+    "development",
+)
 DOCKER_ENVIRONMENT_KEYS = (
     "DOCKER_CONFIG",
     "DOCKER_CONTEXT",

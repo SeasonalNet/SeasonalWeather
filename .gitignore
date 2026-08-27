@@ -6,15 +6,14 @@ __pycache__/
 build/
 dist/
 *.egg-info/
+seasonalweather/_version.py
 *.pyc
 # ==================================== 
 # local dependency artifacts / backups
 # ====================================
 *.bak*
 requirements*.lock*.txt
-requirements.txt.old.*
 requirements.in.old.*
-requirements.txt.bak.*
 requirements.in.bak.*
 requirements*.trixie*.txt
 requirements*.bookworm*.txt

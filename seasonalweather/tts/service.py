@@ -99,6 +99,19 @@ def _voicetext_resources_available(request: SynthesisRequest) -> bool:
     )
 
 
+def _spfy_resources_available(request: SynthesisRequest) -> bool:
+    return Path(request.local.spfy.voice_dir).is_dir()
+
+
+def _local_resources_available(request: SynthesisRequest, engine: str) -> bool:
+    required = LocalEngineRegistry.required_resources(engine)
+    specialized = {
+        "voicetext_paul": _voicetext_resources_available,
+        "spfy": _spfy_resources_available,
+    }.get(engine)
+    return all(_resource_available(resource) for resource in required) and (specialized is None or specialized(request))
+
+
 class SynthesisService:
     """One controller-facing boundary for local and configured remote backends."""
 
@@ -150,9 +163,7 @@ class SynthesisService:
             return False, exc.classification
         except ValueError:
             return False, "invalid_input"
-        if any(not _resource_available(resource) for resource in LocalEngineRegistry.required_resources(engine)):
-            return False, "backend_unavailable"
-        if engine == "voicetext_paul" and not _voicetext_resources_available(request):
+        if not _local_resources_available(request, engine):
             return False, "backend_unavailable"
         try:
             self._require_capability(self._capability_check(request, LocalEngineRegistry.capability_for(engine)))
@@ -1165,6 +1176,7 @@ class SynthesisService:
             },
             "preprocessing_version": request.preprocessing_version,
             "voicetext": request.local.voicetext_paul.model_dump(mode="json"),
+            "spfy": request.local.spfy.model_dump(mode="json"),
         }
         if request.backend is not BackendId.LOCAL:
             profile["backend_profile_identity"] = request.backend_profile_identity or "unconfigured"

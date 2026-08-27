@@ -122,6 +122,20 @@ class VoiceTextOptions(TtsModel):
     phoneme_overrides_x_cmu: tuple[TextOverride, ...] = Field(default_factory=tuple, max_length=32)
 
 
+class SpfyOptions(TtsModel):
+    """Bounded paths for the optional Speechify-compatible local worker."""
+
+    executable: str = Field(default="/opt/spfy/bin/spfy_synth", min_length=1, max_length=4096)
+    voice_dir: str = Field(default="/opt/spfy", min_length=1, max_length=4096)
+
+    @field_validator("executable", "voice_dir")
+    @classmethod
+    def no_nul(cls, value: str) -> str:
+        if "\x00" in value or "\r" in value or "\n" in value:
+            raise ValueError("spfy paths cannot contain control characters")
+        return value
+
+
 class LocalEngineOptions(TtsModel):
     engine: str = Field(default="espeak-ng", min_length=2, max_length=64)
     voice: str = Field(default="9", min_length=1, max_length=128)
@@ -135,6 +149,7 @@ class LocalEngineOptions(TtsModel):
     # the authoritative output policy after the handler returns.
     volume: float = Field(default=1.0, ge=0.0, le=2.0)
     voicetext_paul: VoiceTextOptions = Field(default_factory=VoiceTextOptions)
+    spfy: SpfyOptions = Field(default_factory=SpfyOptions)
 
     @field_validator("engine", "voice")
     @classmethod

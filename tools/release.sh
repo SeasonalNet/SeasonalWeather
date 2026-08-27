@@ -50,7 +50,6 @@ if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; t
 fi
 
 python3 tools/semver_guard.py check-newer "$version"
-python3 tools/semver_guard.py replace-version "$version"
 python3 tools/semver_guard.py check-working
 
 release_python="${RELEASE_PYTHON:-}"
@@ -83,8 +82,7 @@ else
   echo "warning: SKIP_TESTS=1 set; pytest was not run" >&2
 fi
 
-git add seasonalweather/__init__.py
-git commit -m "ver: release ${tag}"
+git commit --allow-empty -m "ver: release ${tag}"
 git tag -a "$tag" -m "SeasonalWeather ${tag}"
 
 cat <<EOF
@@ -92,7 +90,7 @@ Created release commit and annotated tag ${tag}.
 
 Verify with:
   git show --no-patch --oneline --decorate ${tag}^{}
-  git show ${tag}^{}:seasonalweather/__init__.py
+  python3 tools/semver_guard.py check-tag ${tag}
 
 Push with:
   git push origin main ${tag}

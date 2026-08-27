@@ -77,7 +77,7 @@ def checks() -> dict[str, Check]:
             _line_count(r"^.+:\d+: error: "),
         ),
         "basedpyright": Check(
-            (python, "-m", "basedpyright"),
+            (python, "-m", "basedpyright", "--pythonpath", python),
             _line_count(r" - error: "),
         ),
         "dependency": Check(

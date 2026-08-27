@@ -23,6 +23,8 @@ as the worker service's dedicated secret.
 | `routine-worker` | `routine` | segment, standard TTS, audio conversion, cycle, and alert artifacts |
 | `piper` | `routine` | Piper TTS and alert artifacts |
 | `legacy-tts` | `routine` | legacy local TTS and alert artifacts |
+| `voicetext-paul` | `routine` | VoiceText Paul TTS and alert artifacts |
+| `spfy` | `routine` | `spfy` TTS and alert artifacts |
 | `maintenance` | `maintenance` | maintenance reconciliation |
 | `development` | `routine`, `maintenance` | all bounded routine and maintenance handler seams |
 

@@ -119,7 +119,9 @@ def validate_semantics(compiled: CompiledConfiguration) -> tuple[ValidationIssue
 
 
 _TTS_BACKENDS = frozenset({"local", "seasonal_ttsd", "openai_compatible"})
-_TTS_LOCAL_ALIASES = frozenset({"espeak", "espeak-ng", "espeak_ng", "piper", "festival", "dectalk", "voicetext_paul"})
+_TTS_LOCAL_ALIASES = frozenset(
+    {"espeak", "espeak-ng", "espeak_ng", "piper", "festival", "dectalk", "voicetext_paul", "spfy"}
+)
 
 
 def _tts_issues(compiled: CompiledConfiguration, value: Mapping[str, object]) -> tuple[ValidationIssue, ...]:

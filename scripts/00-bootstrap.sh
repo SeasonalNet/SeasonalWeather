@@ -15,7 +15,7 @@
 #   SEASONAL_INSTALL_PROFILE=x  — minimal|standard|voicetext-paul|dectalk|custom
 #   SEASONAL_ESPEAK=0|1        — install espeak-ng fallback TTS packages
 #   SEASONAL_FESTIVAL=0|1      — install Festival TTS packages
-#   SEASONAL_PIPER=0|1         — install Piper Python TTS requirements
+#   SEASONAL_PIPER=0|1         — install the Piper Python TTS dependency group
 #   SEASONAL_VOICETEXT_PAUL=1  — install the VoiceText Paul (Wine) TTS backend
 #   SEASONAL_DECTALK=1         — install DECtalk (builds from source; slow)
 #   SEASONAL_DECTALK_UPDATE=1  — pull latest DECtalk source before rebuilding
@@ -411,13 +411,14 @@ log "Creating Python venv"
 if [[ ! -d /opt/seasonalweather/venv ]]; then
   python3 -m venv /opt/seasonalweather/venv
 fi
-/opt/seasonalweather/venv/bin/python -m pip install --upgrade pip wheel
-/opt/seasonalweather/venv/bin/pip install -r /opt/seasonalweather/app/requirements.txt
+/opt/seasonalweather/venv/bin/python -m pip install --upgrade pip uv==0.12.4
+cd /opt/seasonalweather/app
 if [[ "${SEASONAL_PIPER:-0}" == "1" ]]; then
   log "Installing Piper Python TTS stack"
-  /opt/seasonalweather/venv/bin/pip install -r /opt/seasonalweather/app/requirements-piper.txt
+  /opt/seasonalweather/venv/bin/uv sync --frozen --no-dev --group controller --group worker-runtime --group piper
 else
   log "Skipping Piper Python TTS stack"
+  /opt/seasonalweather/venv/bin/uv sync --frozen --no-dev --group controller --group worker-runtime
 fi
 
 # -----------------------------------------------------------------------------------------

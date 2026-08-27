@@ -6,7 +6,7 @@ scope = "Controller and worker image profiles; Compose topology and lifecycle re
 review_date = "2026-10-23"
 removal_condition = "Replace this contract only when the image profiles or their deployment security authority are deliberately revised."
 
-profiles = ["controller", "routine-worker", "piper", "legacy-tts", "maintenance", "development"]
+profiles = ["controller", "routine-worker", "piper", "legacy-tts", "voicetext-paul", "spfy", "maintenance", "development"]
 service_user = "seasonalweather"
 service_uid = 10001
 service_gid = 10001
@@ -101,5 +101,7 @@ required_context_excludes = [
   "*.p12",
   "*.sqlite3",
 ]
+controller_dependency_group = "controller"
+worker_dependency_groups = ["worker-runtime", "piper"]
 forbidden_controller_dependencies = ["piper-tts", "ffmpeg", "samedec", "samegen", "espeak"]
 forbidden_worker_dependencies = ["slixmpp", "sqlalchemy", "fastapi", "uvicorn"]

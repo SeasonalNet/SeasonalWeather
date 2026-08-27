@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_p2_09_matrix_covers_the_declared_bake_targets() -> None:
     assert tuple(spec.profile for spec in IMAGE_SPECS) == IMAGE_TARGETS
-    assert len(IMAGE_SPECS) == 6
+    assert len(IMAGE_SPECS) == 8
     assert IMAGE_SPECS[0].role == "controller"
     assert all(spec.role == "worker" for spec in IMAGE_SPECS[1:])
 

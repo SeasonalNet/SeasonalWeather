@@ -2,6 +2,7 @@ import datetime as dt
 from zoneinfo import ZoneInfo
 
 from seasonalweather.broadcast.product_text import (
+    build_nwws_watch_action_script,
     build_nwws_watch_vtec_script,
     build_nwws_watch_partial_cancel_script,
     extract_nwws_wcn_area_desc,
@@ -78,6 +79,7 @@ def test_wcn_watch_script_prefers_resolved_area_text_when_available():
     assert "in Maryland: Montgomery" in script
     assert "in Virginia: Arlington" in script
     assert "the District of Columbia" not in script
+
 
 WCN_SVA_NO_UGC = """WWUS61 KPHI 201810
 WCNPHI
@@ -235,7 +237,10 @@ def test_wcn_mixed_can_con_uses_watch_specific_partial_script():
 
     assert "Severe Thunderstorm Watch Number 234 has been cancelled" in script
     assert "in Maryland: Washington, Allegany, and Garrett" in script
-    assert "Severe Thunderstorm Watch Number 234 remains in effect until 8 PM this evening for the District of Columbia and the following counties:" in script
+    assert (
+        "Severe Thunderstorm Watch Number 234 remains in effect until 8 PM this evening for the District of Columbia and the following counties:"
+        in script
+    )
     assert "This watch includes the District of Columbia." not in script
     assert "in Virginia: Clarke, Fauquier, Loudoun, and Prince William" in script
     assert "404 WWUS61" not in script
@@ -319,8 +324,14 @@ def test_wcn_mixed_exp_con_uses_lifecycle_county_wording_and_midnight_tonight():
         now=dt.datetime(2026, 6, 11, 22, 4, tzinfo=ZoneInfo("America/New_York")),
     )
 
-    assert "Severe Thunderstorm Watch Number 315 has been allowed to expire for the following counties: in Maryland: Anne Arundel, Baltimore, Baltimore City, and Harford." in script
-    assert "Severe Thunderstorm Watch Number 317 remains in effect until midnight tonight for the following counties: in Maryland: Cecil, Calvert, Charles, and St. Marys; in Virginia: King George and Stafford." in script
+    assert (
+        "Severe Thunderstorm Watch Number 315 has been allowed to expire for the following counties: in Maryland: Anne Arundel, Baltimore, Baltimore City, and Harford."
+        in script
+    )
+    assert (
+        "Severe Thunderstorm Watch Number 317 remains in effect until midnight tonight for the following counties: in Maryland: Cecil, Calvert, Charles, and St. Marys; in Virginia: King George and Stafford."
+        in script
+    )
     assert "has been allowed to expire for the following areas.\n\nThis watch includes" not in script
     assert "Remember, a severe thunderstorm watch means" in script
 
@@ -372,6 +383,49 @@ def test_nwws_render_facade_normalizes_wcn_partial_cancel_script():
     assert rendered.renderer == "nwws-watch-partial-cancel"
     assert "Severe Thunderstorm Watch Number 234 has been cancelled" in rendered.script
     assert "raw partial cancel fallback" not in rendered.script
+
+
+WCN_SVA_CAN_NEW_SAME_SECTION = """WWUS61 KLWX 201901
+WCNLWX
+
+WATCH COUNTY NOTIFICATION FOR WATCHES 604/605
+NATIONAL WEATHER SERVICE BALTIMORE MD/WASHINGTON DC
+301 PM EDT THU AUG 20 2026
+
+DCC001-MDC031-210200-
+/O.CAN.KLWX.SV.A.0604.000000T0000Z-260821T0200Z/
+/O.NEW.KLWX.TO.A.0605.260820T1901Z-260821T0200Z/
+
+THE NATIONAL WEATHER SERVICE HAS ISSUED TORNADO WATCH 605 UNTIL
+10 PM EDT THIS EVENING WHICH REPLACES A PORTION OF SEVERE
+THUNDERSTORM WATCH 604. THE NEW WATCH IS VALID FOR THE FOLLOWING
+AREAS
+
+THE DISTRICT OF COLUMBIA
+
+IN MARYLAND THE NEW WATCH INCLUDES 1 COUNTY
+
+IN CENTRAL MARYLAND
+
+MONTGOMERY
+
+$$
+"""
+
+
+def test_wcn_can_and_new_in_one_section_render_as_separate_action_scripts():
+    vtec = [
+        "/O.CAN.KLWX.SV.A.0604.000000T0000Z-260821T0200Z/",
+        "/O.NEW.KLWX.TO.A.0605.260820T1901Z-260821T0200Z/",
+    ]
+
+    full = build_nwws_watch_action_script(WCN_SVA_CAN_NEW_SAME_SECTION, vtec, "NEW")
+    voice = build_nwws_watch_action_script(WCN_SVA_CAN_NEW_SAME_SECTION, vtec, "CAN")
+
+    assert "Tornado Watch Number 605" in full
+    assert "Severe Thunderstorm Watch Number 604 has been cancelled" not in full
+    assert "Severe Thunderstorm Watch Number 604 has been cancelled" in voice
+    assert "Tornado Watch Number 605" not in voice
 
 
 WCN_SVA_COMPLETE_CAN = """WWUS61 KLWX 050129

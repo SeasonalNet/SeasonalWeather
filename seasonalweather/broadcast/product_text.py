@@ -17,6 +17,7 @@ Design rules:
     call these free functions, forwarding self._tz, self._cap_vtec_list(ev)
     etc. as explicit arguments.
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -30,10 +31,28 @@ from typing import Any, Callable
 # ---------------------------------------------------------------------------
 _MARINE_UGC_RE = re.compile(r"\b(?:ANZ|AMZ|GMZ|LMZ|PHZ|PKZ|PZZ|SLZ)\d{3}\b", re.IGNORECASE)
 _MARINE_AREA_HINTS = (
-    "tidal potomac", "chesapeake bay", "atlantic coastal waters", "coastal waters",
-    "patapsco river", "patuxent river", "harbor", "sound", "sounds", "inlet",
-    "strait", "straits", "gulf", "ocean", "offshore", "nearshore", "open lake",
-    "lake huron", "lake michigan", "lake superior", "lake erie", "marine",
+    "tidal potomac",
+    "chesapeake bay",
+    "atlantic coastal waters",
+    "coastal waters",
+    "patapsco river",
+    "patuxent river",
+    "harbor",
+    "sound",
+    "sounds",
+    "inlet",
+    "strait",
+    "straits",
+    "gulf",
+    "ocean",
+    "offshore",
+    "nearshore",
+    "open lake",
+    "lake huron",
+    "lake michigan",
+    "lake superior",
+    "lake erie",
+    "marine",
 )
 _MARINE_PHEN = {"SC", "GL", "SR", "HF", "SE", "UP", "RB", "SI", "BW", "MF", "MH", "MS", "LO", "SU", "MA"}
 
@@ -42,20 +61,57 @@ _MARINE_PHEN = {"SC", "GL", "SR", "HF", "SE", "UP", "RB", "SI", "BW", "MF", "MH"
 # US state abbreviation -> full name
 # ---------------------------------------------------------------------------
 STATE_NAME_FULL: dict[str, str] = {
-    "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas",
-    "CA": "California", "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware",
-    "DC": "the District of Columbia", "FL": "Florida", "GA": "Georgia",
-    "HI": "Hawaii", "ID": "Idaho", "IL": "Illinois", "IN": "Indiana",
-    "IA": "Iowa", "KS": "Kansas", "KY": "Kentucky", "LA": "Louisiana",
-    "ME": "Maine", "MD": "Maryland", "MA": "Massachusetts", "MI": "Michigan",
-    "MN": "Minnesota", "MS": "Mississippi", "MO": "Missouri", "MT": "Montana",
-    "NE": "Nebraska", "NV": "Nevada", "NH": "New Hampshire", "NJ": "New Jersey",
-    "NM": "New Mexico", "NY": "New York", "NC": "North Carolina",
-    "ND": "North Dakota", "OH": "Ohio", "OK": "Oklahoma", "OR": "Oregon",
-    "PA": "Pennsylvania", "RI": "Rhode Island", "SC": "South Carolina",
-    "SD": "South Dakota", "TN": "Tennessee", "TX": "Texas", "UT": "Utah",
-    "VT": "Vermont", "VA": "Virginia", "WA": "Washington",
-    "WV": "West Virginia", "WI": "Wisconsin", "WY": "Wyoming",
+    "AL": "Alabama",
+    "AK": "Alaska",
+    "AZ": "Arizona",
+    "AR": "Arkansas",
+    "CA": "California",
+    "CO": "Colorado",
+    "CT": "Connecticut",
+    "DE": "Delaware",
+    "DC": "the District of Columbia",
+    "FL": "Florida",
+    "GA": "Georgia",
+    "HI": "Hawaii",
+    "ID": "Idaho",
+    "IL": "Illinois",
+    "IN": "Indiana",
+    "IA": "Iowa",
+    "KS": "Kansas",
+    "KY": "Kentucky",
+    "LA": "Louisiana",
+    "ME": "Maine",
+    "MD": "Maryland",
+    "MA": "Massachusetts",
+    "MI": "Michigan",
+    "MN": "Minnesota",
+    "MS": "Mississippi",
+    "MO": "Missouri",
+    "MT": "Montana",
+    "NE": "Nebraska",
+    "NV": "Nevada",
+    "NH": "New Hampshire",
+    "NJ": "New Jersey",
+    "NM": "New Mexico",
+    "NY": "New York",
+    "NC": "North Carolina",
+    "ND": "North Dakota",
+    "OH": "Ohio",
+    "OK": "Oklahoma",
+    "OR": "Oregon",
+    "PA": "Pennsylvania",
+    "RI": "Rhode Island",
+    "SC": "South Carolina",
+    "SD": "South Dakota",
+    "TN": "Tennessee",
+    "TX": "Texas",
+    "UT": "Utah",
+    "VT": "Vermont",
+    "VA": "Virginia",
+    "WA": "Washington",
+    "WV": "West Virginia",
+    "WI": "Wisconsin",
+    "WY": "Wyoming",
 }
 
 
@@ -186,10 +242,7 @@ def sps_preamble(sent_iso: str | None = None, *, local_tz: dt.tzinfo | None = No
     """
     issued = fmt_local_from_utc_iso(sent_iso or "", local_tz=local_tz)
     if issued:
-        return (
-            "And now a Special Weather Statement from your National Weather Service, "
-            f"issued at {issued}."
-        )
+        return f"And now a Special Weather Statement from your National Weather Service, issued at {issued}."
     return "And now a Special Weather Statement from your National Weather Service."
 
 
@@ -204,10 +257,7 @@ def fix_sps_preamble(script: str, official_text: str) -> str:
     issued = nws_header_issued_phrase(official_text)
     lead = "And now a Special Weather Statement from your National Weather Service."
     if issued:
-        lead = (
-            "And now a Special Weather Statement from your National Weather Service, "
-            f"issued at {issued}."
-        )
+        lead = f"And now a Special Weather Statement from your National Weather Service, issued at {issued}."
 
     out = _SPS_INTRO_LEAD_RE.sub(lead + "\n", body, count=1)
     if out == body:
@@ -220,6 +270,7 @@ def fix_sps_preamble(script: str, official_text: str) -> str:
 # ---------------------------------------------------------------------------
 # Text utilities
 # ---------------------------------------------------------------------------
+
 
 def clean_cap_text(s: str, *, limit: int = 900) -> str:
     """Normalise whitespace, collapse ellipses, strip stray AWIPS IDs."""
@@ -274,6 +325,7 @@ def parse_cap_area_by_state(
 # ---------------------------------------------------------------------------
 # CAP statement / area helpers (pre-existing, preserved)
 # ---------------------------------------------------------------------------
+
 
 def cap_is_special_weather_statement(event: str | None) -> bool:
     return str(event or "").strip().lower() == "special weather statement"
@@ -401,8 +453,6 @@ def cap_full_opening_line(
     if nws_hl:
         return nws_hl if nws_hl.endswith((".", "!", "?")) else nws_hl + "."
     return f"{str(event).strip()}."
-
-
 
 
 @dataclass(frozen=True)
@@ -578,6 +628,7 @@ def expiry_summary_script(official_text: str) -> str | None:
 # CAP script builders (free functions — Orchestrator shims call these)
 # ---------------------------------------------------------------------------
 
+
 def build_statement_vtec_action_script(
     *,
     event: str,
@@ -625,7 +676,10 @@ def build_statement_vtec_action_script(
     area_line = _county_segs()
     if area_line:
         area_noun = cap_statement_area_noun(
-            event=event, area_desc=area_desc, parameters=parameters, vtec=vtec,
+            event=event,
+            area_desc=area_desc,
+            parameters=parameters,
+            vtec=vtec,
         )
         lines.append(f"For the following {area_noun}: {area_line}.")
     if summary_line:
@@ -787,12 +841,13 @@ def _fix_headline_case(h: str) -> str:
 @dataclass
 class NwwsProductSegment:
     """One $$-delimited section of a multi-segment NWWS product."""
-    actions: set[str]       # VTEC action codes present (e.g. {"CAN"}, {"CON"})
-    headline: str           # Cleaned headline from ...X... line
-    area_text: str          # Pipe-joined geographic area names
-    reason_text: str        # Why the event is occurring/ending (narrative prose)
-    precautions: str        # PRECAUTIONARY/PREPAREDNESS content
-    expiry_phrase: str      # e.g. "315 PM EDT" extracted from headline
+
+    actions: set[str]  # VTEC action codes present (e.g. {"CAN"}, {"CON"})
+    headline: str  # Cleaned headline from ...X... line
+    area_text: str  # Pipe-joined geographic area names
+    reason_text: str  # Why the event is occurring/ending (narrative prose)
+    precautions: str  # PRECAUTIONARY/PREPAREDNESS content
+    expiry_phrase: str  # e.g. "315 PM EDT" extracted from headline
 
 
 def _split_nwws_vtec_sections(product_text: str) -> list[str]:
@@ -1003,14 +1058,16 @@ def parse_nwws_product_segments(product_text: str) -> list[NwwsProductSegment]:
             else:
                 body_parts.append(s)
 
-        segments.append(NwwsProductSegment(
-            actions=actions,
-            headline=headline,
-            area_text=area_text,
-            reason_text=" ".join(body_parts).strip(),
-            precautions=" ".join(precaution_parts).strip(),
-            expiry_phrase=expiry_phrase,
-        ))
+        segments.append(
+            NwwsProductSegment(
+                actions=actions,
+                headline=headline,
+                area_text=area_text,
+                reason_text=" ".join(body_parts).strip(),
+                precautions=" ".join(precaution_parts).strip(),
+                expiry_phrase=expiry_phrase,
+            )
+        )
 
     return [s for s in segments if s.actions]
 
@@ -1076,10 +1133,12 @@ def build_nwws_partial_cancel_script(
         if _reason_starts_with_event_terminal_scope(event, seg.reason_text):
             lines.append(_ensure_sentence(seg.reason_text))
         else:
-            lines.append(_headline_or_fallback(
-                seg,
-                f"The {event} has been cancelled for the following areas: {area}.",
-            ))
+            lines.append(
+                _headline_or_fallback(
+                    seg,
+                    f"The {event} has been cancelled for the following areas: {area}.",
+                )
+            )
             if seg.reason_text:
                 lines.append(_ensure_sentence(seg.reason_text))
 
@@ -1088,20 +1147,24 @@ def build_nwws_partial_cancel_script(
         if _reason_starts_with_event_terminal_scope(event, seg.reason_text):
             lines.append(_ensure_sentence(seg.reason_text))
         else:
-            lines.append(_headline_or_fallback(
-                seg,
-                f"The {event} has been allowed to expire for the following areas: {area}.",
-            ))
+            lines.append(
+                _headline_or_fallback(
+                    seg,
+                    f"The {event} has been allowed to expire for the following areas: {area}.",
+                )
+            )
             if seg.reason_text:
                 lines.append(_ensure_sentence(seg.reason_text))
 
     for seg in con_segs:
         area = seg.area_text or "other areas"
         exp_part = f" until {seg.expiry_phrase}" if seg.expiry_phrase else ""
-        lines.append(_headline_or_fallback(
-            seg,
-            f"A {event} remains in effect{exp_part} for the following areas: {area}.",
-        ))
+        lines.append(
+            _headline_or_fallback(
+                seg,
+                f"A {event} remains in effect{exp_part} for the following areas: {area}.",
+            )
+        )
         if seg.reason_text:
             lines.append(f"{seg.reason_text.rstrip('.')}.")
         if seg.precautions:
@@ -1162,28 +1225,34 @@ _WCN_AREA_STOP_RE = re.compile(
     re.IGNORECASE,
 )
 _WCN_STATE_COUNT_RE = re.compile(
-    r"^IN (?P<state>[A-Z ]+?) THIS "
-    r"(?:WATCH INCLUDES|CANCELS|ALLOWS TO EXPIRE|ALLOWED TO EXPIRE) \d+ "
+    r"^IN (?P<state>[A-Z ]+?) "
+    r"(?:(?:THIS )?(?:WATCH INCLUDES|CANCELS|ALLOWS TO EXPIRE|ALLOWED TO EXPIRE)|THE NEW WATCH INCLUDES) \d+ "
     r"(?P<kind>COUNTY|COUNTIES|CITY|CITIES|INDEPENDENT CITIES)\b",
     re.IGNORECASE,
 )
 
 
-def _parse_watch_vtec(vtec: list[str] | None) -> dict[str, Any] | None:
+def _watch_vtec_match(raw: object, wanted_action: str) -> re.Match[str] | None:
+    match = _WATCH_VTEC_RE.search(str(raw).strip().upper())
+    if match is None or (wanted_action and match.group("action") != wanted_action):
+        return None
+    if match.group("sig") != "A" or match.group("phen") not in {"TO", "SV"}:
+        return None
+    return match
+
+
+def _parse_watch_vtec(vtec: list[str] | None, *, action: str | None = None) -> dict[str, Any] | None:
+    wanted_action = (action or "").strip().upper()
     for raw in vtec or []:
-        m = _WATCH_VTEC_RE.search(str(raw).strip().upper())
-        if not m:
-            continue
-        sig = m.group("sig")
-        phen = m.group("phen")
-        if sig != "A" or phen not in {"TO", "SV"}:
+        m = _watch_vtec_match(raw, wanted_action)
+        if m is None:
             continue
         try:
             watch_number = int(m.group("etn"))
         except Exception:
             watch_number = None
         return {
-            "kind": "tornado" if phen == "TO" else "severe",
+            "kind": "tornado" if m.group("phen") == "TO" else "severe",
             "action": m.group("action"),
             "watch_number": watch_number,
             "end_utc": _parse_vtec_time_utc(m.group("end")),
@@ -1207,7 +1276,9 @@ def _parse_vtec_time_utc(token: str) -> dt.datetime | None:
         return None
 
 
-def _watch_time_phrase(end_utc: dt.datetime | None, *, local_tz: dt.tzinfo | None, now: dt.datetime | None = None) -> str:
+def _watch_time_phrase(
+    end_utc: dt.datetime | None, *, local_tz: dt.tzinfo | None, now: dt.datetime | None = None
+) -> str:
     if end_utc is None:
         return ""
     tz = local_tz or dt.timezone.utc
@@ -1312,7 +1383,7 @@ def _extract_wcn_area_desc(text: str) -> str:
 
     start = None
     for i, line in enumerate(lines):
-        if line.upper() == "AREAS" and "FOR THE FOLLOWING" in " ".join(x.upper() for x in lines[max(0, i - 3): i + 1]):
+        if line.upper() == "AREAS" and "FOR THE FOLLOWING" in " ".join(x.upper() for x in lines[max(0, i - 3) : i + 1]):
             start = i + 1
             break
     if start is None:
@@ -1433,7 +1504,6 @@ def _watch_lifecycle_area_phrase(area_desc: str) -> str:
     return ""
 
 
-
 def extract_nwws_wcn_area_desc(text: str) -> str:
     """Public wrapper for extracting CAP-like areaDesc from an NWWS WCN product."""
     return _extract_wcn_area_desc(text)
@@ -1497,7 +1567,6 @@ def match_nwws_wcn_area_same(area_desc: str, same_label_by_code: dict[str, str])
             seen.add(c)
             out.append(c)
     return out
-
 
 
 def _watch_label_and_remember(kind: str, watch_number: int | None) -> tuple[str, str, str]:
@@ -1602,12 +1671,14 @@ def build_nwws_watch_partial_cancel_script(
         # tails outside the configured SAME service-area context.
         if not area_desc and lines:
             continue
-        lines.extend(_watch_section_script_lines(
-            parsed=parsed,
-            area_desc=area_desc,
-            local_tz=local_tz,
-            now=now,
-        ))
+        lines.extend(
+            _watch_section_script_lines(
+                parsed=parsed,
+                area_desc=area_desc,
+                local_tz=local_tz,
+                now=now,
+            )
+        )
 
     if not lines:
         return ""
@@ -1623,6 +1694,7 @@ def build_nwws_watch_partial_cancel_script(
     )
     return "\n\n".join(ln.strip() for ln in lines if ln and ln.strip()).strip()
 
+
 def build_nwws_watch_vtec_script(
     official_text: str,
     vtec: list[str] | None,
@@ -1630,6 +1702,7 @@ def build_nwws_watch_vtec_script(
     local_tz: dt.tzinfo | None = None,
     area_text: str = "",
     now: dt.datetime | None = None,
+    action: str | None = None,
 ) -> str:
     """
     Build NWR-style narration for NWWS WCN products carrying TO.A/SV.A VTEC.
@@ -1637,7 +1710,7 @@ def build_nwws_watch_vtec_script(
     This is the NWWS-side equivalent of the CAP watch formatter. It prevents
     watch county notifications from being spoken as raw all-caps product text.
     """
-    parsed = _parse_watch_vtec(vtec)
+    parsed = _parse_watch_vtec(vtec, action=action)
     if not parsed:
         return ""
 
@@ -1653,12 +1726,14 @@ def build_nwws_watch_vtec_script(
 
     lines: list[str] = []
     if action in {"CAN", "EXP", "CON", "EXT", "EXA", "EXB"}:
-        lines.extend(_watch_section_script_lines(
-            parsed=parsed,
-            area_desc=area_desc,
-            local_tz=local_tz,
-            now=now,
-        ))
+        lines.extend(
+            _watch_section_script_lines(
+                parsed=parsed,
+                area_desc=area_desc,
+                local_tz=local_tz,
+                now=now,
+            )
+        )
     else:
         lines.append(f"The National Weather Service has issued {label_with_num}.")
         if until:
@@ -1681,6 +1756,145 @@ def build_nwws_watch_vtec_script(
     if remember and (has_active_section or not terminal_only):
         lines.append(remember)
 
+    lines.append(
+        "Stay tuned to NOAA Weather Radio, commercial radio, and television outlets, "
+        "or internet sources for the latest severe weather information."
+    )
+    return "\n\n".join(ln.strip() for ln in lines if ln and ln.strip()).strip()
+
+
+def _wcn_action_sections(
+    official_text: str,
+    wanted_action: str,
+) -> list[tuple[dict[str, Any], str]]:
+    sections: list[tuple[dict[str, Any], str]] = []
+    for section in _split_nwws_vtec_sections(official_text):
+        section_vtec = [match.group(0) for match in _WATCH_VTEC_RE.finditer(section)]
+        parsed = _parse_watch_vtec(section_vtec, action=wanted_action)
+        if not parsed:
+            continue
+        section_actions = {match.group("action").upper() for match in _WATCH_VTEC_RE.finditer(section)}
+        area_desc = _extract_wcn_area_desc(section)
+        if wanted_action in {"CAN", "EXP"} and section_actions & {"NEW", "UPG", "EXA", "EXB"}:
+            area_desc = ""
+        sections.append((parsed, area_desc))
+    return sections
+
+
+def _wcn_action_lines(
+    sections: list[tuple[dict[str, Any], str]],
+    wanted_action: str,
+    *,
+    area_text: str,
+    local_tz: dt.tzinfo | None,
+    now: dt.datetime | None,
+) -> list[str]:
+    first = sections[0][0]
+    kind = str(first.get("kind") or "severe")
+    watch_number = first.get("watch_number")
+    _watch_label, label_with_num, _remember = _watch_label_and_remember(kind, watch_number)
+    until = _watch_time_phrase(first.get("end_utc"), local_tz=local_tz, now=now)
+    if wanted_action == "NEW":
+        return _wcn_new_action_lines(sections, area_text=area_text, label_with_num=label_with_num, until=until)
+    return _wcn_lifecycle_action_lines(sections, area_text=area_text, local_tz=local_tz, now=now)
+
+
+def _wcn_new_action_lines(
+    sections: list[tuple[dict[str, Any], str]],
+    *,
+    area_text: str,
+    label_with_num: str,
+    until: str,
+) -> list[str]:
+    lines = [f"The National Weather Service has issued {label_with_num}."]
+    if until:
+        lines.append(f"Effective until {until}.")
+    for _parsed, section_area in sections:
+        area_sentence = _watch_area_sentence(section_area or area_text)
+        if area_sentence and area_sentence not in lines:
+            lines.append(area_sentence)
+    return lines
+
+
+def _wcn_lifecycle_action_lines(
+    sections: list[tuple[dict[str, Any], str]],
+    *,
+    area_text: str,
+    local_tz: dt.tzinfo | None,
+    now: dt.datetime | None,
+) -> list[str]:
+    lines: list[str] = []
+    for parsed, section_area in sections:
+        area = section_area or area_text
+        if not area and lines:
+            continue
+        lines.extend(
+            _watch_section_script_lines(
+                parsed=parsed,
+                area_desc=area,
+                local_tz=local_tz,
+                now=now,
+            )
+        )
+    return lines
+
+
+def build_nwws_watch_action_script(
+    official_text: str,
+    vtec: list[str] | None,
+    action: str,
+    *,
+    local_tz: dt.tzinfo | None = None,
+    area_text: str = "",
+    now: dt.datetime | None = None,
+) -> str:
+    """Render only the WCN sections carrying one lifecycle action.
+
+    A WCN can carry a terminal action for one watch footprint and a NEW or
+    continuation action for another footprint in the same product.  Keeping
+    those sections separate lets the runtime put the active action in the FULL
+    cut and the terminal action in a following VOICE cut.
+    """
+    wanted_action = (action or "").strip().upper()
+    if not wanted_action:
+        return ""
+
+    sections = _wcn_action_sections(official_text, wanted_action)
+
+    if not sections:
+        return build_nwws_watch_vtec_script(
+            official_text,
+            vtec,
+            local_tz=local_tz,
+            area_text=area_text,
+            now=now,
+            action=wanted_action,
+        )
+
+    lines = _wcn_action_lines(
+        sections,
+        wanted_action,
+        area_text=area_text,
+        local_tz=local_tz,
+        now=now,
+    )
+
+    if not lines:
+        return ""
+    return _finish_wcn_action_script(sections, wanted_action, lines)
+
+
+def _finish_wcn_action_script(
+    sections: list[tuple[dict[str, Any], str]],
+    wanted_action: str,
+    lines: list[str],
+) -> str:
+    first = sections[0][0]
+    kind = str(first.get("kind") or "severe")
+    watch_number = first.get("watch_number")
+    _watch_label, _label_with_num, remember = _watch_label_and_remember(kind, watch_number)
+    if wanted_action not in {"CAN", "EXP"} and remember:
+        lines.append(remember)
     lines.append(
         "Stay tuned to NOAA Weather Radio, commercial radio, and television outlets, "
         "or internet sources for the latest severe weather information."
@@ -1730,6 +1944,7 @@ def render_nws_product_script(
     area_text: str,
     headline: str,
     local_tz: dt.tzinfo | None = None,
+    watch_action: str | None = None,
 ) -> NwwsScriptRenderResult:
     """
     Normalize NWS spoken scripts after the generic alert builder.
@@ -1745,16 +1960,33 @@ def render_nws_product_script(
     renderer = "base"
     notes: list[str] = []
 
-    watch_script = build_nwws_watch_vtec_script(
-        official_text,
-        vtec,
-        local_tz=local_tz,
-        area_text=area_text,
-    )
+    if watch_action:
+        watch_script = build_nwws_watch_action_script(
+            official_text,
+            vtec,
+            watch_action,
+            local_tz=local_tz,
+            area_text=area_text,
+        )
+    else:
+        watch_script = build_nwws_watch_vtec_script(
+            official_text,
+            vtec,
+            local_tz=local_tz,
+            area_text=area_text,
+        )
     if watch_script:
         script = watch_script
         changed = True
         renderer = "nwws-watch-vtec"
+
+    if watch_action and watch_script and ptype == "WCN":
+        return NwwsScriptRenderResult(
+            script=script,
+            changed=changed,
+            renderer=renderer,
+            notes=tuple(notes),
+        )
 
     if ptype == "SPS":
         fixed = fix_sps_preamble(script, official_text)
@@ -1903,6 +2135,7 @@ __all__ = [
     "extract_nwws_wcn_area_desc",
     "match_nwws_wcn_area_same",
     "build_nwws_watch_vtec_script",
+    "build_nwws_watch_action_script",
     "build_nwws_watch_partial_cancel_script",
     "NwwsScriptRenderResult",
     "render_nws_product_script",

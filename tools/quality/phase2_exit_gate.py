@@ -57,6 +57,20 @@ IMAGE_SPECS = (
         healthcheck=("CMD", "python", "-m", "seasonalweather", "health", "worker", "--mode", "liveness"),
     ),
     ImageSpec(
+        profile="voicetext-paul",
+        tag="seasonalweather-worker:voicetext-paul",
+        role="worker",
+        entrypoint=("python", "-m", "seasonalweather", "worker"),
+        healthcheck=("CMD", "python", "-m", "seasonalweather", "health", "worker", "--mode", "liveness"),
+    ),
+    ImageSpec(
+        profile="spfy",
+        tag="seasonalweather-worker:spfy",
+        role="worker",
+        entrypoint=("python", "-m", "seasonalweather", "worker"),
+        healthcheck=("CMD", "python", "-m", "seasonalweather", "health", "worker", "--mode", "liveness"),
+    ),
+    ImageSpec(
         profile="maintenance",
         tag="seasonalweather-worker:maintenance",
         role="worker",

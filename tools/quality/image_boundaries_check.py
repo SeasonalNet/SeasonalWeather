@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,23 @@ def _catalog_codes(path: Path) -> set[str]:
     return codes
 
 
+def _metadata_group(document: dict[str, Any], group: str) -> list[str]:
+    project = document.get("project")
+    optional = project.get("optional-dependencies") if isinstance(project, dict) else None
+    values = optional.get(group, []) if isinstance(optional, dict) else []
+    dependency_groups = document.get("dependency-groups")
+    if not values and isinstance(dependency_groups, dict):
+        values = dependency_groups.get(group, [])
+    return [str(value).lower() for value in values if isinstance(value, str)]
+
+
+def _metadata(path: Path) -> dict[str, Any]:
+    try:
+        return tomllib.loads(_text(path))
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError(f"invalid project metadata: {path.relative_to(ROOT)}") from exc
+
+
 def _check_active(config: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     definition = ROOT / str(config.get("controller_definition", ""))
@@ -42,7 +60,7 @@ def _check_active(config: dict[str, Any]) -> list[str]:
         errors.append(f"missing controller image definition: {definition.relative_to(ROOT)}")
         return errors
     if not requirements.is_file():
-        errors.append(f"missing controller dependency lock: {requirements.relative_to(ROOT)}")
+        errors.append(f"missing controller project metadata: {requirements.relative_to(ROOT)}")
         return errors
     if not context_ignore.is_file():
         errors.append(f"missing build-context exclusion: {context_ignore.relative_to(ROOT)}")
@@ -59,7 +77,12 @@ def _check_active(config: dict[str, Any]) -> list[str]:
         if str(token).lower() in dockerfile:
             errors.append(f"controller Dockerfile contains worker-only content: {token}")
 
-    lock = _text(requirements).lower()
+    try:
+        document = _metadata(requirements)
+    except ValueError as exc:
+        errors.append(str(exc))
+        return errors
+    lock = "\n".join(_metadata_group(document, "controller"))
     for package in config.get("required_controller_packages", []):
         if str(package).lower() not in lock:
             errors.append(f"controller dependency lock missing required package: {package}")
@@ -108,16 +131,21 @@ def _check_workers(config: dict[str, Any]) -> list[str]:
         if str(token).lower() in dockerfile:
             errors.append(f"worker Dockerfile contains controller-only or exposed content: {token}")
 
-    requirement_names = {str(item) for item in config.get("worker_requirements", [])}
-    for name in sorted(requirement_names):
-        path = ROOT / name
-        if not path.is_file():
-            errors.append(f"missing worker dependency lock: {name}")
-            continue
-        lock = _text(path).lower()
-        for token in config.get("forbidden_worker_dependency_tokens", []):
-            if str(token).lower() in lock:
-                errors.append(f"worker dependency lock contains controller-only package: {name}: {token}")
+    metadata_path = ROOT / str(config.get("controller_requirements", ""))
+    try:
+        document = _metadata(metadata_path)
+    except ValueError as exc:
+        errors.append(str(exc))
+        document = {}
+    worker_groups = config.get("worker_dependency_groups", ["piper"])
+    worker_values = [dependency for group in worker_groups for dependency in _metadata_group(document, str(group))]
+    project = document.get("project")
+    if isinstance(project, dict) and isinstance(project.get("dependencies"), list):
+        worker_values.extend(str(value).lower() for value in project["dependencies"] if isinstance(value, str))
+    lock = "\n".join(worker_values)
+    for token in config.get("forbidden_worker_dependency_tokens", []):
+        if str(token).lower() in lock:
+            errors.append(f"worker project metadata contains controller-only package: {token}")
     profiles = tuple(str(item) for item in config.get("worker_profiles", []))
     for profile in profiles:
         if profile not in dockerfile:

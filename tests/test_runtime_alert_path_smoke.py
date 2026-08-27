@@ -173,7 +173,6 @@ class _SmokeOrchestrator(Protocol):
     def _clear_liquidsoap_queues_on_startup(self) -> None: ...
 
 
-
 def _minimal_config(tmp_path, monkeypatch):
     monkeypatch.setenv("ICECAST_SOURCE_PASSWORD", "test-source")
     monkeypatch.setenv("NWWS_JID", "changeme@nwws-oi.weather.gov")
@@ -253,7 +252,7 @@ MDC031-142030-
 Montgomery MD-
 400 PM EDT Sun Jun 14 2026
 
-...A SEVERE THUNDERSTORM WARNING {'REMAINS IN EFFECT' if action == 'CON' else 'IS IN EFFECT'} UNTIL 430 PM EDT FOR MONTGOMERY COUNTY...
+...A SEVERE THUNDERSTORM WARNING {"REMAINS IN EFFECT" if action == "CON" else "IS IN EFFECT"} UNTIL 430 PM EDT FOR MONTGOMERY COUNTY...
 
 At 400 PM EDT, a severe thunderstorm was located near Rockville.
 
@@ -262,7 +261,39 @@ Move to an interior room on the lowest floor of a building.
 
 $$
 """
-    return ParsedProduct(product_type=product_type, wfo="KLWX", awips_id=f"{product_type}LWX", vtec=None, raw_text=raw), raw
+    return ParsedProduct(
+        product_type=product_type, wfo="KLWX", awips_id=f"{product_type}LWX", vtec=None, raw_text=raw
+    ), raw
+
+
+def _mixed_wcn_product() -> ParsedProduct:
+    raw = """WWUS61 KLWX 201901
+WCNLWX
+
+WATCH COUNTY NOTIFICATION FOR WATCHES 604/605
+NATIONAL WEATHER SERVICE BALTIMORE MD/WASHINGTON DC
+301 PM EDT THU AUG 20 2026
+
+DCC001-MDC031-210200-
+/O.CAN.KLWX.SV.A.0604.000000T0000Z-260821T0200Z/
+/O.NEW.KLWX.TO.A.0605.260820T1901Z-260821T0200Z/
+
+THE NATIONAL WEATHER SERVICE HAS ISSUED TORNADO WATCH 605 UNTIL
+10 PM EDT THIS EVENING WHICH REPLACES A PORTION OF SEVERE
+THUNDERSTORM WATCH 604. THE NEW WATCH IS VALID FOR THE FOLLOWING
+AREAS
+
+THE DISTRICT OF COLUMBIA
+
+IN MARYLAND THE NEW WATCH INCLUDES 1 COUNTY
+
+IN CENTRAL MARYLAND
+
+MONTGOMERY
+
+$$
+"""
+    return ParsedProduct(product_type="WCN", wfo="KLWX", awips_id="WCNLWX", vtec=None, raw_text=raw)
 
 
 def test_cap_full_runtime_path_smoke(tmp_path, monkeypatch):
@@ -424,6 +455,20 @@ $$
     assert payload["vtec_action"] == "CAN"
     assert payload["ended_tracks"] == ["KLWX.SV.W.0247"]
     assert payload["continuing_tracks"] == ["KLWX.SV.W.0248"]
+
+
+def test_nwws_mixed_wcn_airs_full_then_terminal_voice(tmp_path, monkeypatch):
+    orch = _orchestrator(tmp_path, monkeypatch)
+
+    asyncio.run(orch.nwws_runtime._handle_toneout(_mixed_wcn_product()))
+
+    assert len(orch.audio_originator.full_calls) == 1
+    assert len(orch.audio_originator.voice_calls) == 1
+    assert "Tornado Watch Number 605" in orch.audio_originator.full_calls[0][1]
+    assert "Severe Thunderstorm Watch Number 604 has been cancelled" not in orch.audio_originator.full_calls[0][1]
+    assert "Severe Thunderstorm Watch Number 604 has been cancelled" in orch.audio_originator.voice_calls[0][1]
+    assert "Tornado Watch Number 605" not in orch.audio_originator.voice_calls[0][1]
+    assert [item[0] for item in orch.telnet.pushed] == ["full", "voice"]
 
 
 def test_interrupt_push_resets_only_cycle_after_full_admission(tmp_path, monkeypatch):

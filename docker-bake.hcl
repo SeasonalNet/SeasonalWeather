@@ -105,6 +105,22 @@ target "legacy-tts" {
   tags = ["seasonalweather-worker:legacy-tts"]
 }
 
+target "voicetext-paul" {
+  inherits = ["common"]
+  dockerfile = "Dockerfile.worker"
+  args = { SW_IMAGE_PROFILE = "voicetext-paul" }
+  labels = { "io.seasonalweather.build.profile" = "voicetext-paul" }
+  tags = ["seasonalweather-worker:voicetext-paul"]
+}
+
+target "spfy" {
+  inherits = ["common"]
+  dockerfile = "Dockerfile.worker"
+  args = { SW_IMAGE_PROFILE = "spfy" }
+  labels = { "io.seasonalweather.build.profile" = "spfy" }
+  tags = ["seasonalweather-worker:spfy"]
+}
+
 target "maintenance" {
   inherits = ["common"]
   dockerfile = "Dockerfile.worker"

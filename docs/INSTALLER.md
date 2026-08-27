@@ -37,14 +37,14 @@ SEASONAL_SAMEDEC=0 sudo -E bash scripts/00-bootstrap.sh --non-interactive
 
 ## Dependency groups
 
-Base Python requirements intentionally exclude the Piper stack. The base install
+Base Python dependencies intentionally exclude the Piper stack. The base install
 no longer pulls `piper-tts`, `onnxruntime`, or `numpy` unless Piper is selected.
 
 Install-time feature flags map to dependency groups:
 
 - `SEASONAL_ESPEAK=1` installs `espeak-ng`.
 - `SEASONAL_FESTIVAL=1` installs `festival` and `festvox-kallpc16k`.
-- `SEASONAL_PIPER=1` installs `requirements-piper.txt` into the venv.
+- `SEASONAL_PIPER=1` enables the `piper` Python dependency group in the venv.
 - `SEASONAL_DECTALK=1` installs DECtalk build dependencies and builds DECtalk.
 - `SEASONAL_VOICETEXT_PAUL=1` installs the VoiceText Paul/Wine runtime path.
 - `SEASONAL_SAMEDEC=1` installs the pinned Rust `samedec` decoder.

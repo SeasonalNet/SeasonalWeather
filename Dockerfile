@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1
 
+ARG UV_VERSION=0.12.4
 ARG PYTHON_BASE=python:3.11-slim-bookworm
 
+FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 FROM ${PYTHON_BASE} AS builder
 
 ARG SW_PROJECT
@@ -29,6 +31,8 @@ ARG SW_CAPABILITY_MANIFEST_VERSION
 RUN test "${SW_IMAGE_PROFILE}" = "controller"
 
 ENV PATH="/opt/venv/bin:${PATH}" \
+    UV_PROJECT_ENVIRONMENT="/opt/venv" \
+    SETUPTOOLS_SCM_PRETEND_VERSION_FOR_SEASONALWEATHER="${SW_VERSION}" \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -58,12 +62,12 @@ ENV PATH="/opt/venv/bin:${PATH}" \
 WORKDIR /build
 RUN python -m venv /opt/venv
 
-COPY requirements-controller.txt ./
-RUN python -m pip install --no-cache-dir -r requirements-controller.txt
+COPY --from=uv /uv /uvx /usr/local/bin/
+COPY pyproject.toml uv.lock README.md ./
+RUN uv sync --frozen --no-dev --group controller --no-install-project
 
-COPY pyproject.toml README.md requirements.txt ./
 COPY seasonalweather ./seasonalweather
-RUN python -m pip install --no-cache-dir --no-deps --no-build-isolation .
+RUN uv pip install --python /opt/venv/bin/python --no-deps .
 
 # Keep the controller artifact safe when later worker packages are added to the
 # shared source tree. P2-03 owns those packages and their image profiles.

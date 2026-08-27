@@ -6,7 +6,7 @@ scope = "P2-02 controller image and P2-03 worker image profiles only; deployment
 review_date = "2026-10-23"
 removal_condition = "Replace these rules only when the controller image ownership or profile boundary is deliberately revised."
 controller_definition = "Dockerfile"
-controller_requirements = "requirements-controller.txt"
+controller_requirements = "pyproject.toml"
 build_context_ignore = ".dockerignore"
 controller_catalog_source = "seasonalweather/diagnostics/catalog/source.json"
 controller_catalog_compiled = "seasonalweather/diagnostics/catalog/catalog.json"
@@ -18,7 +18,8 @@ required_dockerfile_tokens = [
   "FROM ${PYTHON_BASE} AS builder",
   "FROM ${PYTHON_BASE} AS controller",
   "COPY seasonalweather ./seasonalweather",
-  "COPY requirements-controller.txt ./",
+  "COPY pyproject.toml uv.lock README.md ./",
+  "uv sync --frozen --no-dev --group controller",
   "seasonalweather diagnostics export --output /usr/share/seasonalweather/diagnostics",
   "/usr/share/seasonalweather/build-info.json",
   "groupadd --gid 10001 seasonalweather",
@@ -29,7 +30,6 @@ required_dockerfile_tokens = [
   "ENTRYPOINT [\"python\", \"-m\", \"seasonalweather.api.server\"]",
 ]
 forbidden_dockerfile_tokens = [
-  "requirements-piper",
   "piper-tts",
   "ffmpeg",
   "sox",
@@ -54,17 +54,12 @@ forbidden_controller_packages = [
   "samegen",
   "espeak",
 ]
-required_context_ignore_tokens = [".git", ".venv", "requirements-piper.txt", "*.env"]
+required_context_ignore_tokens = [".git", ".venv", "*.env"]
 
 worker_definition = "Dockerfile.worker"
-worker_profiles = ["routine-worker", "piper", "legacy-tts", "maintenance", "development"]
-worker_requirements = [
-  "requirements-worker-standard.txt",
-  "requirements-worker-piper.txt",
-  "requirements-worker-legacy-tts.txt",
-  "requirements-worker-maintenance.txt",
-  "requirements-worker-development.txt",
-]
+worker_profiles = ["routine-worker", "piper", "legacy-tts", "voicetext-paul", "spfy", "maintenance", "development"]
+worker_requirements = ["pyproject.toml"]
+worker_dependency_groups = ["worker-runtime", "piper"]
 required_worker_dockerfile_tokens = [
   "ENTRYPOINT [\"python\", \"-m\", \"seasonalweather\", \"worker\"]",
   "USER seasonalweather",

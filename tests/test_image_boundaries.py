@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import tomllib
 from pathlib import Path
 
 from seasonalweather.diagnostics.exporter import export_catalog
@@ -15,9 +16,10 @@ def test_controller_image_boundary_check_passes() -> None:
 
 
 def test_controller_lock_excludes_worker_execution_dependencies() -> None:
-    lock = (ROOT / "requirements-controller.txt").read_text(encoding="utf-8").lower()
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    lock = "\n".join(project["dependency-groups"]["controller"]).lower()
 
-    for forbidden in ("piper", "ffmpeg", "samedec", "samegen", "espeak", "legacy-tts"):
+    for forbidden in ("piper-tts", "ffmpeg", "samedec", "samegen", "espeak", "legacy-tts"):
         assert forbidden not in lock
 
 
@@ -31,7 +33,7 @@ def test_controller_dockerfile_rejects_worker_profiles() -> None:
 def test_worker_dockerfile_owns_only_worker_profiles() -> None:
     dockerfile = (ROOT / "Dockerfile.worker").read_text(encoding="utf-8").lower()
 
-    for profile in ("routine-worker", "piper", "legacy-tts", "maintenance", "development"):
+    for profile in ("routine-worker", "piper", "legacy-tts", "voicetext-paul", "spfy", "maintenance", "development"):
         assert profile in dockerfile
     assert 'entrypoint ["python", "-m", "seasonalweather", "worker"]' in dockerfile
     assert "expose" not in dockerfile
@@ -39,29 +41,37 @@ def test_worker_dockerfile_owns_only_worker_profiles() -> None:
         assert forbidden not in dockerfile
 
 
+def test_specialized_worker_profiles_carry_their_runtime_engines() -> None:
+    dockerfile = (ROOT / "Dockerfile.worker").read_text(encoding="utf-8")
+
+    assert "uv sync --frozen" in dockerfile
+    assert "VOICETEXT_ARCHIVE_SHA256" in dockerfile
+    assert "SPEECHIFY_RELEASE_SHA256" in dockerfile
+    assert "/var/lib/seasonalweather/voices/voicetext_paul/WeatherRadioSuite-LIB" in dockerfile
+    assert "/opt/spfy/bin/spfy_synth" in dockerfile
+    assert "wine32:i386" in dockerfile
+    assert "xvfb" in dockerfile.lower()
+    assert "docker/spfy/voice-manifest.txt" in dockerfile
+
+
 def test_worker_dependency_locks_exclude_controller_runtime() -> None:
-    for name in (
-        "requirements-worker-standard.txt",
-        "requirements-worker-piper.txt",
-        "requirements-worker-legacy-tts.txt",
-        "requirements-worker-maintenance.txt",
-        "requirements-worker-development.txt",
-    ):
-        lock = (ROOT / name).read_text(encoding="utf-8").lower()
-        for forbidden in ("slixmpp", "sqlalchemy", "fastapi", "uvicorn"):
-            assert forbidden not in lock
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    dependencies = [*project["project"]["dependencies"], *project["dependency-groups"]["worker-runtime"], *project["dependency-groups"]["piper"]]
+    lock = "\n".join(dependencies).lower()
+    for forbidden in ("slixmpp", "sqlalchemy", "fastapi", "uvicorn"):
+        assert forbidden not in lock
 
 
 def test_controller_build_context_excludes_secrets_and_worker_locks() -> None:
     dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
 
-    for excluded in (".git", ".venv", "requirements-piper.txt", "*.env"):
+    for excluded in (".git", ".venv", "*.env"):
         assert excluded in dockerignore
 
 
 def test_controller_diagnostic_export_contains_the_complete_catalog(tmp_path: Path) -> None:
     destination = tmp_path / "usr/share/seasonalweather/diagnostics"
-    export_catalog(destination)
+    _ = export_catalog(destination)
     exported = json.loads((destination / "catalog.json").read_text(encoding="utf-8"))
     catalog = load_catalog()
 

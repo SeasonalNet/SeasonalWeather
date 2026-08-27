@@ -126,9 +126,9 @@ epoch, worker/instance/session identity, digest, and the complete normalized
 record as a stable key. Caller ordering cannot change analysis, evidence, or
 serialized reports.
 
-Software compatibility follows SemVer precedence, including prerelease
-identifier ordering and rejection of empty identifiers, invalid characters,
-and numeric prerelease identifiers with leading zeroes.
+Software compatibility follows SemVer precedence, including prerelease and
+Git-derived `.devN` development versions, plus rejection of empty identifiers,
+invalid characters, and numeric prerelease identifiers with leading zeroes.
 
 ## Environmental probes
 

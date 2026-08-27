@@ -246,6 +246,127 @@ services:
       start_period: 30s
       retries: 3
 
+  voicetext-paul-worker:
+    profiles:
+      - voicetext-paul
+    image: ${SEASONALWEATHER_VOICETEXT_PAUL_WORKER_IMAGE:-seasonalweather-worker:voicetext-paul}
+    <<: *seasonal-security
+    user: "10001:10001"
+    entrypoint:
+      - /usr/local/bin/voicetext-paul-entrypoint
+    command:
+      - --controller-url
+      - ws://controller:9080/v1/workers/connect
+      - --profile
+      - voicetext-paul
+      - --worker-id
+      - ${SEASONALWEATHER_VOICETEXT_PAUL_WORKER_ID:-voicetext-paul-worker}
+    environment:
+      SEASONALWEATHER_CONTROLLER_URL: ws://controller:9080/v1/workers/connect
+      SEASONALWEATHER_WORKER_ID: ${SEASONALWEATHER_VOICETEXT_PAUL_WORKER_ID:-voicetext-paul-worker}
+      SEASONALWEATHER_WORKER_PROFILE: voicetext-paul
+      SEASONALWEATHER_WORKER_HEALTH_FILE: /tmp/seasonalweather-voicetext-paul-worker-health.json
+      DISPLAY: :99
+      VOICETEXT_PAUL_TMPDIR: /tmp/voicetext
+    volumes:
+      - type: volume
+        source: seasonalweather-artifacts
+        target: /var/lib/seasonalweather/artifacts
+        read_only: true
+      - type: volume
+        source: seasonalweather-artifact-staging
+        target: /var/lib/seasonalweather/artifacts/worker-artifacts/staging
+        volume:
+          nocopy: true
+      - type: volume
+        source: seasonalweather-voicetext-paul-voices
+        target: /var/lib/seasonalweather/voices/voicetext_paul
+      - type: volume
+        source: seasonalweather-voicetext-paul-wineprefixes
+        target: /var/lib/seasonalweather/wineprefixes
+    secrets:
+      - source: SEASONAL_WORKER_TOKEN
+        target: SEASONAL_WORKER_TOKEN
+        uid: "10001"
+        gid: "10001"
+        mode: "0400"
+    depends_on:
+      controller:
+        condition: service_started
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -m
+        - seasonalweather
+        - health
+        - worker
+        - --mode
+        - liveness
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  spfy-worker:
+    profiles:
+      - spfy
+    image: ${SEASONALWEATHER_SPFY_WORKER_IMAGE:-seasonalweather-worker:spfy}
+    <<: *seasonal-security
+    user: "10001:10001"
+    entrypoint:
+      - python
+      - -m
+      - seasonalweather
+      - worker
+    command:
+      - --controller-url
+      - ws://controller:9080/v1/workers/connect
+      - --profile
+      - spfy
+      - --worker-id
+      - ${SEASONALWEATHER_SPFY_WORKER_ID:-spfy-worker}
+    environment:
+      SEASONALWEATHER_CONTROLLER_URL: ws://controller:9080/v1/workers/connect
+      SEASONALWEATHER_WORKER_ID: ${SEASONALWEATHER_SPFY_WORKER_ID:-spfy-worker}
+      SEASONALWEATHER_WORKER_PROFILE: spfy
+      SEASONALWEATHER_WORKER_HEALTH_FILE: /tmp/seasonalweather-spfy-worker-health.json
+      SPFY_VOICE_DIR: /opt/spfy
+      SPFY_NO_UPDATE_CHECK: "1"
+    volumes:
+      - type: volume
+        source: seasonalweather-artifacts
+        target: /var/lib/seasonalweather/artifacts
+        read_only: true
+      - type: volume
+        source: seasonalweather-artifact-staging
+        target: /var/lib/seasonalweather/artifacts/worker-artifacts/staging
+        volume:
+          nocopy: true
+    secrets:
+      - source: SEASONAL_WORKER_TOKEN
+        target: SEASONAL_WORKER_TOKEN
+        uid: "10001"
+        gid: "10001"
+        mode: "0400"
+    depends_on:
+      controller:
+        condition: service_started
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -m
+        - seasonalweather
+        - health
+        - worker
+        - --mode
+        - liveness
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
   maintenance-worker:
     profiles:
       - maintenance
@@ -348,3 +469,5 @@ volumes:
   seasonalweather-artifacts:
   seasonalweather-artifact-staging:
   seasonalweather-logs:
+  seasonalweather-voicetext-paul-voices:
+  seasonalweather-voicetext-paul-wineprefixes:

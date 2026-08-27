@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+display="${DISPLAY:-:99}"
+display_number="${display#:}"
+display_number="${display_number%%.*}"
+socket="/tmp/.X11-unix/X${display_number}"
+
+mkdir -p /tmp/.X11-unix /tmp/voicetext
+Xvfb "${display}" -screen 0 1024x768x24 -nolisten tcp -noreset -ac &
+xvfb_pid=$!
+
+cleanup() {
+  kill "${xvfb_pid}" 2>/dev/null || true
+  wait "${xvfb_pid}" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+for _ in $(seq 1 50); do
+  [[ -S "${socket}" ]] && break
+  sleep 0.1
+done
+[[ -S "${socket}" ]] || { echo "Xvfb did not create ${socket}" >&2; exit 1; }
+
+exec python -m seasonalweather worker "$@"

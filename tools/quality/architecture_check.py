@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import ast
 import re
+import tomllib
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -289,9 +290,95 @@ def _exception_applies(finding: Finding, exceptions: list[dict[str, Any]]) -> bo
     )
 
 
+def _dependency_name(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    match = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9_.-]*)", value)
+    if match is None:
+        return None
+    return match.group(1).replace("_", "-").lower()
+
+
+def _metadata_groups(document: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]:
+    groups: dict[str, Any] = {}
+    optional = project.get("optional-dependencies")
+    if isinstance(optional, dict):
+        groups.update(optional)
+    dependency_groups = document.get("dependency-groups")
+    if isinstance(dependency_groups, dict):
+        groups.update(dependency_groups)
+    return groups
+
+
+def _metadata_dependency_names(values: object) -> set[str]:
+    if not isinstance(values, list):
+        return set()
+    return {name for value in values if (name := _dependency_name(value)) is not None}
+
+
+def _project_metadata_findings(root: Path, config: dict[str, Any]) -> list[Finding]:
+    metadata_path = root / str(config.get("project_metadata_path", ""))
+    if not metadata_path.is_file():
+        return []
+    try:
+        document = tomllib.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return []
+
+    project = document.get("project")
+    if not isinstance(project, dict):
+        return []
+    groups = _metadata_groups(document, project)
+    if not groups:
+        return []
+
+    controller_group = str(config.get("controller_dependency_group", "controller"))
+    controller_names = _metadata_dependency_names(groups.get(controller_group, []))
+    forbidden_controller_names = _metadata_dependency_names(config.get("controller_forbidden_worker_dependencies", []))
+    findings: list[Finding] = []
+    if controller_names & forbidden_controller_names:
+        findings.append(
+            Finding(
+                metadata_path.relative_to(root).as_posix(),
+                1,
+                "SWARCH052",
+                "controller dependency section contains worker-only dependency: "
+                + ", ".join(sorted(controller_names & forbidden_controller_names)),
+            )
+        )
+
+    base_names = _metadata_dependency_names(project.get("dependencies", []))
+    base_overlap = base_names & controller_names
+    if base_overlap:
+        findings.append(
+            Finding(
+                metadata_path.relative_to(root).as_posix(),
+                1,
+                "SWARCH053",
+                "worker-safe project dependencies contain controller dependency: " + ", ".join(sorted(base_overlap)),
+            )
+        )
+
+    for group in config.get("worker_dependency_groups", []):
+        worker_names = _metadata_dependency_names(groups.get(str(group), []))
+        overlap = worker_names & controller_names
+        if overlap:
+            findings.append(
+                Finding(
+                    metadata_path.relative_to(root).as_posix(),
+                    1,
+                    "SWARCH053",
+                    f"worker dependency section {group!r} contains controller dependency: "
+                    + ", ".join(sorted(overlap)),
+                )
+            )
+    return findings
+
+
 def scan(root: Path, config: dict[str, Any], exceptions: list[dict[str, Any]] | None = None) -> list[Finding]:
     findings: list[Finding] = []
     exceptions = exceptions or []
+    findings.extend(_project_metadata_findings(root, config))
     findings.extend(_import_cycle_findings(root, config))
     worker_roots = config["worker_roots"]
     controller_roots = config["controller_roots"]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -43,7 +44,16 @@ def _check_contract(config: dict[str, Any]) -> list[str]:
         if review_date < dt.date.today():
             errors.append("quality/container-security.toml review_date has expired")
 
-    expected = {"controller", "routine-worker", "piper", "legacy-tts", "maintenance", "development"}
+    expected = {
+        "controller",
+        "routine-worker",
+        "piper",
+        "legacy-tts",
+        "voicetext-paul",
+        "spfy",
+        "maintenance",
+        "development",
+    }
     profiles = {str(profile) for profile in config.get("profiles", [])}
     if profiles != expected:
         errors.append(f"security contract profiles must be exactly {sorted(expected)}")
@@ -139,23 +149,46 @@ def _check_mount_policy(config: dict[str, Any]) -> list[str]:
 
 def _check_dependencies(config: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    controller_lock = _text(ROOT / "requirements-controller.txt")
+    metadata_path = ROOT / "pyproject.toml"
+    try:
+        document = tomllib.loads(_text(metadata_path))
+    except tomllib.TOMLDecodeError:
+        return ["pyproject.toml is not valid project metadata"]
+    project = document.get("project")
+    optional = project.get("optional-dependencies") if isinstance(project, dict) else None
+    dependency_groups = document.get("dependency-groups")
+    controller_group = str(config.get("controller_dependency_group", "controller"))
+    if isinstance(optional, dict):
+        controller_values = optional.get(controller_group, [])
+    elif isinstance(dependency_groups, dict):
+        controller_values = dependency_groups.get(controller_group, [])
+    else:
+        controller_values = []
+    controller_lock = "\n".join(str(value) for value in controller_values if isinstance(value, str))
     errors.extend(
         _forbidden_tokens(
-            controller_lock, config["image"]["forbidden_controller_dependencies"], context="requirements-controller.txt"
+            controller_lock, config["image"]["forbidden_controller_dependencies"], context="pyproject.toml[controller]"
         )
     )
-    worker_lock_names = (
-        "requirements-worker-standard.txt",
-        "requirements-worker-piper.txt",
-        "requirements-worker-legacy-tts.txt",
-        "requirements-worker-maintenance.txt",
-        "requirements-worker-development.txt",
-    )
-    for name in worker_lock_names:
-        errors.extend(
-            _forbidden_tokens(_text(ROOT / name), config["image"]["forbidden_worker_dependencies"], context=name)
+    project_values = project.get("dependencies", []) if isinstance(project, dict) else []
+    worker_values = [str(value) for value in project_values if isinstance(value, str)]
+    worker_groups = config.get("worker_dependency_groups", ["piper"])
+    for group in worker_groups:
+        if isinstance(optional, dict):
+            values = optional.get(str(group), [])
+        elif isinstance(dependency_groups, dict):
+            values = dependency_groups.get(str(group), [])
+        else:
+            values = []
+        if isinstance(values, list):
+            worker_values.extend(str(value) for value in values if isinstance(value, str))
+    errors.extend(
+        _forbidden_tokens(
+            "\n".join(worker_values),
+            config["image"]["forbidden_worker_dependencies"],
+            context="pyproject.toml worker metadata",
         )
+    )
     return errors
 
 

@@ -24,11 +24,12 @@ def test_bootstrap_prunes_optional_tts_from_base_packages() -> None:
     assert "festvox-kallpc16k" not in base_section
     assert "libasound2-dev" not in base_section
     assert "SEASONAL_PIPER:-0" in script
-    assert "requirements-piper.txt" in script
+    assert "--group piper" in script
 
 
 def test_configure_assistant_script_is_shell_valid() -> None:
     subprocess.run(["bash", "-n", str(ROOT / "scripts/configure-seasonalweather")], check=True)
+
 
 def test_configure_defaults_to_preserving_existing_config(monkeypatch, tmp_path) -> None:
     import io
@@ -67,14 +68,16 @@ logs:
 
     monkeypatch.setattr(configure_mod, "validate_candidate", lambda path: None)
     monkeypatch.setattr(sys, "stdin", io.StringIO("\n" * 16))
-    rc = configure_mod.main([
-        "--tui",
-        "never",
-        "--config",
-        str(existing),
-        "--output",
-        str(output),
-    ])
+    rc = configure_mod.main(
+        [
+            "--tui",
+            "never",
+            "--config",
+            str(existing),
+            "--output",
+            str(output),
+        ]
+    )
 
     assert rc == 0
     rendered = output.read_text(encoding="utf-8")
@@ -119,16 +122,18 @@ logs:
 
     monkeypatch.setattr(configure_mod, "validate_candidate", lambda path: None)
     monkeypatch.setattr(sys, "stdin", io.StringIO("\n" * 16))
-    rc = configure_mod.main([
-        "--tui",
-        "never",
-        "--profile",
-        "standard",
-        "--config",
-        str(existing),
-        "--output",
-        str(output),
-    ])
+    rc = configure_mod.main(
+        [
+            "--tui",
+            "never",
+            "--profile",
+            "standard",
+            "--config",
+            str(existing),
+            "--output",
+            str(output),
+        ]
+    )
 
     assert rc == 0
     rendered = output.read_text(encoding="utf-8")

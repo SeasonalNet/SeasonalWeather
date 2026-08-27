@@ -10,9 +10,6 @@ build
 tests
 docs
 config
-requirements-dev.txt
-requirements-piper.in
-requirements-piper.txt
 *.env
 *.pem
 *.key

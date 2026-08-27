@@ -1,31 +1,27 @@
 #!/usr/bin/env python3
 """SeasonalWeather SemVer guardrails.
 
-This script intentionally reads seasonalweather/__init__.py as text instead of
-importing the package, so it can run in lightweight CI jobs without installing
-runtime dependencies.
+This script derives the development version from Git instead of importing the
+package or requiring runtime dependencies. Stable releases remain annotated
+SemVer tags; untagged commits are valid development versions.
 """
+
 from __future__ import annotations
 
 import argparse
 import re
 import subprocess
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Iterable
-
-VERSION_FILE = Path("seasonalweather/__init__.py")
-VERSION_ASSIGNMENT_RE = re.compile(
-    r"^__version__\s*=\s*(?P<quote>['\"])(?P<version>[^'\"]+)(?P=quote)\s*$",
-    re.MULTILINE,
-)
+from typing import NoReturn
 
 SEMVER_RE = re.compile(
     r"^(?P<major>0|[1-9]\d*)\."
     r"(?P<minor>0|[1-9]\d*)\."
     r"(?P<patch>0|[1-9]\d*)"
     r"(?:-(?P<prerelease>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
+    r"(?:\.dev(?P<development>0|[1-9]\d*))?"
     r"(?:\+(?P<build>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
 )
 
@@ -41,9 +37,10 @@ class SemVer:
     minor: int
     patch: int
     prerelease: tuple[str, ...]
+    development: int | None
 
     @classmethod
-    def parse(cls, value: str) -> "SemVer":
+    def parse(cls, value: str) -> SemVer:
         match = SEMVER_RE.match(value)
         if not match:
             raise SemVerError(f"invalid SemVer version: {value!r}")
@@ -52,9 +49,7 @@ class SemVer:
         prerelease = tuple(prerelease_text.split(".")) if prerelease_text else ()
         for ident in prerelease:
             if ident.isdigit() and len(ident) > 1 and ident.startswith("0"):
-                raise SemVerError(
-                    f"invalid SemVer prerelease identifier with leading zero: {ident!r}"
-                )
+                raise SemVerError(f"invalid SemVer prerelease identifier with leading zero: {ident!r}")
 
         return cls(
             original=value,
@@ -62,43 +57,49 @@ class SemVer:
             minor=int(match.group("minor")),
             patch=int(match.group("patch")),
             prerelease=prerelease,
+            development=(int(match.group("development")) if match.group("development") is not None else None),
         )
 
     def precedence_key(self) -> tuple[int, int, int]:
         return (self.major, self.minor, self.patch)
 
-    def compare(self, other: "SemVer") -> int:
+    def compare(self, other: SemVer) -> int:
         if self.precedence_key() != other.precedence_key():
-            return (self.precedence_key() > other.precedence_key()) - (
-                self.precedence_key() < other.precedence_key()
-            )
+            return (self.precedence_key() > other.precedence_key()) - (self.precedence_key() < other.precedence_key())
 
-        # Build metadata is ignored by design because it has no SemVer precedence.
-        if not self.prerelease and not other.prerelease:
-            return 0
-        if not self.prerelease:
-            return 1
-        if not other.prerelease:
-            return -1
-
-        for left, right in zip(self.prerelease, other.prerelease):
-            if left == right:
-                continue
-            left_numeric = left.isdigit()
-            right_numeric = right.isdigit()
-            if left_numeric and right_numeric:
-                return (int(left) > int(right)) - (int(left) < int(right))
-            if left_numeric:
-                return -1
-            if right_numeric:
+        # Build metadata is ignored by design because it has no precedence.
+        if self.prerelease != other.prerelease:
+            if not self.prerelease:
                 return 1
-            return (left > right) - (left < right)
+            if not other.prerelease:
+                return -1
+            for left, right in zip(self.prerelease, other.prerelease, strict=False):
+                if left == right:
+                    continue
+                left_numeric = left.isdigit()
+                right_numeric = right.isdigit()
+                if left_numeric and right_numeric:
+                    return (int(left) > int(right)) - (int(left) < int(right))
+                if left_numeric:
+                    return -1
+                if right_numeric:
+                    return 1
+                return (left > right) - (left < right)
 
-        return (len(self.prerelease) > len(other.prerelease)) - (
-            len(self.prerelease) < len(other.prerelease)
-        )
+            prerelease_result = (len(self.prerelease) > len(other.prerelease)) - (
+                len(self.prerelease) < len(other.prerelease)
+            )
+            if prerelease_result:
+                return prerelease_result
+        if self.development is None and other.development is None:
+            return 0
+        if self.development is None:
+            return 1
+        if other.development is None:
+            return -1
+        return (self.development > other.development) - (self.development < other.development)
 
-    def __lt__(self, other: "SemVer") -> bool:
+    def __lt__(self, other: SemVer) -> bool:
         return self.compare(other) < 0
 
     def __eq__(self, other: object) -> bool:
@@ -107,7 +108,7 @@ class SemVer:
         return self.compare(other) == 0
 
 
-def die(message: str) -> None:
+def die(message: str) -> NoReturn:
     print(f"error: {message}", file=sys.stderr)
     raise SystemExit(1)
 
@@ -117,8 +118,7 @@ def git(*args: str, check: bool = True) -> str:
         ["git", *args],
         check=False,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
     if check and proc.returncode != 0:
         detail = proc.stderr.strip() or proc.stdout.strip()
@@ -126,26 +126,25 @@ def git(*args: str, check: bool = True) -> str:
     return proc.stdout.strip()
 
 
-def read_code_version(path: Path = VERSION_FILE) -> str:
+def vcs_version() -> str:
+    describe = git("describe", "--tags", "--long", "--dirty", "--match", "v[0-9]*")
+    match = re.fullmatch(r"v(?P<version>[^-]+)-(?P<distance>\d+)-g(?P<sha>[0-9a-f]+)(?P<dirty>-dirty)?", describe)
+    if match is None:
+        die(f"unsupported Git describe output: {describe}")
+    base = match.group("version")
     try:
-        text = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        die(f"version file does not exist: {path}")
-
-    match = VERSION_ASSIGNMENT_RE.search(text)
-    if not match:
-        die(f"could not find __version__ assignment in {path}")
-    return match.group("version")
-
-
-def replace_code_version(new_version: str, path: Path = VERSION_FILE) -> None:
-    SemVer.parse(new_version)
-    text = path.read_text(encoding="utf-8")
-    replacement = f"__version__ = '{new_version}'"
-    new_text, count = VERSION_ASSIGNMENT_RE.subn(replacement, text, count=1)
-    if count != 1:
-        die(f"could not replace __version__ assignment in {path}")
-    path.write_text(new_text, encoding="utf-8")
+        SemVer.parse(base)
+    except SemVerError as exc:
+        die(str(exc))
+    distance = int(match.group("distance"))
+    if distance == 0 and match.group("dirty") is None:
+        return base
+    parsed_base = SemVer.parse(base)
+    development_base = f"{parsed_base.major}.{parsed_base.minor}.{parsed_base.patch + 1}"
+    suffix = f"+g{match.group('sha')}"
+    if match.group("dirty"):
+        suffix += ".dirty"
+    return f"{development_base}.dev{distance}{suffix}"
 
 
 def tag_to_version(tag_name: str) -> str:
@@ -177,11 +176,11 @@ def latest_release_before(tag_name: str | None = None) -> tuple[str, SemVer] | N
 
 
 def command_version(_: argparse.Namespace) -> None:
-    print(read_code_version())
+    print(vcs_version())
 
 
 def command_check_working(_: argparse.Namespace) -> None:
-    version = read_code_version()
+    version = vcs_version()
     try:
         SemVer.parse(version)
     except SemVerError as exc:
@@ -197,11 +196,6 @@ def command_check_version(args: argparse.Namespace) -> None:
     print(f"version ok: {args.version}")
 
 
-def command_replace_version(args: argparse.Namespace) -> None:
-    replace_code_version(args.version)
-    print(f"updated {VERSION_FILE} to {args.version}")
-
-
 def command_check_tag(args: argparse.Namespace) -> None:
     tag_name = args.tag
     tag_version = tag_to_version(tag_name)
@@ -210,15 +204,16 @@ def command_check_tag(args: argparse.Namespace) -> None:
     except SemVerError as exc:
         die(str(exc))
 
-    code_version = read_code_version()
-    if code_version != tag_version:
-        die(f"tag/code mismatch: tag={tag_name} code=version {code_version}")
-
     tag_type = git("cat-file", "-t", tag_name)
     if tag_type != "tag":
         die(f"release tag must be annotated: {tag_name} is a {tag_type} object")
 
-    print(f"tag ok: {tag_name} matches __version__ {code_version}")
+    tagged_commit = git("rev-parse", f"{tag_name}^{{}}")
+    head_commit = git("rev-parse", "HEAD")
+    if tagged_commit != head_commit:
+        die(f"checked-out commit does not match release tag: tag={tag_name} head={head_commit[:12]}")
+
+    print(f"tag ok: {tag_name} is annotated and names the checked-out release commit")
 
 
 def command_check_newer(args: argparse.Namespace) -> None:
@@ -230,10 +225,7 @@ def command_check_newer(args: argparse.Namespace) -> None:
 
     latest_tag, latest_version = latest
     if version.compare(latest_version) <= 0:
-        die(
-            f"new version {args.version} must be greater than latest release "
-            f"{latest_tag} ({latest_version.original})"
-        )
+        die(f"new version {args.version} must be greater than latest release {latest_tag} ({latest_version.original})")
     print(f"version order ok: {args.version} > {latest_tag}")
 
 
@@ -258,30 +250,20 @@ def build_parser() -> argparse.ArgumentParser:
     version = subparsers.add_parser("version", help="print the code version")
     version.set_defaults(func=command_version)
 
-    check_working = subparsers.add_parser(
-        "check-working", help="validate seasonalweather.__version__"
-    )
+    check_working = subparsers.add_parser("check-working", help="validate seasonalweather.__version__")
     check_working.set_defaults(func=command_check_working)
 
     check_version = subparsers.add_parser("check-version", help="validate a version string")
     check_version.add_argument("version")
     check_version.set_defaults(func=command_check_version)
 
-    replace_version = subparsers.add_parser(
-        "replace-version", help="replace seasonalweather.__version__"
-    )
-    replace_version.add_argument("version")
-    replace_version.set_defaults(func=command_replace_version)
-
     check_tag = subparsers.add_parser(
-        "check-tag", help="validate that a vX.Y.Z tag matches the checked-out code"
+        "check-tag", help="validate that an annotated vX.Y.Z tag names the checked-out commit"
     )
     check_tag.add_argument("tag")
     check_tag.set_defaults(func=command_check_tag)
 
-    check_newer = subparsers.add_parser(
-        "check-newer", help="validate that a version is greater than existing releases"
-    )
+    check_newer = subparsers.add_parser("check-newer", help="validate that a version is greater than existing releases")
     check_newer.add_argument("version")
     check_newer.add_argument(
         "--exclude-tag",

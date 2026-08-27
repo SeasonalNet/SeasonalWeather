@@ -7,10 +7,12 @@ import signal
 import subprocess
 import threading
 import time
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from shutil import which
+from typing import IO
 
 from .cancellation import deadline_expired, explicit_cancellation
 from .failures import ProcessFailure
@@ -61,24 +63,24 @@ def run_bounded(
     deadline: float,
     cancellation: threading.Event | None = None,
     cwd: Path | None = None,
+    environment: Mapping[str, str] | None = None,
     output_limit: int = 64 * 1024,
     terminate_grace_seconds: float = 0.25,
 ) -> ProcessResult:
     """Run an explicit argv until its shared absolute deadline or cancellation."""
     _validate_request(argv, input_bytes, deadline, cancellation)
-    process = _launch_process(argv, input_bytes, cwd)
+    process = _launch_process(argv, input_bytes, cwd, environment)
 
     stdout_chunks: list[bytes] = []
     stderr_chunks: list[bytes] = []
     output_limited = False
 
-    def drain(stream: object, chunks: list[bytes]) -> None:
+    def drain(stream: IO[bytes] | None, chunks: list[bytes]) -> None:
         nonlocal output_limited
         if stream is None:
             return
-        reader = stream  # typing is intentionally narrow at the subprocess boundary
         while True:
-            block = reader.read(4096)  # type: ignore[attr-defined]
+            block = stream.read(4096)
             if not block:
                 return
             current_size = sum(len(item) for item in chunks)
@@ -118,8 +120,17 @@ def _validate_request(
         raise ProcessFailure("cancelled", "local synthesis was cancelled before process start")
 
 
-def _launch_process(argv: list[str], input_bytes: bytes | None, cwd: Path | None) -> subprocess.Popen[bytes]:
+def _launch_process(
+    argv: list[str],
+    input_bytes: bytes | None,
+    cwd: Path | None,
+    extra_environment: Mapping[str, str] | None,
+) -> subprocess.Popen[bytes]:
     environment = {"PATH": os.environ.get("PATH", ""), "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
+    if extra_environment is not None:
+        if any("\x00" in key or "\x00" in value for key, value in extra_environment.items()):
+            raise ProcessFailure("invalid_environment", "local subprocess environment is invalid")
+        environment.update(extra_environment)
     try:
         return subprocess.Popen(
             argv,
@@ -156,12 +167,12 @@ def _finish_process(
 
 def _start_drainers(
     process: subprocess.Popen[bytes],
-    drain: object,
+    drain: Callable[[IO[bytes] | None, list[bytes]], None],
     stdout_chunks: list[bytes],
     stderr_chunks: list[bytes],
 ) -> tuple[threading.Thread, threading.Thread]:
-    stdout_thread = threading.Thread(target=drain, args=(process.stdout, stdout_chunks), daemon=True)  # type: ignore[arg-type]
-    stderr_thread = threading.Thread(target=drain, args=(process.stderr, stderr_chunks), daemon=True)  # type: ignore[arg-type]
+    stdout_thread = threading.Thread(target=drain, args=(process.stdout, stdout_chunks), daemon=True)
+    stderr_thread = threading.Thread(target=drain, args=(process.stderr, stderr_chunks), daemon=True)
     stdout_thread.start()
     stderr_thread.start()
     return stdout_thread, stderr_thread

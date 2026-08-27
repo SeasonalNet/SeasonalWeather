@@ -97,7 +97,7 @@ image:
 
 images:
 	@set -e; \
-	for profile in controller routine-worker piper legacy-tts maintenance development; do \
+	for profile in controller routine-worker piper legacy-tts voicetext-paul spfy maintenance development; do \
 		$(MAKE) BUILD_PROFILE="$$profile" build-info; \
 		$(PYTHON) -m tools.build_interface image --build-info "$(BUILD_INFO)" --target "$$profile"; \
 	done

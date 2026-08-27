@@ -13,6 +13,7 @@ from typing import Any
 _SEMVER_RE = re.compile(
     r"^(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)"
     r"(?:-(?P<prerelease>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
+    r"(?:\.dev(?P<development>0|[1-9]\d*))?"
     r"(?:\+(?P<build>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
 )
 
@@ -128,6 +129,7 @@ class _SemVer:
     minor: int
     patch: int
     prerelease: tuple[str, ...] = ()
+    development: int | None = None
 
     def __lt__(self, other: object) -> bool:
         if not isinstance(other, _SemVer):
@@ -136,11 +138,17 @@ class _SemVer:
         other_core = (other.major, other.minor, other.patch)
         if core != other_core:
             return core < other_core
-        if not self.prerelease:
+        if self.prerelease != other.prerelease:
+            if not self.prerelease:
+                return False
+            if not other.prerelease:
+                return True
+            return _prerelease_less(self.prerelease, other.prerelease)
+        if self.development is None:
             return False
-        if not other.prerelease:
+        if other.development is None:
             return True
-        return _prerelease_less(self.prerelease, other.prerelease)
+        return self.development < other.development
 
 
 def _prerelease_less(left_items: tuple[str, ...], right_items: tuple[str, ...]) -> bool:
@@ -193,6 +201,7 @@ def _semver(value: str | None) -> _SemVer | None:
         int(match.group("minor")),
         int(match.group("patch")),
         prerelease,
+        int(match.group("development")) if match.group("development") else None,
     )
 
 

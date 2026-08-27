@@ -689,6 +689,58 @@ def test_software_compatibility_distinguishes_advisory_missing_and_older() -> No
     assert not software_issue.blocking
 
 
+def test_software_compatibility_accepts_vcs_development_versions() -> None:
+    current = CompatibilityIdentity(
+        software_version="0.18.0.dev55+g921616b15.d20260827",
+        build_identity=None,
+        validation_protocol_version=1,
+        config_schema_version=1,
+        swwp_protocol_version=1,
+        job_payload_schema_versions=(1,),
+        job_result_schema_versions=(1,),
+        diagnostic_schema_version=1,
+        diagnostic_catalog_version=1,
+        capability_manifest_version=1,
+        report_schema_version=1,
+    )
+    supported = replace(
+        default_supported_compatibility(),
+        software_minimum="0.17.0",
+        software_maximum_exclusive="1.0.0",
+    )
+
+    finding = analyze_compatibility(current, supported)[0]
+
+    assert finding.disposition is CompatibilityDisposition.ADVISORY
+
+
+def test_software_compatibility_orders_development_builds_before_release() -> None:
+    supported = replace(
+        default_supported_compatibility(),
+        software_minimum="0.18.0.dev3",
+        software_maximum_exclusive="0.18.0",
+    )
+    base = CompatibilityIdentity(
+        software_version="0.18.0.dev4+gabc",
+        build_identity=None,
+        validation_protocol_version=1,
+        config_schema_version=1,
+        swwp_protocol_version=1,
+        job_payload_schema_versions=(1,),
+        job_result_schema_versions=(1,),
+        diagnostic_schema_version=1,
+        diagnostic_catalog_version=1,
+        capability_manifest_version=1,
+        report_schema_version=1,
+    )
+
+    assert analyze_compatibility(base, supported)[0].disposition is CompatibilityDisposition.COMPATIBLE
+    assert (
+        analyze_compatibility(replace(base, software_version="0.18.0"), supported)[0].disposition
+        is CompatibilityDisposition.UNSUPPORTED_NEWER
+    )
+
+
 @pytest.mark.parametrize(
     "version",
     (

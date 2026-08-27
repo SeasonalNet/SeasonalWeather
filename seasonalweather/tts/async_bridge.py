@@ -231,7 +231,9 @@ def _call_synthesis(
         kwargs["finalize"] = finalize
     if "capacity_reservation" in parameters:
         kwargs["capacity_reservation"] = capacity_reservation
-    result = method(request, worker_output, **kwargs)  # type: ignore[arg-type]
+    typed_request = cast(SynthesisRequest, request)
+    dynamic_method = cast(Callable[..., object], method)
+    result = dynamic_method(typed_request, worker_output, **kwargs)
     if "finalize" not in parameters and getattr(result, "disposition", None) in {
         SynthesisDisposition.SUCCEEDED,
         SynthesisDisposition.LKG_REUSED,

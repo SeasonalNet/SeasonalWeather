@@ -236,6 +236,7 @@ def configure(
             ("dectalk", "DECtalk"),
             ("festival", "Festival"),
             ("piper", "Piper"),
+            ("spfy", "spfy"),
         ],
         default=str(_get(out, "tts.backend", "espeak-ng")),
     )

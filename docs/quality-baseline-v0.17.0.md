@@ -17,7 +17,7 @@ Reproduce from this revision with:
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
+uv sync --frozen --group controller --group worker-runtime --group dev
 make PYTHON=.venv/bin/python quality
 .venv/bin/python -m pytest
 ```

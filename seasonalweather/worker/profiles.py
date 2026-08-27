@@ -34,6 +34,8 @@ class WorkerProfile(StrEnum):
     ROUTINE = "routine-worker"
     PIPER = "piper"
     LEGACY_TTS = "legacy-tts"
+    VOICETEXT_PAUL = "voicetext-paul"
+    SPFY = "spfy"
     MAINTENANCE = "maintenance"
     DEVELOPMENT = "development"
 
@@ -87,6 +89,22 @@ _PROFILES = {
         capabilities=("tts.synthesis.v1", "audio.alert_artifact.v1"),
         tts_profile="legacy-tts",
         required_executables=("text2wave",),
+    ),
+    WorkerProfile.VOICETEXT_PAUL: WorkerProfileSpec(
+        profile=WorkerProfile.VOICETEXT_PAUL,
+        queues=(QueueClass.ROUTINE,),
+        job_types=(JobType.TTS_SYNTHESIZE, JobType.ALERT_ARTIFACT_GENERATE),
+        capabilities=("tts.synthesis.v1", "audio.alert_artifact.v1"),
+        tts_profile="voicetext-paul",
+        required_executables=("sudo", "voicetext_paul_synth"),
+    ),
+    WorkerProfile.SPFY: WorkerProfileSpec(
+        profile=WorkerProfile.SPFY,
+        queues=(QueueClass.ROUTINE,),
+        job_types=(JobType.TTS_SYNTHESIZE, JobType.ALERT_ARTIFACT_GENERATE),
+        capabilities=("tts.synthesis.v1", "audio.alert_artifact.v1"),
+        tts_profile="spfy",
+        required_executables=("/opt/spfy/bin/spfy_synth",),
     ),
     WorkerProfile.MAINTENANCE: WorkerProfileSpec(
         profile=WorkerProfile.MAINTENANCE,

@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
+from typing import ClassVar
 
 from seasonalweather.capabilities.models import ParameterValue
 
@@ -84,7 +85,7 @@ class _InvocationCounter:
 
 
 class LocalEngineHandler:
-    engine_id: str
+    engine_id: ClassVar[str]
 
     def synthesize(
         self,
@@ -108,14 +109,25 @@ class _SubprocessHandler(LocalEngineHandler):
         deadline: float,
         cancellation: Event | None,
         cwd: Path | None = None,
+        environment: dict[str, str] | None = None,
     ) -> None:
-        run_bounded(
-            argv,
-            input_bytes=input_bytes,
-            deadline=deadline,
-            cancellation=cancellation,
-            cwd=cwd,
-        )
+        if environment is None:
+            run_bounded(
+                argv,
+                input_bytes=input_bytes,
+                deadline=deadline,
+                cancellation=cancellation,
+                cwd=cwd,
+            )
+        else:
+            run_bounded(
+                argv,
+                input_bytes=input_bytes,
+                deadline=deadline,
+                cancellation=cancellation,
+                cwd=cwd,
+                environment=environment,
+            )
 
 
 class EspeakHandler(_SubprocessHandler):
@@ -280,6 +292,42 @@ class VoiceTextPaulHandler(_SubprocessHandler):
         )
 
 
+class SpfyHandler(_SubprocessHandler):
+    """Run the optional local ``spfy`` worker and return its native WAV."""
+
+    engine_id = "spfy"
+
+    def synthesize(
+        self,
+        text: str,
+        *,
+        options: LocalEngineOptions,
+        output_dir: Path,
+        deadline: float,
+        cancellation: Event | None,
+        volume: float = 1.0,
+    ) -> LocalHandlerResult:
+        del volume
+        executable = resolve_trusted_executable(options.spfy.executable)
+        voice_dir = Path(options.spfy.voice_dir)
+        if not voice_dir.is_dir():
+            raise ProcessFailure("executable_unavailable", "spfy voice directory is unavailable")
+        input_path = output_dir / "spfy-input.txt"
+        output_path = output_dir / "engine.wav"
+        input_path.write_text(text + "\n", encoding="utf-8")
+        os.chmod(input_path, 0o600)
+        self._run(
+            [executable, options.voice, "--no-update-check", "--file", str(input_path), str(output_path)],
+            input_bytes=None,
+            deadline=deadline,
+            cancellation=cancellation,
+            environment={"SPFY_VOICE_DIR": str(voice_dir), "SPFY_NO_UPDATE_CHECK": "1"},
+        )
+        if not output_path.is_file() or output_path.stat().st_size < 44:
+            raise ProcessFailure("nonzero_exit", "spfy produced no bounded output")
+        return LocalHandlerResult(output_path, self.engine_id)
+
+
 def _synthesize_voicetext_paul(
     handler: VoiceTextPaulHandler,
     text: str,
@@ -439,6 +487,7 @@ class LocalEngineRegistry:
         "festival": FestivalHandler,
         "dectalk": DecTalkHandler,
         "voicetext_paul": VoiceTextPaulHandler,
+        "spfy": SpfyHandler,
     }
     _aliases = {"espeak": "espeak-ng", "espeak_ng": "espeak-ng"}
 
@@ -531,8 +580,18 @@ class LocalEngineRegistry:
             )
             for resource in cls.required_resources(canonical)
         )
-        if canonical != "voicetext_paul":
-            return resources_ok
+        specialized = {
+            "voicetext_paul": cls._voicetext_resources_available,
+            "spfy": cls._spfy_resources_available,
+        }.get(canonical)
+        return resources_ok if specialized is None else specialized(options, resources_ok)
+
+    @staticmethod
+    def _spfy_resources_available(options: LocalEngineOptions, resources_ok: bool) -> bool:
+        return resources_ok and Path(options.spfy.voice_dir).is_dir()
+
+    @staticmethod
+    def _voicetext_resources_available(options: LocalEngineOptions, resources_ok: bool) -> bool:
         state_base = _data_base(options.voicetext_paul.data_base)
         engine_root = Path(
             os.getenv(
@@ -570,6 +629,8 @@ class LocalEngineRegistry:
             return ("dectalk-env", "/opt/dectalk/dectalk/dist/say")
         if canonical == "voicetext_paul":
             return ("sudo", "voicetext_paul_synth")
+        if canonical == "spfy":
+            return ("/opt/spfy/bin/spfy_synth",)
         return {
             "espeak-ng": ("espeak-ng",),
             "piper": ("piper",),

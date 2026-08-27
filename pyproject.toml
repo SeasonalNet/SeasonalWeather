@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=80", "setuptools-scm>=8", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,14 +7,52 @@ name = "seasonalweather"
 description = "Weather automation and alert orchestration service"
 readme = "README.md"
 requires-python = ">=3.11"
-dynamic = ["dependencies", "version"]
+dynamic = ["version"]
+dependencies = [
+    "pydantic==2.13.4",
+    "PyYAML==6.0.3",
+]
+
+[dependency-groups]
+controller = [
+    "aiodns==4.0.4",
+    "bcrypt==5.0.0",
+    "coloredlogs==15.0.1",
+    "fastapi==0.139.0",
+    "httpx2==2.9.1",
+    "passlib==1.7.4",
+    "PyMySQL==1.2.0",
+    "python-dateutil==2.9.0.post0",
+    "python-multipart==0.0.32",
+    "slixmpp==1.17.0",
+    "SQLAlchemy==2.0.51",
+    "uvicorn==0.51.0",
+]
+worker-runtime = [
+    "pydantic_core==2.46.4",
+    "typing_extensions==4.16.0",
+    "websockets==15.0.1",
+]
+piper = [
+    "piper-tts",
+]
+dev = [
+    "bandit==1.9.4",
+    "basedpyright==1.39.10",
+    "deptry==0.25.1",
+    "mypy==2.3.0",
+    "pytest==9.1.1",
+    "radon==6.0.1",
+    "ruff==0.16.0",
+    "vulture==2.16",
+]
 
 [project.scripts]
 seasonalweather = "seasonalweather.__main__:_main"
 
-[tool.setuptools.dynamic]
-dependencies = {file = ["requirements.txt"]}
-version = {attr = "seasonalweather.__version__"}
+[tool.setuptools_scm]
+version_file = "seasonalweather/_version.py"
+tag_regex = "^(?:v)?(?P<version>\\d+\\.\\d+\\.\\d+(?:[-.][0-9A-Za-z.-]+)?)$"
 
 [tool.setuptools.packages.find]
 include = ["seasonalweather*"]
@@ -54,8 +92,7 @@ warn_unused_ignores = true
 
 [tool.deptry]
 known_first_party = ["seasonalweather"]
-requirements_files = ["requirements.txt"]
-requirements_files_dev = ["requirements-dev.txt"]
+non_dev_dependency_groups = ["controller"]
 extend_exclude = [
   "tests/architecture/fixtures",
   "tools/quality",

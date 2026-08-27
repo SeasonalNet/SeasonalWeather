@@ -9,6 +9,42 @@ def test_valid_architecture_fixture_passes():
     assert scan(FIXTURES / "valid", CONFIG) == []
 
 
+def test_project_metadata_dependency_profiles_have_independent_boundaries(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[project]
+dependencies = ["pydantic==2.13.4"]
+
+[dependency-groups]
+controller = ["fastapi==0.139.0"]
+worker-runtime = ["websockets==15.0.1"]
+piper = ["piper-tts"]
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert scan(tmp_path, CONFIG) == []
+
+
+def test_project_metadata_dependency_profiles_reject_controller_leakage(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[project]
+dependencies = ["fastapi==0.139.0"]
+
+[dependency-groups]
+controller = ["fastapi==0.139.0", "piper-tts"]
+piper = ["fastapi==0.139.0"]
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    findings = scan(tmp_path, CONFIG)
+    assert [finding.rule for finding in findings] == ["SWARCH052", "SWARCH053", "SWARCH053"]
+
+
 def test_invalid_architecture_fixture_proves_rules_fail_closed():
     findings = scan(FIXTURES / "invalid", CONFIG)
 

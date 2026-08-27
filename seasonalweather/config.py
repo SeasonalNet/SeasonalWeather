@@ -2363,6 +2363,7 @@ def _build_app_config(
         "festival": "festival",
         "dectalk": "dectalk",
         "voicetext_paul": "voicetext_paul",
+        "spfy": "spfy",
     }
     legacy_local = backend_raw in local_aliases
     backend = "local" if legacy_local else str(tts_raw["backend"])

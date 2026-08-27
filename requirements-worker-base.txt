@@ -1,7 +1,0 @@
-# Minimal worker runtime. Controller API, database, NWWS, and Liquidsoap
-# dependencies remain outside worker images.
-pydantic==2.13.4
-pydantic_core==2.46.4
-PyYAML==6.0.3
-typing_extensions==4.16.0
-websockets==15.0.1

@@ -63,7 +63,7 @@ def test_build_info_round_trips_and_projects_oci_labels() -> None:
     labels = restored.oci_labels()
 
     assert restored == info
-    assert labels["org.opencontainers.image.version"] == "0.17.0"
+    assert labels["org.opencontainers.image.version"] == info.software_version
     assert labels["io.seasonalweather.build.identity"] == info.build_identity
     assert labels["io.seasonalweather.build.dirty"] == ("true" if info.dirty_tree else "false")
     assert labels["io.seasonalweather.build.target-platform"] == "linux/amd64"

@@ -12,7 +12,7 @@ from ..nwws.source import NwwsProductEnvelope
 from .audio_origination import safe_event_code as _safe_event_code
 from .cap_policy import best_expiry_from_vtec, vtec_matches_configured_toneout_code
 from .pns import parse_nws_header_issued_dt, pns_text_same_issuance
-from .product_text import render_nws_product_script
+from .product_text import NwwsScriptRenderResult, render_nws_product_script
 from .station_feed_runtime import nwws_area_from_text as _sf_nwws_area_from_text
 from .station_feed_runtime import nwws_best_issued_dt as _sf_nwws_best_issued_dt
 from .station_feed_runtime import nwws_event_label as _sf_nwws_event_label
@@ -29,6 +29,12 @@ def _first_vtec_action(actions: set[str], priority: tuple[str, ...]) -> str:
         if action in actions:
             return action
     return ""
+
+
+def _vtec_action(raw: str) -> str:
+    """Return the action token from one normalized VTEC string."""
+    parts = str(raw or "").strip("/").split(".")
+    return parts[1].upper() if len(parts) > 1 and parts[0] == "O" else ""
 
 
 def _nwws_discord_event_code(product_type: str, same_code: str | None, vtec: list[str]) -> str:
@@ -73,7 +79,6 @@ class NwwsRuntime:
             object.__setattr__(self, name, value)
             return
         setattr(self._orchestrator, name, value)
-
 
     async def run(self) -> None:
         while True:
@@ -157,10 +162,7 @@ class NwwsRuntime:
             elif (parsed.product_type or "").strip().upper() == "MWS":
                 try:
                     _mws_vtec = self._extract_vtec(parsed.raw_text or "")
-                    _mws_has_marine = any(
-                        ".MA.W." in v or ".MA.A." in v
-                        for v in _mws_vtec
-                    )
+                    _mws_has_marine = any(".MA.W." in v or ".MA.A." in v for v in _mws_vtec)
                     if _mws_has_marine:
                         log.info(
                             "NWWS MWS: marine VTEC detected (%s), routing to toneout handler wfo=%s awips=%s",
@@ -184,7 +186,9 @@ class NwwsRuntime:
                 try:
                     official_pns = parsed.raw_text
                     try:
-                        pid_pns = await self.api.latest_product_id("PNS", parsed.wfo[1:] if parsed.wfo.startswith("K") else parsed.wfo)
+                        pid_pns = await self.api.latest_product_id(
+                            "PNS", parsed.wfo[1:] if parsed.wfo.startswith("K") else parsed.wfo
+                        )
                         if pid_pns:
                             prod_pns = await self.api.get_product(pid_pns)
                             if prod_pns and prod_pns.product_text:
@@ -238,9 +242,10 @@ class NwwsRuntime:
             elif (parsed.product_type or "").strip().upper() == "NOW":
                 self.now_runtime.submit(parsed)
 
-
     async def _handle_toneout(self, parsed: ParsedProduct) -> None:
-        log.info("NWWS toneout candidate: type=%s awips=%s wfo=%s", parsed.product_type, parsed.awips_id or "", parsed.wfo)
+        log.info(
+            "NWWS toneout candidate: type=%s awips=%s wfo=%s", parsed.product_type, parsed.awips_id or "", parsed.wfo
+        )
 
         # NWWS-OI already delivered the authoritative live product text.
         # Keep api.weather.gov out of the toneout hot path; API backfill remains
@@ -249,7 +254,9 @@ class NwwsRuntime:
         pid = None
 
         # --- NEW: derive SAME targeting from UGC zones (NWWS-only) ---
-        zones, in_area_same, src, mapped_ok, ugc_expires_utc = await self.target_resolver._nwws_same_targets_from_texts(parsed.raw_text or "", official_text or "")
+        zones, in_area_same, src, mapped_ok, ugc_expires_utc = await self.target_resolver._nwws_same_targets_from_texts(
+            parsed.raw_text or "", official_text or ""
+        )
 
         if zones:
             log.info(
@@ -262,10 +269,9 @@ class NwwsRuntime:
 
         vtec_preview = self._extract_vtec(official_text)
         _pre_policy = _vtec_toneout_policy(vtec_preview)
-        _pre_is_wcn_watch = (
-            (parsed.product_type or "").strip().upper() == "WCN"
-            and (_pre_policy.same_code or "").strip().upper() in {"SVA", "TOA"}
-        )
+        _pre_is_wcn_watch = (parsed.product_type or "").strip().upper() == "WCN" and (
+            _pre_policy.same_code or ""
+        ).strip().upper() in {"SVA", "TOA"}
         if _pre_is_wcn_watch and not in_area_same:
             area_same = await self.target_resolver._nwws_wcn_watch_same_targets_from_area_desc(official_text or "")
             if area_same:
@@ -311,14 +317,19 @@ class NwwsRuntime:
         # (e.g. CF.Y.NEW was incorrectly treated as FULL before this fix).
         _nw_policy = _vtec_toneout_policy(vtec)
         vtec_actions = {act for (_t, act) in tracks} if tracks else set()
-        should_full = (_nw_policy.mode == "FULL")
+        should_full = _nw_policy.mode == "FULL"
+        mixed_wcn = (
+            (parsed.product_type or "").strip().upper() == "WCN"
+            and should_full
+            and bool(vtec_actions & {"NEW", "UPG", "EXA", "EXB"})
+            and bool(vtec_actions & {"CAN", "EXP"})
+        )
         discord_event_code = _nwws_discord_event_code(
             parsed.product_type,
             _nw_policy.same_code,
             vtec,
         )
         log.debug("NWWS vtec policy: %s", _nw_policy.reason)
-
 
         # Critical safety gate:
         # If we have UGC zones but could not map ANY of them to SAME, we do NOT air FULL.
@@ -389,7 +400,8 @@ class NwwsRuntime:
         # lifecycle action while still allowing later CON -> EXP/CAN updates for
         # the same VTEC track.
         for track_id, act in tracks:
-            keys.append(f"{'TRACKFULL' if should_full else 'TRACKVOICE'}:{track_id}:{act or 'UNK'}")
+            action_mode = "FULL" if act in {"NEW", "UPG", "EXA", "EXB"} else "VOICE"
+            keys.append(f"TRACK{action_mode}:{track_id}:{act or 'UNK'}")
 
         # Keep VTEC strings too (helps when track parse fails on weird edge cases)
         for v in vtec:
@@ -404,7 +416,9 @@ class NwwsRuntime:
                 keys.append(fkey2)
 
         # Message-level fallback key
-        keys.append(f"NWWS:{parsed.product_type}:{parsed.wfo}:{self._sha1_12(official_text[:1200])}:{'FULL' if should_full else 'VOICE'}")
+        keys.append(
+            f"NWWS:{parsed.product_type}:{parsed.wfo}:{self._sha1_12(official_text[:1200])}:{'FULL' if should_full else 'VOICE'}"
+        )
 
         ok, hit = await self._dedupe_reserve(keys)
         if not ok:
@@ -464,28 +478,49 @@ class NwwsRuntime:
                 issuer=_sf_nwws_extract_issuer(official_text, fallback_wfo=parsed.wfo),
             )
 
+            rendered_terminal_script: NwwsScriptRenderResult | None = None
             try:
+                full_actions = vtec_actions & {"NEW", "UPG", "EXA", "EXB"}
+                terminal_actions = vtec_actions & {"CAN", "EXP"}
+                full_action = _first_vtec_action(full_actions, ("NEW", "UPG", "EXA", "EXB"))
+                terminal_action = _first_vtec_action(terminal_actions, ("CAN", "EXP"))
                 rendered_script = render_nws_product_script(
                     product_type=parsed.product_type,
                     base_script=spoken.script,
                     official_text=official_text,
-                    vtec=vtec,
-                    vtec_actions=vtec_actions,
+                    vtec=[item for item in vtec if _vtec_action(item) in full_actions] if mixed_wcn else vtec,
+                    vtec_actions=full_actions if mixed_wcn else vtec_actions,
                     has_tracks=bool(tracks),
                     should_full=should_full,
                     event_text=sf_event_label,
                     area_text=sf_area_text,
                     headline=sf_headline,
                     local_tz=self._tz,
+                    watch_action=full_action if mixed_wcn else None,
                 )
+                if mixed_wcn:
+                    rendered_terminal_script = render_nws_product_script(
+                        product_type=parsed.product_type,
+                        base_script=spoken.script,
+                        official_text=official_text,
+                        vtec=[item for item in vtec if _vtec_action(item) in terminal_actions],
+                        vtec_actions=terminal_actions,
+                        has_tracks=True,
+                        should_full=False,
+                        event_text=sf_event_label,
+                        area_text=sf_area_text,
+                        headline=sf_headline,
+                        local_tz=self._tz,
+                        watch_action=terminal_action,
+                    )
                 spoken.script = rendered_script.script
                 if rendered_script.changed:
                     log.info(
                         "NWWS script normalized by %s (act=%s type=%s awips=%s wfo=%s)",
                         rendered_script.renderer,
-                        ','.join(sorted(vtec_actions))[:64],
+                        ",".join(sorted(vtec_actions))[:64],
                         parsed.product_type,
-                        parsed.awips_id or '',
+                        parsed.awips_id or "",
                         parsed.wfo,
                     )
                 for note in rendered_script.notes:
@@ -493,6 +528,12 @@ class NwwsRuntime:
                         log.warning("NWWS script renderer note: %s", note[8:].strip())
                     else:
                         log.info("NWWS script renderer note: %s", note)
+                if rendered_terminal_script is not None:
+                    for note in rendered_terminal_script.notes:
+                        if note.startswith("warning:"):
+                            log.warning("NWWS terminal script renderer note: %s", note[8:].strip())
+                        else:
+                            log.info("NWWS terminal script renderer note: %s", note)
             except Exception:
                 log.exception("NWWS script normalization failed; continuing with original script")
 
@@ -537,6 +578,7 @@ class NwwsRuntime:
                 },
             )
             if should_full:
+
                 async def _render_nwws_full():
                     return await self.audio_originator.render_alert_audio(
                         render_parsed,
@@ -550,7 +592,30 @@ class NwwsRuntime:
                     render=_render_nwws_full,
                     meta=meta,
                 )
+                if mixed_wcn and rendered_terminal_script is not None:
+                    voice_meta = dict(meta)
+                    voice_meta["sw_alert_mode"] = "voice"
+
+                    async def _render_nwws_mixed_voice():
+                        return await self.audio_originator.render_voice_only_audio(
+                            rendered_terminal_script.script,
+                            prefix="nwwsvoice",
+                        )
+
+                    terminal_wav = await self._render_and_push_interrupt_audio(
+                        source="nwws-voice-terminal",
+                        full=False,
+                        render=_render_nwws_mixed_voice,
+                        meta=voice_meta,
+                    )
+                    log.info(
+                        "NWWS mixed WCN: aired active FULL followed by terminal VOICE type=%s full_audio=%s terminal_audio=%s",
+                        parsed.product_type,
+                        out_wav,
+                        terminal_wav,
+                    )
             else:
+
                 async def _render_nwws_voice():
                     return await self.audio_originator.render_voice_only_audio(
                         spoken.script,
@@ -634,9 +699,8 @@ class NwwsRuntime:
                         area=sf_area_text,
                         vtec=vtec[:2],
                         ended_tracks=_dl_cancel_tracks,
-                        continuing_tracks=_dl_continuation_tracks or [
-                            t for (t, action) in tracks if action in _dl_nonterminal_actions
-                        ],
+                        continuing_tracks=_dl_continuation_tracks
+                        or [t for (t, action) in tracks if action in _dl_nonterminal_actions],
                         mode=_dl_mode,
                     )
                 else:
@@ -737,8 +801,11 @@ class NwwsRuntime:
                 _nw_tracks = tracks
                 _nw_vtec_actions = vtec_actions
                 _nw_exp_utc = best_expiry_from_vtec(_nw_vtec)
-                _nw_expires_iso = _nw_exp_utc.isoformat() if _nw_exp_utc else (
-                    dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=6)).isoformat()
+                _nw_expires_iso = (
+                    _nw_exp_utc.isoformat()
+                    if _nw_exp_utc
+                    else (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=6)).isoformat()
+                )
                 _nw_same_code = _nw_policy.same_code or _safe_event_code(parsed.product_type)
                 _nw_same_locs = list(in_area_same) if in_area_same else []
                 _nw_track_ids = {_vtec_track_id(v) for v in _nw_vtec if _vtec_track_id(v)}
@@ -759,17 +826,17 @@ class NwwsRuntime:
                     if cancel_track_ids:
                         removed_n = self.alert_tracker.remove_by_vtec_tracks(
                             cancel_track_ids,
-                            reason=f"nwws:{parsed.product_type}:{','.join(sorted(_nw_vtec_actions & {'CAN','EXP'}))}",
+                            reason=f"nwws:{parsed.product_type}:{','.join(sorted(_nw_vtec_actions & {'CAN', 'EXP'}))}",
                         )
                         self._remove_matching_ipaws_state(
                             code=_nw_same_code,
                             same_locs=_nw_same_locs,
-                            reason=f"nwws:{parsed.product_type}:{','.join(sorted(_nw_vtec_actions & {'CAN','EXP'}))}",
+                            reason=f"nwws:{parsed.product_type}:{','.join(sorted(_nw_vtec_actions & {'CAN', 'EXP'}))}",
                         )
                         self._remove_shadowed_ern_state(
                             code=_nw_same_code,
                             same_locs=_nw_same_locs,
-                            reason=f"nwws:{parsed.product_type}:{','.join(sorted(_nw_vtec_actions & {'CAN','EXP'}))}",
+                            reason=f"nwws:{parsed.product_type}:{','.join(sorted(_nw_vtec_actions & {'CAN', 'EXP'}))}",
                         )
                         log.info(
                             "AlertTracker: removed %d entries for NWWS CAN/EXP type=%s awips=%s tracks=%s",
@@ -783,8 +850,11 @@ class NwwsRuntime:
                         # Some tracks are still active — keep them in the tracker
                         # with an updated script so the cycle reflects the partial state.
                         _nw_tid_str = next(iter(continuation_track_ids), None)
-                        _nw_tracker_id = f"NWWS:{_nw_tid_str}" if _nw_tid_str else (
-                            f"NWWS:{parsed.product_type}:{parsed.wfo}:{(parsed.awips_id or '').strip()}")
+                        _nw_tracker_id = (
+                            f"NWWS:{_nw_tid_str}"
+                            if _nw_tid_str
+                            else (f"NWWS:{parsed.product_type}:{parsed.wfo}:{(parsed.awips_id or '').strip()}")
+                        )
                         _nw_issued = sf_issued_dt or dt.datetime.now(dt.timezone.utc)
                         if _nw_issued.tzinfo is None:
                             _nw_issued = _nw_issued.replace(tzinfo=dt.timezone.utc)
@@ -818,8 +888,11 @@ class NwwsRuntime:
                 else:
                     # New issuance, update, or continuation
                     _nw_tid_str = next(iter(_nw_track_ids), None)
-                    _nw_tracker_id = f"NWWS:{_nw_tid_str}" if _nw_tid_str else (
-                        f"NWWS:{parsed.product_type}:{parsed.wfo}:{(parsed.awips_id or '').strip()}")
+                    _nw_tracker_id = (
+                        f"NWWS:{_nw_tid_str}"
+                        if _nw_tid_str
+                        else (f"NWWS:{parsed.product_type}:{parsed.wfo}:{(parsed.awips_id or '').strip()}")
+                    )
                     _nw_is_cycle_only = not should_full
                     _nw_issued = sf_issued_dt or dt.datetime.now(dt.timezone.utc)
                     if _nw_issued.tzinfo is None:
@@ -845,8 +918,13 @@ class NwwsRuntime:
                         same_locs=_nw_same_locs,
                         reason=f"nwws:{_nw_tracker_id}",
                     )
-                    log.info("AlertTracker: registered NWWS id=%s type=%s should_full=%s expires=%s",
-                             _nw_tracker_id, parsed.product_type, should_full, _nw_expires_iso)
+                    log.info(
+                        "AlertTracker: registered NWWS id=%s type=%s should_full=%s expires=%s",
+                        _nw_tracker_id,
+                        parsed.product_type,
+                        should_full,
+                        _nw_expires_iso,
+                    )
             except Exception:
                 log.exception("AlertTracker: failed to register NWWS type=%s", parsed.product_type)
 

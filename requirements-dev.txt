@@ -1,8 +1,0 @@
-bandit==1.9.4
-deptry==0.25.1
-mypy==2.3.0
-pytest==9.1.1
-radon==6.0.1
-ruff==0.16.0
-vulture==2.16
-basedpyright==1.39.10

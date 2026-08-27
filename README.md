@@ -106,6 +106,9 @@ Freeze products are supported natively. `FZ.W` maps to SAME `FZW` (**Freeze Warn
 - Optional external `seasonal-ttsd` Compose credential integration, strict
   response validation, and fallback behavior are documented in
   [`docs/p3-04-seasonal-ttsd.md`](docs/p3-04-seasonal-ttsd.md).
+- Optional external OpenAI-compatible TTS Compose credential integration,
+  bounded provider responses, and fallback behavior are documented in
+  [`docs/p3-05-openai-compatible.md`](docs/p3-05-openai-compatible.md).
 - The versioned read-only diagnostic namespace registry, stable configuration
   codes, curated explanations, deterministic catalog build/export, and
   `seasonalweather diagnostics list|explain` commands are documented in
@@ -423,7 +426,7 @@ SEASONAL_DECTALK=1 sudo -E bash scripts/00-bootstrap.sh --non-interactive
 SEASONAL_VOICETEXT_PAUL=1 sudo -E bash scripts/00-bootstrap.sh --non-interactive
 ```
 
-The base Python requirements no longer install the Piper/ONNX/NumPy stack.
+The base Python dependency set no longer installs the Piper/ONNX/NumPy stack.
 Piper is installed only when `SEASONAL_PIPER=1` or the custom interactive
 selection enables it. Festival and DECtalk build dependencies are likewise
 feature-selected instead of being installed for every host.

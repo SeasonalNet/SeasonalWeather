@@ -554,7 +554,7 @@ tts:
                               # Legacy backend: <engine> spelling remains compatibility-only.
   fallback_backend: null      # local | seasonal_ttsd | openai_compatible
   local:
-    engine: "espeak-ng"       # espeak-ng | piper | festival | dectalk | voicetext_paul
+    engine: "espeak-ng"       # espeak-ng | piper | festival | dectalk | voicetext_paul | spfy
     voice: "9"
     rate_wpm: 165
     voicetext_paul:

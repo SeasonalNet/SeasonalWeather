@@ -93,7 +93,8 @@ extension of the existing validation path, not a second validator.
 ## Local engines and subprocess policy
 
 The registry currently supports `espeak-ng`, `piper`, `festival`, `dectalk`,
-and `voicetext_paul`, with the accepted `espeak` and `espeak_ng` aliases.
+and `voicetext_paul`, plus the optional `spfy` worker engine, with the
+accepted `espeak` and `espeak_ng` aliases.
 Every handler builds its own argv; command construction is confined to the
 local TTS owner. Every availability check validates the handler executable and
 its required wrapper/resources. DECtalk checks both `dectalk-env` and the

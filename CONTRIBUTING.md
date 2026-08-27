@@ -17,12 +17,12 @@ Failure to follow rules defined here may result in disclipinary action, includin
 ## Development setup
 
 Create and activate a virtual environment, then install runtime and development
-requirements:
+dependencies:
 
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
-python -m pip install -r requirements.txt -r requirements-dev.txt
+uv sync --frozen --group controller --group worker-runtime --group dev
 ```
 
 Use the repository's existing environment and dependency conventions. Do not
@@ -83,7 +83,7 @@ Run the narrowest relevant checks while iterating. Before submitting a code
 change, run `make quality` and the applicable tests. Report exact commands and
 results, including anything skipped or blocked.
 
-Forgejo CI installs `requirements-dev.txt` and runs the same `make quality`
+Forgejo CI installs the locked controller and development dependency groups and runs the same `make quality`
 target. Gitleaks remains a separate required security workflow because it scans
 repository content for secrets rather than analyzing Python behavior.
 

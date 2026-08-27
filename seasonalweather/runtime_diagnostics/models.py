@@ -32,7 +32,7 @@ MAX_JSON_ITEMS = 512
 MAX_JSON_STRING = 1024
 MAX_RESOLUTION_EVIDENCE_BYTES = 4096
 MAX_RESOLUTION_NOTES = 8
-_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,127}$")
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@/+-]{0,127}$")
 
 
 class DiagnosticRole(StrEnum):

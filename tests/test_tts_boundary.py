@@ -6,35 +6,36 @@ import shutil
 import sys
 import textwrap
 import threading
-from types import SimpleNamespace
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from seasonalweather.tts.admission import validate_synthesis_request, transitional_local_qualification
 from seasonalweather.tts.admission import (
     ControllerLocalPublicationFence,
     ControllerLocalQualificationSource,
     P109TtsQualificationAdapter,
+    transitional_local_qualification,
+    validate_synthesis_request,
 )
 from seasonalweather.tts.async_bridge import EmbeddedExecutionPort, synthesize_async, synthesize_completed_wav_async
 from seasonalweather.tts.audio import write_silence_wav
 from seasonalweather.tts.local import (
     DecTalkHandler,
+    EspeakHandler,
     FestivalHandler,
+    LocalCapabilityEvidence,
     LocalEngineHandler,
     LocalEngineRegistry,
     LocalHandlerResult,
     PiperHandler,
-    EspeakHandler,
+    SpfyHandler,
     VoiceTextPaulHandler,
 )
-from seasonalweather.tts.local import LocalCapabilityEvidence
 from seasonalweather.tts.models import (
     AcceptedArtifactReference,
-    ArtifactEvidence,
     BackendId,
     LastKnownGoodCandidate,
     LocalEngineOptions,
@@ -191,7 +192,7 @@ def test_result_purpose_policy_maps_to_existing_job_semantics() -> None:
     assert administrative.priority is routine.priority
 
 
-@pytest.mark.parametrize("engine", ("espeak-ng", "piper", "festival", "dectalk", "voicetext_paul"))
+@pytest.mark.parametrize("engine", ("espeak-ng", "piper", "festival", "dectalk", "voicetext_paul", "spfy"))
 def test_every_supported_local_engine_has_one_registry_handler(engine: str) -> None:
     assert isinstance(LocalEngineRegistry.handler(engine), LocalEngineHandler)
 
@@ -201,6 +202,54 @@ def test_local_engine_aliases_are_canonical() -> None:
     assert LocalEngineRegistry.normalize("espeak_ng") == "espeak-ng"
     with pytest.raises(ProcessFailure, match="unsupported"):
         LocalEngineRegistry.normalize("not-an-engine")
+
+
+def test_spfy_handler_uses_native_wav_contract_and_bounded_environment(monkeypatch, tmp_path: Path) -> None:
+    voice_dir = tmp_path / "voices"
+    voice_dir.mkdir()
+    executable = tmp_path / "spfy_synth"
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o700)
+    commands: list[list[str]] = []
+    environments: list[dict[str, str] | None] = []
+    handler = SpfyHandler()
+
+    def fake_run(argv, *, input_bytes, deadline, cancellation, cwd=None, environment=None):
+        del input_bytes, deadline, cancellation, cwd
+        commands.append(argv)
+        environments.append(environment)
+        output = Path(argv[-1])
+        write_silence_wav(output, 0.1, 48_000)
+
+    monkeypatch.setattr(handler, "_run", fake_run)
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    result = handler.synthesize(
+        "bounded spfy test",
+        options=LocalEngineOptions(
+            engine="spfy",
+            voice="spfy-tom",
+            spfy={"executable": str(executable), "voice_dir": str(voice_dir)},
+        ),
+        output_dir=output_dir,
+        deadline=__import__("time").monotonic() + 10,
+        cancellation=None,
+    )
+
+    assert result.output_path.is_file()
+    assert commands == [
+        [
+            str(executable),
+            "spfy-tom",
+            "--no-update-check",
+            "--file",
+            str(output_dir / "spfy-input.txt"),
+            str(result.output_path),
+        ]
+    ]
+    assert environments == [{"SPFY_VOICE_DIR": str(voice_dir), "SPFY_NO_UPDATE_CHECK": "1"}]
+    assert (output_dir / "spfy-input.txt").read_text(encoding="utf-8") == "bounded spfy test\n"
+    assert (output_dir / "spfy-input.txt").stat().st_mode & 0o777 == 0o600
 
 
 @pytest.mark.parametrize(

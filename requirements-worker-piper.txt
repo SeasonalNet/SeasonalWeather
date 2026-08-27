@@ -1,2 +1,0 @@
--r requirements-worker-base.txt
-piper-tts

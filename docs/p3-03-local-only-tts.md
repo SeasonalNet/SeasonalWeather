@@ -10,6 +10,8 @@ profiles backed by their dedicated P2 worker images:
 | `routine-worker` | default | `seasonalweather-worker:standard` | `routine-worker` |
 | `piper-worker` | `piper` | `seasonalweather-worker:piper` | `piper` |
 | `legacy-tts-worker` | `legacy-tts` | `seasonalweather-worker:legacy-tts` | `legacy-tts` |
+| `voicetext-paul-worker` | `voicetext-paul` | `seasonalweather-worker:voicetext-paul` | `voicetext-paul` |
+| `spfy-worker` | `spfy` | `seasonalweather-worker:spfy` | `spfy` |
 
 Select the matching local engine in the mounted configuration and enable the
 corresponding Compose profile when that engine requires an isolated worker
@@ -26,6 +28,26 @@ tts:
 ```bash
 docker compose --profile piper up -d
 ```
+
+VoiceText Paul and `spfy` use the same explicit worker boundary, and their
+dedicated images carry the complete engine runtime. The VoiceText Paul image
+installs the amd64 Wine/Wine32/Xvfb stack and embeds the checksum-pinned
+WeatherRadioSuite-LIB archive. The `spfy` image installs the amd64 executable
+and embeds its checksum-pinned voice manifest. Neither engine is installed in
+the controller image or the routine worker image:
+
+```bash
+docker compose --profile voicetext-paul up -d
+docker compose --profile spfy up -d
+```
+
+The `spfy` engine invokes the pinned worker executable with the configured
+voice and returns native WAV for the existing common finalization path. The
+VoiceText Paul engine retains its existing VTML and Wine wrapper behavior; its
+image entrypoint starts the bounded headless Xvfb display required by Wine.
+Neither profile receives controller state, job state, provider credentials, or
+publication authority. The worker profiles remain fail-closed until P3-06
+supplies the deployment-owned resolver that invokes these handlers.
 
 The legacy profile is for deployments that deliberately provide the legacy
 local runtime. Its dependencies remain worker-side and are never added to the
