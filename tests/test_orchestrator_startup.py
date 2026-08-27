@@ -42,7 +42,7 @@ def test_orchestrator_initializes_runtime_wiring(tmp_path, monkeypatch):
     assert orch.telnet.port == 21234
     assert orch.telnet.timeout == 4.5
     assert orch.alert_tracker._path == tmp_path / "state" / "alert_state.json"
-    assert orch.cap_text._best_expiry_from_vtec is best_expiry_from_vtec
+    assert orch.formatters.cap._best_expiry_from_vtec is best_expiry_from_vtec
     assert orch.target_resolver is orch.targeting
     assert orch.cap_runtime.orchestrator is orch
     assert orch.nwws_runtime._orchestrator is orch

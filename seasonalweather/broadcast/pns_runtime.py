@@ -14,7 +14,7 @@ from typing import Any
 
 from ..alerts.active import ActiveAlert
 from ..alerts.product import parse_product_text
-from .pns import PnsDecision, PnsStateMachine
+from .formatters import PnsDecision, PnsStateMachine
 
 log = logging.getLogger("seasonalweather.broadcast.pns_runtime")
 
@@ -24,7 +24,7 @@ class PnsRuntime:
 
     def __init__(self, host: Any) -> None:
         self.host = host
-        self.state = PnsStateMachine(host.cfg.pns, tz=host._tz)
+        self.state: PnsStateMachine = host.formatters.pns_state_machine(host.cfg.pns, tz=host._tz)
         self._recent_log_keys: dict[str, tuple[float, int]] = {}
         self._log_repeat_window_s = 1800.0
 

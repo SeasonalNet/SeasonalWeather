@@ -69,16 +69,10 @@ from .broadcast.audio_origination import AudioOriginator
 from .broadcast.audio_origination import safe_event_code as _safe_event_code
 from .broadcast.cap_policy import best_expiry_from_vtec, cap_vtec_list
 from .broadcast.cap_runtime import CapRuntime
-from .broadcast.cap_text import CapTextRenderer
 from .broadcast.conductor import CycleConductor
 from .broadcast.cycle import CycleBuilder, CycleContext
 from .broadcast.ern_relay_runtime import ErnRelayRuntime
-from .broadcast.ern_script import (
-    _parse_duration_minutes as _ern_parse_duration_minutes,
-)
-from .broadcast.ern_script import (
-    _same_jday_to_utc as _ern_same_jday_to_utc,
-)
+from .broadcast.formatters import FormatterSubsystem
 from .broadcast.ipaws_runtime import IpawsRuntime
 from .broadcast.manual_runtime import ManualOriginationRuntime
 from .broadcast.now_runtime import NowRuntime
@@ -101,14 +95,8 @@ from .liquidsoap_telnet import LiquidsoapTelnet
 from .same.locations import normalize_same_allow_set as _normalize_same_allow_set
 from .same.targeting import SameTargetResolver
 from .tts.audio import wav_duration_seconds
-from .tts.tts import TTS
-from .tts.admission import (
-    ControllerLocalPublicationFence,
-    ControllerLocalQualificationSource,
-    P109TtsQualificationAdapter,
-    local_options_from_configuration,
-)
-from .tts.local import LocalEngineRegistry
+from .jobs.worker_client import SynthesisClient, WorkerSynthesisClient
+from .tts.remote_client import RemoteSynthesisClient
 
 if TYPE_CHECKING:
     from .alerts.cap_nws import CapAlertEvent
@@ -170,23 +158,12 @@ class Orchestrator:
         self.reload_activities = ActivityRegistry()
         self.artifact_service: object | None = None
         self.artifact_results: object | None = None
+        self.worker_job_service: object | None = None
+        self.worker_repository: object | None = None
+        self.worker_active_root: Path | None = None
         self.configuration_generation = 0
-        self.tts_publication_fence = ControllerLocalPublicationFence()
         self.capability_registry = capability_registry or CapabilityRegistry(
-            allowed_capabilities=declared_capability_names() | LocalEngineRegistry.capability_names()
-        )
-        self.tts_capability_source = ControllerLocalQualificationSource(
-            self.capability_registry,
-            lambda: dt.datetime.now(dt.UTC),
-            configured_options=local_options_from_configuration(cfg),
-            configuration_generation=self.configuration_generation,
-            current_generation=lambda: self.configuration_generation,
-            publication_fence=self.tts_publication_fence,
-        )
-        self.tts_capability_check = P109TtsQualificationAdapter(
-            self.capability_registry,
-            lambda: dt.datetime.now(dt.UTC),
-            local_source=self.tts_capability_source,
+            allowed_capabilities=declared_capability_names()
         )
         self.api = NWSApi()
         self.telnet = LiquidsoapTelnet(
@@ -197,7 +174,7 @@ class Orchestrator:
 
         self._tz = ZoneInfo(cfg.station.timezone)
         self.local_tz = self._tz
-        self.cap_text = CapTextRenderer(
+        self.formatters = FormatterSubsystem(
             local_tz=self._tz,
             cap_vtec_list=cap_vtec_list,
             vtec_tracks=self._vtec_tracks,
@@ -214,27 +191,23 @@ class Orchestrator:
         self.nwws_server = cfg.nwws.server
         self.nwws_port = cfg.nwws.port
 
-        # TTS
-        self.tts = TTS(
-            backend=cfg.tts.backend,
-            local_engine=cfg.tts.local.engine,
-            voice=cfg.tts.voice,
-            rate_wpm=cfg.tts.rate_wpm,
-            volume=cfg.tts.volume,
-            sample_rate=cfg.audio.sample_rate,
-            text_overrides=cfg.tts.text_overrides,
-            vtp_cfg=cfg.tts.voicetext_paul,
-            fallback_backend=cfg.tts.fallback_backend,
-            configuration_generation=self.configuration_generation,
-            generation_provider=lambda: self.configuration_generation,
-            current_generation=lambda expected: expected is None or expected == self.configuration_generation,
-            admission_check=lambda: self.lifecycle.require(WorkClass.TTS),
-            activity_context=lambda: self.reload_activities.activity(RELOAD_TTS_ACTIVITY),
-            capability_check=self.tts_capability_check,
-            seasonal_ttsd_config=cfg.tts.seasonal_ttsd,
-            openai_compatible_config=cfg.tts.openai_compatible,
-            tts_data_base=cfg.paths.operational_state_dir,
-        )
+        # Local synthesis is admitted and committed through a dedicated
+        # worker. External provider overlays retain their controller-owned
+        # provider client, but can never fall back to local execution here.
+        if cfg.tts.backend == "local":
+            self.synthesizer: SynthesisClient = WorkerSynthesisClient(
+                configuration=cfg,
+                input_root=Path(cfg.paths.artifact_dir) / "worker-artifacts" / "staging" / "controller-inputs",
+            )
+        else:
+            self.synthesizer = RemoteSynthesisClient(
+                configuration=cfg,
+                admission_check=lambda: self.lifecycle.require(WorkClass.TTS),
+                activity_context=lambda: self.reload_activities.activity(RELOAD_TTS_ACTIVITY),
+            )
+        # Compatibility name for extracted components; this object is a
+        # synthesis port, never a controller-local engine or handler.
+        self.tts = self.synthesizer
 
         self.mode = "normal"
         self.heightened_until: dt.datetime | None = None
@@ -336,7 +309,7 @@ class Orchestrator:
         # decides what alert/message should be aired.
         self.audio_originator = AudioOriginator(
             cfg=cfg,
-            tts=self.tts,
+            synthesizer=self.synthesizer,
             local_tz=self._tz,
             paths=self._paths,
             discord=self.discord,
@@ -346,12 +319,12 @@ class Orchestrator:
             publication_fence=self.publication_fence,
             activity_context=lambda: self.reload_activities.async_activity(RELOAD_ALERT_ACTIVITY),
         )
-        self.ern_relay_runtime = ErnRelayRuntime(self)
-        self.ipaws_runtime = IpawsRuntime(self)
-        self.cap_runtime = CapRuntime(self)
+        self.ern_relay_runtime = ErnRelayRuntime(self, self.formatters)
+        self.ipaws_runtime = IpawsRuntime(self, self.formatters)
+        self.cap_runtime = CapRuntime(self, self.formatters)
         self.pns_runtime = PnsRuntime(self)
         self.now_runtime = NowRuntime(self)
-        self.nwws_runtime = NwwsRuntime(self)
+        self.nwws_runtime = NwwsRuntime(self, self.formatters)
         self.tests_runtime = RequiredTestRuntime(self)
         self.manual_runtime = ManualOriginationRuntime(self)
         self.service_runtime = SeasonalWeatherServiceRuntime(self)
@@ -371,7 +344,7 @@ class Orchestrator:
         self.refresher = SegmentRefresher(
             store=self._seg_store,
             cycle_builder=self.cycle_builder,
-            tts=self.tts,
+            tts=self.synthesizer,
             alert_tracker=self.alert_tracker,
             ctx_fn=self._make_cycle_ctx,
             station_name=cfg.station.name,
@@ -396,7 +369,7 @@ class Orchestrator:
         self.conductor = CycleConductor(
             store=self._seg_store,
             telnet=self.telnet,
-            tts=self.tts,
+            tts=self.synthesizer,
             alert_tracker=self.alert_tracker,
             tz=self._tz,
             audio_dir=Path(cfg.paths.audio_dir),
@@ -425,11 +398,14 @@ class Orchestrator:
         repo = getattr(self, "cycle_insert_repo", None)
         if repo is None:
             return []
-        return repo.list_due(
-            placement=placement,
-            rotation_count=rotation_count,
-            now_iso=now_iso or self._utc_iso(),
-            active_alert_focus=focus,
+        return cast(
+            list[dict],
+            repo.list_due(
+                placement=placement,
+                rotation_count=rotation_count,
+                now_iso=now_iso or self._utc_iso(),
+                active_alert_focus=focus,
+            ),
         )
 
     def _cycle_due_inserts_snapshot(
@@ -510,8 +486,6 @@ class Orchestrator:
         }
         if extra:
             for k, v in extra.items():
-                if v is None:
-                    continue
                 s = str(v).strip()
                 if s:
                     m[str(k)] = s
@@ -968,8 +942,8 @@ class Orchestrator:
     def _alert_expires_from_ern(self, ev) -> str:
         """Best-effort expiry ISO for an ERN SAME relay from JJJHHMM + TTTT."""
         now_utc = dt.datetime.now(dt.UTC)
-        start_utc = _ern_same_jday_to_utc(getattr(ev, "jjjhhmm", None), now_utc=now_utc)
-        duration_min = _ern_parse_duration_minutes(getattr(ev, "tttt", None))
+        start_utc = self.formatters.ern_start_utc(getattr(ev, "jjjhhmm", None), now_utc=now_utc)
+        duration_min = self.formatters.ern_duration_minutes(getattr(ev, "tttt", None))
         if start_utc is not None and duration_min is not None:
             end_utc = start_utc + dt.timedelta(minutes=duration_min)
             if end_utc > now_utc:

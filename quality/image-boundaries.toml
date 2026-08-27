@@ -55,6 +55,7 @@ forbidden_controller_packages = [
   "espeak",
 ]
 required_context_ignore_tokens = [".git", ".venv", "*.env"]
+controller_tts_prune_paths = ["tts/local.py", "tts/voicetext_paul_vtml.py"]
 
 worker_definition = "Dockerfile.worker"
 worker_profiles = ["routine-worker", "piper", "legacy-tts", "voicetext-paul", "spfy", "maintenance", "development"]

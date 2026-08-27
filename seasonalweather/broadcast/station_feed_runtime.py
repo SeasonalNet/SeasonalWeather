@@ -8,7 +8,7 @@ import time
 from typing import Any
 
 from ..alerts.active import _vtec_track_id
-from ..alerts.builder import strip_nws_product_headers
+from .formatters import strip_nws_product_headers
 from ..alerts.vtec import (
     VTEC_FIND_RE as _VTEC_FIND_RE,
 )

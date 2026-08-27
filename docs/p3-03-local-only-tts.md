@@ -41,6 +41,12 @@ docker compose --profile voicetext-paul up -d
 docker compose --profile spfy up -d
 ```
 
+The controller image also removes the local engine implementation modules
+(`seasonalweather/tts/local.py` and `seasonalweather/tts/voicetext_paul_vtml.py`)
+from its installed package. The controller therefore retains only the
+backend-neutral/remote client surface and cannot invoke a bundled local engine;
+those implementation modules exist only in worker images.
+
 The `spfy` engine invokes the pinned worker executable with the configured
 voice and returns native WAV for the existing common finalization path. The
 VoiceText Paul engine retains its existing VTML and Wine wrapper behavior; its

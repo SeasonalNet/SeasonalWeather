@@ -18,7 +18,7 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from ..artifacts.hashing import ContentIdentity
 from ..artifacts.media import WavPolicy, inspect_wav
@@ -28,7 +28,6 @@ from .adapters.base import ProviderAdapter
 from .adapters.models import ProviderAudio
 from .admission import LocalQualification, LocalQualificationDisposition, validate_synthesis_request
 from .cancellation import deadline_expired, explicit_cancellation
-from .local import LocalEngineRegistry, VoiceTextPaulHandler, _InvocationCounter
 from .models import (
     AcceptedArtifactReference,
     ArtifactEvidence,
@@ -46,9 +45,31 @@ from .policy import SynthesisPurposePolicy, policy_for
 from .preprocess import PREPROCESSING_VERSION, preprocess_text
 from .subprocess import ProcessFailure, resolve_trusted_executable, run_bounded
 
+if TYPE_CHECKING:
+    from .local import LocalEngineRegistry, VoiceTextPaulHandler, _InvocationCounter
+
 CapabilityCheck = Callable[[SynthesisRequest, str], object]
 GenerationCheck = Callable[[int | None], bool]
 LkgResolver = Callable[[SynthesisRequest], AcceptedArtifactReference | None]
+
+
+def _local_engine_registry() -> type[LocalEngineRegistry]:
+    """Load local engine implementations only inside a worker execution path."""
+    from .local import LocalEngineRegistry
+
+    return LocalEngineRegistry
+
+
+def _voice_text_paul_handler() -> type[VoiceTextPaulHandler]:
+    from .local import VoiceTextPaulHandler
+
+    return VoiceTextPaulHandler
+
+
+def _invocation_counter() -> type[_InvocationCounter]:
+    from .local import _InvocationCounter
+
+    return _InvocationCounter
 
 
 @dataclass(frozen=True)
@@ -94,8 +115,8 @@ def _voicetext_resources_available(request: SynthesisRequest) -> bool:
     )
     return (
         (engine_dir / "voicetext_paul.exe").is_file()
-        and VoiceTextPaulHandler.wrapper_path.is_file()
-        and (not reset_required or VoiceTextPaulHandler.reset_path.is_file())
+        and _voice_text_paul_handler().wrapper_path.is_file()
+        and (not reset_required or _voice_text_paul_handler().reset_path.is_file())
     )
 
 
@@ -104,7 +125,7 @@ def _spfy_resources_available(request: SynthesisRequest) -> bool:
 
 
 def _local_resources_available(request: SynthesisRequest, engine: str) -> bool:
-    required = LocalEngineRegistry.required_resources(engine)
+    required = _local_engine_registry().required_resources(engine)
     specialized = {
         "voicetext_paul": _voicetext_resources_available,
         "spfy": _spfy_resources_available,
@@ -134,7 +155,7 @@ class SynthesisService:
         self._capability_check = capability_check or _unbound_p109_qualification
         self._current_generation = current_generation
         self._lkg_resolver = lkg_resolver
-        self._voicetext_counters: dict[int | None, _InvocationCounter] = {}
+        self._voicetext_counters: dict[int | None, object] = {}
         self._provider_adapters = dict(provider_adapters or {})
         self._diagnostic_sink = diagnostic_sink
 
@@ -157,8 +178,8 @@ class SynthesisService:
         if not shutil.which("ffmpeg"):
             return False, "ffmpeg_unavailable"
         try:
-            engine = LocalEngineRegistry.normalize(request.local.engine)
-            LocalEngineRegistry.validate_voice(engine, request.local.voice)
+            engine = _local_engine_registry().normalize(request.local.engine)
+            _local_engine_registry().validate_voice(engine, request.local.voice)
         except ProcessFailure as exc:
             return False, exc.classification
         except ValueError:
@@ -166,7 +187,7 @@ class SynthesisService:
         if not _local_resources_available(request, engine):
             return False, "backend_unavailable"
         try:
-            self._require_capability(self._capability_check(request, LocalEngineRegistry.capability_for(engine)))
+            self._require_capability(self._capability_check(request, _local_engine_registry().capability_for(engine)))
         except ProcessFailure as exc:
             return False, f"capability_{exc.classification}"
         return True, "tts_available"
@@ -400,7 +421,7 @@ class SynthesisService:
     ) -> FinalizationAuthorityEvidence:
         deadline = self._operation_deadline(request)
         engine = (
-            LocalEngineRegistry.normalize(request.local.engine)
+            _local_engine_registry().normalize(request.local.engine)
             if request.backend is BackendId.LOCAL
             else request.backend.value
         )
@@ -430,10 +451,10 @@ class SynthesisService:
         prepared_text: str | None = None
         try:
             primary_engine = (
-                LocalEngineRegistry.normalize(request.local.engine) if request.backend is BackendId.LOCAL else None
+                _local_engine_registry().normalize(request.local.engine) if request.backend is BackendId.LOCAL else None
             )
             capability = (
-                LocalEngineRegistry.capability_for(primary_engine)
+                _local_engine_registry().capability_for(primary_engine)
                 if primary_engine is not None
                 else request.backend.value
             )
@@ -684,11 +705,11 @@ class SynthesisService:
         if not self._fallback_permitted(request, primary_error, policy, cancellation, deadline):
             return None, None
         try:
-            engine = LocalEngineRegistry.normalize(request.local.engine)
+            engine = _local_engine_registry().normalize(request.local.engine)
             fallback_request = self._local_fallback_request(request)
             if fallback_request is None:
                 return None, None
-            capability = LocalEngineRegistry.capability_for(engine)
+            capability = _local_engine_registry().capability_for(engine)
             if capacity_reservation is None:
                 capacity_reservation = self._reserve_capacity(fallback_request, cancellation)
                 if reservation_box is not None:
@@ -905,13 +926,13 @@ class SynthesisService:
         cancellation: Event,
         capacity_reservation: object | None = None,
     ):
-        handler = LocalEngineRegistry.handler(engine)
-        if isinstance(handler, VoiceTextPaulHandler):
+        handler = _local_engine_registry().handler(engine)
+        if isinstance(handler, _voice_text_paul_handler()):
             counter = self._voicetext_counters.setdefault(
                 request.configuration_generation,
-                _InvocationCounter(),
+                _invocation_counter()(),
             )
-            handler.set_invocation_counter(counter)
+            handler.set_invocation_counter(cast("_InvocationCounter", counter))
         options = request.local.model_copy(
             update={"volume": request.output.volume, "sample_rate_hz": request.output.sample_rate_hz}
         )
@@ -1074,7 +1095,7 @@ class SynthesisService:
             identity = self._hash_bounded(temporary, request.output.maximum_bytes, deadline, cancellation)
             self._final_acceptance_fence(
                 request,
-                LocalEngineRegistry.normalize(request.local.engine)
+                _local_engine_registry().normalize(request.local.engine)
                 if request.backend is BackendId.LOCAL
                 else request.backend.value,
                 deadline,
@@ -1157,7 +1178,7 @@ class SynthesisService:
     def _output_profile(request: SynthesisRequest) -> str:
         if request.backend is BackendId.LOCAL:
             try:
-                engine = LocalEngineRegistry.normalize(request.local.engine)
+                engine = _local_engine_registry().normalize(request.local.engine)
             except (ProcessFailure, ValueError):
                 engine = request.local.engine.strip().lower()[:64]
         else:
@@ -1197,7 +1218,9 @@ class SynthesisService:
         if self._current_generation is not None and not self._current_generation(request.configuration_generation):
             raise ProcessFailure("stale_result", "configuration generation changed before result acceptance")
         capability = (
-            LocalEngineRegistry.capability_for(engine) if request.backend is BackendId.LOCAL else request.backend.value
+            _local_engine_registry().capability_for(engine)
+            if request.backend is BackendId.LOCAL
+            else request.backend.value
         )
         if request.backend is BackendId.LOCAL:
             reserved_check = getattr(self._capability_check, "for_reservation", None)

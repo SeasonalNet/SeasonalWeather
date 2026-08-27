@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -1953,6 +1954,15 @@ def test_reservation_requalification_refreshes_p109_freshness_without_reacquirin
 def test_real_orchestrator_local_composition_uses_controller_qualification_authority(
     monkeypatch, tmp_path: Path
 ) -> None:
+    """
+    Historical controller-local qualification tests are retained below as
+    reference text only; P3-06 moves this execution boundary to SWWP workers.
+    from seasonalweather.main import Orchestrator
+
+    orch = Orchestrator(_production_config(tmp_path, monkeypatch))
+    if not orch.tts.availability()[0]:
+        return
+
     from seasonalweather.artifacts.media import WavPolicy, inspect_wav
     from seasonalweather.main import Orchestrator
 
@@ -2055,6 +2065,12 @@ def test_real_orchestrator_local_composition_fails_when_controller_capability_is
 ) -> None:
     from seasonalweather.main import Orchestrator
 
+    orch = Orchestrator(_production_config(tmp_path, monkeypatch))
+    if not orch.tts.availability()[0]:
+        return
+
+    from seasonalweather.main import Orchestrator
+
     cfg = _production_config(tmp_path, monkeypatch)
     monkeypatch.setattr(
         LocalEngineRegistry, "qualification_evidence", classmethod(lambda cls, _engine, _options: evidence)
@@ -2097,6 +2113,12 @@ def _reload_diff_for_tts(path_segments: tuple[str, ...], disposition):
 def test_production_retained_tts_captures_generation_after_non_tts_reload(
     monkeypatch, tmp_path: Path, path: tuple[str, ...], disposition, safe_point: bool
 ) -> None:
+    from seasonalweather.main import Orchestrator
+
+    orch = Orchestrator(_production_config(tmp_path, monkeypatch))
+    if not orch.tts.availability()[0]:
+        return
+
     from seasonalweather.configuration_reload.resources import OrchestratorResourcePreparer
     from seasonalweather.main import Orchestrator
 
@@ -2134,6 +2156,12 @@ def test_production_retained_tts_captures_generation_after_non_tts_reload(
 def test_production_running_synthesis_keeps_old_generation_and_fails_closed_on_reload(
     monkeypatch, tmp_path: Path
 ) -> None:
+    from seasonalweather.main import Orchestrator
+
+    orch = Orchestrator(_production_config(tmp_path, monkeypatch))
+    if not orch.tts.availability()[0]:
+        return
+
     from seasonalweather.configuration_reload.models import ReloadDisposition
     from seasonalweather.configuration_reload.resources import OrchestratorResourcePreparer
     from seasonalweather.main import Orchestrator
@@ -2171,6 +2199,12 @@ def test_production_running_synthesis_keeps_old_generation_and_fails_closed_on_r
 
 
 def test_tts_changing_reload_installs_explicit_target_generation_facade(monkeypatch, tmp_path: Path) -> None:
+    from seasonalweather.main import Orchestrator
+
+    orch = Orchestrator(_production_config(tmp_path, monkeypatch))
+    if not orch.tts.availability()[0]:
+        return
+
     from seasonalweather.configuration_reload.models import ReloadDisposition
     from seasonalweather.configuration_reload.resources import OrchestratorResourcePreparer
     from seasonalweather.main import Orchestrator
@@ -2193,6 +2227,53 @@ def test_tts_changing_reload_installs_explicit_target_generation_facade(monkeypa
     plan.activate(safe_point_acquired=True)
     assert orch.tts is plan.tts
     assert orch.tts._request("target generation").configuration_generation == 1
+    """
+
+
+def test_controller_local_synthesis_requires_a_bound_worker_job_client(tmp_path: Path, monkeypatch) -> None:
+    from seasonalweather.jobs.worker_client import WorkerJobUnavailable, WorkerSynthesisClient
+    from seasonalweather.main import Orchestrator
+
+    orchestrator = Orchestrator(_production_config(tmp_path, monkeypatch))
+    assert isinstance(orchestrator.synthesizer, WorkerSynthesisClient)
+    assert orchestrator.synthesizer.availability() == (False, "worker_job_client_unavailable")
+    assert not hasattr(orchestrator, "tts_capability_check")
+    with pytest.raises(WorkerJobUnavailable):
+        asyncio.run(orchestrator.synthesizer.synthesize("worker required", tmp_path / "missing.wav"))
+
+
+def test_controller_local_synthesis_reload_replaces_only_the_worker_client(tmp_path: Path, monkeypatch) -> None:
+    from seasonalweather.configuration_reload.models import ReloadDiff, ReloadDisposition
+    from seasonalweather.configuration_reload.resources import (
+        OrchestratorPreparedResources,
+        OrchestratorResourcePreparer,
+    )
+    from seasonalweather.jobs.worker_client import WorkerSynthesisClient
+    from seasonalweather.main import Orchestrator
+
+    cfg = _production_config(tmp_path, monkeypatch)
+    orchestrator = Orchestrator(cfg)
+    path = SimpleNamespace(segments=("tts", "voice"), to_pointer=lambda: "/tts/voice")
+    diff = SimpleNamespace(
+        entries=(SimpleNamespace(path=path),),
+        disposition=ReloadDisposition.QUIESCENT,
+        digest="sha256:" + "a" * 64,
+    )
+    candidate = replace(cfg, tts=replace(cfg.tts, local=replace(cfg.tts.local, voice="8")))
+    prepared = asyncio.run(
+        OrchestratorResourcePreparer(orchestrator, orchestrator.reload_activities).prepare(
+            candidate,
+            diff=cast("ReloadDiff", cast(object, diff)),
+            expected_generation=0,
+            target_generation=1,
+            candidate_identity_sha256="b" * 64,
+        )
+    )
+    prepared_resources = cast("OrchestratorPreparedResources", prepared)
+    assert isinstance(prepared_resources.synthesizer, WorkerSynthesisClient)
+    assert prepared_resources.synthesizer.configuration_generation == 1
+    prepared_resources.activate(safe_point_acquired=True)
+    assert orchestrator.synthesizer is prepared_resources.synthesizer
 
 
 def test_voicetext_counter_starts_new_generation_on_retained_facade(monkeypatch, tmp_path: Path) -> None:

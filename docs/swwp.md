@@ -16,6 +16,10 @@ typed handler dispatch, capability-profile registration, and outbound
 WebSocket client seam. P2-08 adds the controller-side live session endpoint,
 worker authentication, reconnect/reconciliation, lifecycle drain, and the
 production cutover: the controller no longer creates an embedded TTS executor.
+P3-06 uses that live path for local synthesis: routine and alert audio are
+admitted as durable jobs, executed by qualified workers, and returned only as
+controller-validated artifact receipts. WebSocket events alone never create
+audio truth.
 
 ## Authority
 

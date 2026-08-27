@@ -49,7 +49,7 @@ class CycleInsertService:
 
     def _insert_path(self, insert_id: str) -> Path:
         _work_dir, audio_dir, _cache_dir, _logs_dir = self.orch._paths()
-        return audio_dir / f"insert_{insert_id}.wav"
+        return Path(audio_dir) / f"insert_{insert_id}.wav"
 
     @staticmethod
     def _enum(value: Any) -> str:
@@ -65,7 +65,7 @@ class CycleInsertService:
     async def _render_text(self, *, insert_id: str, text: str) -> tuple[Path, float]:
         path = self._insert_path(insert_id)
         duration = await render_segment_wav_async(
-            self.orch.tts,
+            self.orch.synthesizer,
             text,
             path,
             sample_rate=self._sample_rate(),

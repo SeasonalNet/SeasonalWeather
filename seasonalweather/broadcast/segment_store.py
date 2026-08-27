@@ -36,16 +36,19 @@ from typing import Dict, List, Optional, cast
 
 from ..database.core import SeasonalDatabase
 from ..database.segments import SegmentRepository
-from ..tts.async_bridge import FinalizationEvidence, synthesize_completed_wav_async
+from ..jobs.worker_client import SynthesisClient
 from ..tts.audio import concat_wavs, wav_duration_seconds, write_silence_wav
 from ..tts.models import FinalizationCallbackError
-from ..tts.tts import TTS
 from .segment_builders import SegmentProvenance
 from .segment_registry import DEFAULT_SEGMENT_REGISTRY
 
 log = logging.getLogger("seasonalweather.segment_store")
 
 _DEFAULT_SEG_GAP_S: float = 0.45
+
+
+async def _synthesize(synthesizer: SynthesisClient, text: str, output_path: Path, *, purpose: str) -> None:
+    await synthesizer.synthesize(text, output_path, purpose=purpose)
 
 
 def _fsync_directory(path: Path) -> None:
@@ -62,70 +65,27 @@ def _fsync_directory(path: Path) -> None:
 
 
 def render_segment_wav(
-    tts: TTS,
+    synthesizer: SynthesisClient,
     text: str,
     output_path: Path,
     *,
     sample_rate: int,
     seg_gap_s: float = _DEFAULT_SEG_GAP_S,
 ) -> float:
-    """
-    Synthesise *text* to WAV, pad both sides with silence, and atomically
-    replace *output_path*.  Returns total duration in seconds.
-
-    All intermediate work is done via uniquely-named temp files so that
-    *output_path* is never partially written.  On failure the previous
-    version of *output_path* (if any) is preserved.
-    """
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=".segment-", dir=str(output_path.parent)) as staging_root:
-        staging = Path(staging_root)
-        tts_tmp = staging / "tts.wav"
-        gap_tmp = staging / "gap.wav"
-        out_tmp = staging / "completed.wav"
-        tts.synth_to_wav(text, tts_tmp, purpose="routine")
-        return _finish_segment_wav(
-            tts,
+    """Synchronous compatibility wrapper around worker-owned synthesis."""
+    return asyncio.run(
+        render_segment_wav_async(
+            synthesizer,
+            text,
             output_path,
-            tts_tmp,
-            gap_tmp,
-            out_tmp,
             sample_rate=sample_rate,
             seg_gap_s=seg_gap_s,
         )
-
-
-def _finish_segment_wav(
-    tts: TTS,
-    output_path: Path,
-    tts_tmp: Path,
-    gap_tmp: Path,
-    out_tmp: Path,
-    *,
-    sample_rate: int,
-    seg_gap_s: float,
-    cancellation=None,
-    finalization_fence=None,
-) -> float:
-    if cancellation is not None and cancellation.is_set():
-        raise RuntimeError("segment finalization cancelled")
-    write_silence_wav(gap_tmp, seg_gap_s, sample_rate)
-    if cancellation is not None and cancellation.is_set():
-        raise RuntimeError("segment finalization cancelled")
-    concat_wavs(out_tmp, [gap_tmp, tts_tmp, gap_tmp])
-    dur = wav_duration_seconds(out_tmp)
-    if tts.admission_check is not None:
-        tts.admission_check()
-    if cancellation is not None and cancellation.is_set():
-        raise RuntimeError("segment finalization cancelled")
-    if finalization_fence is not None:
-        finalization_fence()
-    os.replace(str(out_tmp), str(output_path))
-    return dur
+    )
 
 
 async def render_segment_wav_async(
-    tts: TTS,
+    synthesizer: SynthesisClient,
     text: str,
     output_path: Path,
     *,
@@ -135,40 +95,34 @@ async def render_segment_wav_async(
     publication_committed=None,
     publication_aborted=None,
 ) -> float:
-    """Async production rendering with joined TTS cancellation semantics."""
+    """Async production rendering with worker-owned synthesis semantics."""
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    duration: list[float] = []
-
-    def finalize(tts_path, cancellation, fence) -> FinalizationEvidence:
-        del fence
-        staging = tts_path.parent
-        gap_tmp = staging / "segment-gap.wav"
-        out_tmp = staging / "segment-completed.wav"
-        if cancellation.is_set():
-            raise RuntimeError("segment finalization cancelled")
-        write_silence_wav(gap_tmp, seg_gap_s, sample_rate)
-        if cancellation.is_set():
-            raise RuntimeError("segment finalization cancelled")
-        concat_wavs(out_tmp, [gap_tmp, tts_path, gap_tmp])
-        duration.append(wav_duration_seconds(out_tmp))
-        if cancellation.is_set():
-            raise RuntimeError("segment finalization cancelled")
-        return FinalizationEvidence(out_tmp)
-
-    await synthesize_completed_wav_async(
-        tts,
-        text,
-        output_path,
-        purpose="routine",
-        finalize=finalize,
-        publication_fence=publication_fence,
-        publication_committed=publication_committed,
-        publication_aborted=publication_aborted,
-    )
-    if not duration:
-        raise RuntimeError("segment synthesis completed without a finalized duration")
-    return duration[0]
+    with tempfile.TemporaryDirectory(prefix=".segment-", dir=str(output_path.parent)) as staging_root:
+        staging = Path(staging_root)
+        raw = staging / "tts.wav"
+        gap = staging / "segment-gap.wav"
+        complete = staging / "segment-completed.wav"
+        await _synthesize(synthesizer, text, raw, purpose="routine")
+        write_silence_wav(gap, seg_gap_s, sample_rate)
+        concat_wavs(complete, [gap, raw, gap])
+        duration = wav_duration_seconds(complete)
+        try:
+            if publication_fence is not None:
+                publication_fence()
+        except BaseException as exc:
+            raise FinalizationCallbackError() from exc
+        os.replace(complete, output_path)
+        try:
+            if publication_committed is not None:
+                publication_committed()
+        except SegmentCommitAmbiguousError:
+            raise
+        except BaseException as exc:
+            if publication_aborted is not None:
+                publication_aborted()
+            raise FinalizationCallbackError() from exc
+        return duration
 
 
 # ---------------------------------------------------------------------------
@@ -1662,7 +1616,7 @@ class SegmentStore:
 
     async def synth_and_update(
         self,
-        tts: TTS,
+        synthesizer: SynthesisClient,
         key: str,
         title: str,
         text: str,
@@ -1678,11 +1632,9 @@ class SegmentStore:
         command_id: str | None = None,
     ) -> float:
         """
-        Synthesise *text* for *key* in a thread executor (TTS is blocking),
-        then atomically update the store entry.  Returns duration in seconds.
-
-        The TTS operation uses the shared async bridge; only non-TTS file work
-        is offloaded after the bridge has joined the synchronous worker.
+        Request worker-owned synthesis for *text* and atomically update the
+        store entry. Returns duration in seconds. The worker result is then
+        padded and promoted through the controller-owned segment commit path.
         """
         candidate_path = self._audio_dir / f".segment-candidate-{uuid.uuid4().hex}.wav"
 
@@ -1703,7 +1655,7 @@ class SegmentStore:
 
         try:
             return await render_segment_wav_async(
-                tts,
+                synthesizer,
                 text,
                 candidate_path,
                 sample_rate=sample_rate,

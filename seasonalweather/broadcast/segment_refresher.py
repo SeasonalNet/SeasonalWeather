@@ -54,7 +54,7 @@ from zoneinfo import ZoneInfo
 
 from ..alerts.active import AlertTracker
 from ..diagnostics.bindings import SEGMENT_CODES
-from ..tts.tts import TTS
+from ..jobs.worker_client import SynthesisClient
 from .cycle import CycleBuilder, CycleContext, CycleSegment, station_id_text
 from .segment_builders import SegmentBuildInput, sanitize_error
 from .segment_registry import (
@@ -93,7 +93,7 @@ class SegmentRefresher:
         *,
         store: SegmentStore,
         cycle_builder: CycleBuilder,
-        tts: TTS,
+        tts: SynthesisClient,
         alert_tracker: AlertTracker,
         ctx_fn: Callable[[], CycleContext],
         station_name: str,
@@ -111,6 +111,7 @@ class SegmentRefresher:
     ) -> None:
         self._store = store
         self._builder = cycle_builder
+        self._synthesizer = tts
         self._tts = tts
         self._alert_tracker = alert_tracker
         self._ctx_fn = ctx_fn
@@ -652,7 +653,7 @@ class SegmentRefresher:
         the stable WAV file.
         """
         dur = await self._store.synth_and_update(
-            self._tts,
+            self._synthesizer,
             key=key,
             title=title,
             text=text,

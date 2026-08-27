@@ -30,6 +30,14 @@ def test_controller_dockerfile_rejects_worker_profiles() -> None:
     assert "USER seasonalweather" in dockerfile
 
 
+def test_controller_dockerfile_removes_local_tts_implementation() -> None:
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+    assert '"tts/local.py"' in dockerfile
+    assert '"tts/voicetext_paul_vtml.py"' in dockerfile
+    assert "unlink(missing_ok=True)" in dockerfile
+
+
 def test_worker_dockerfile_owns_only_worker_profiles() -> None:
     dockerfile = (ROOT / "Dockerfile.worker").read_text(encoding="utf-8").lower()
 
@@ -58,7 +66,11 @@ def test_specialized_worker_profiles_carry_their_runtime_engines() -> None:
 
 def test_worker_dependency_locks_exclude_controller_runtime() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    dependencies = [*project["project"]["dependencies"], *project["dependency-groups"]["worker-runtime"], *project["dependency-groups"]["piper"]]
+    dependencies = [
+        *project["project"]["dependencies"],
+        *project["dependency-groups"]["worker-runtime"],
+        *project["dependency-groups"]["piper"],
+    ]
     lock = "\n".join(dependencies).lower()
     for forbidden in ("slixmpp", "sqlalchemy", "fastapi", "uvicorn"):
         assert forbidden not in lock

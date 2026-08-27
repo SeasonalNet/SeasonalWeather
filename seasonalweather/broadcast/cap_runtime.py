@@ -16,6 +16,7 @@ from .cap_policy import (
     cap_should_voice,
     cap_vtec_list,
 )
+from .formatters import FormatterSubsystem
 from .station_feed_runtime import (
     cap_reference_ids as _sf_cap_reference_ids,
     note_cap as _station_feed_note_cap,
@@ -38,8 +39,9 @@ def _discord_audit(discord, method: str, **kwargs) -> None:
 class CapRuntime:
     """Consumes NWS CAP alerts and handles CAP full/voice/update airing."""
 
-    def __init__(self, orchestrator) -> None:
+    def __init__(self, orchestrator, formatters: FormatterSubsystem) -> None:
         self.orchestrator = orchestrator
+        self.formatters = formatters
 
     async def run(self) -> None:
         o = self.orchestrator
@@ -191,14 +193,14 @@ class CapRuntime:
         if is_watch:
             if vtec_actions & {"EXA", "EXB"}:
                 # Watch expansion: full announcement with SAME for added counties
-                script = o.cap_text._build_watch_expansion_script(ev)
+                script = self.formatters.cap_watch_expansion(ev)
             else:
                 # NEW or UPG watch
-                script = o.cap_text._build_cap_watch_script(ev)
+                script = self.formatters.cap_watch(ev)
             if not script.strip():
-                script = o.cap_text._build_cap_full_script(ev)
+                script = self.formatters.cap_full(ev)
         else:
-            script = o.cap_text._build_cap_full_script(ev)
+            script = self.formatters.cap_full(ev)
 
         if not script.strip():
             return
@@ -313,7 +315,7 @@ class CapRuntime:
                 mode="full",
                 area=getattr(ev, "area_desc", "") or "",
                 vtec=vtec[:2],
-                expires=o.cap_text._fmt_local_from_utc_iso(
+                expires=self.formatters.cap_local_expiry(
                     str(getattr(ev, "expires", "") or "")
                 ),
             )
@@ -394,7 +396,7 @@ class CapRuntime:
             )
             return
 
-        script = o.cap_text._build_cap_voice_script(ev)
+        script = self.formatters.cap_voice(ev)
         if not script.strip():
             return
 
@@ -573,11 +575,11 @@ class CapRuntime:
                 break
 
         if is_watch:
-            script = o.cap_text._build_watch_vtec_action_script(ev, vtec_actions, tracks, watch_number, watch_kind)
-        elif o.cap_text._cap_prefers_statement_update_script(ev_event, vtec_actions):
-            script = o.cap_text._build_statement_vtec_action_script(ev, vtec_actions, tracks)
+            script = self.formatters.cap_watch_action(ev, vtec_actions, tracks, watch_number, watch_kind)
+        elif self.formatters.cap_prefers_statement_update(ev_event, vtec_actions):
+            script = self.formatters.cap_statement_action(ev, vtec_actions, tracks)
         else:
-            script = o.cap_text._build_warning_vtec_action_script(ev, vtec_actions, tracks)
+            script = self.formatters.cap_warning_action(ev, vtec_actions, tracks)
 
         if not script.strip():
             log.info("CAP update: empty script, skipping event=%s vtec_actions=%s", ev_event, vtec_actions)

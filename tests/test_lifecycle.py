@@ -321,10 +321,11 @@ def test_late_routine_synthesis_cannot_replace_authoritative_artifact(
         def __init__(self) -> None:
             self.admission_check = admission_check
 
-        def synth_to_wav(self, _text: str, path: Path, *, purpose: str = "routine") -> None:
+        async def synthesize(self, _text: str, path: Path, *, purpose: str = "routine") -> None:
             assert purpose == "routine"
             self.admission_check()
             path.write_bytes(b"new-tts")
+            self.admission_check()
 
     monkeypatch.setattr(
         "seasonalweather.broadcast.segment_store.write_silence_wav",

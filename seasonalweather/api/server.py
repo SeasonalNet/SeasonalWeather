@@ -43,6 +43,7 @@ from ..job_store import (
     JobScheduler,
 )
 from ..jobs.policies import JobType, QueueClass
+from ..jobs.worker_client import WorkerSynthesisClient
 from ..lifecycle import Lifecycle, LifecycleState, TaskSupervisor
 from ..lifecycle_records import LifecycleRecordWriter, LifecycleStage
 from ..logging_config import set_runtime_diagnostic_sink
@@ -467,8 +468,6 @@ async def _run_api_server_impl(
         foundation_sink = build_foundation_sink
         orch.cap_diagnostic_sink = build_foundation_sink("cap.")
         orch.ern_diagnostic_sink = build_foundation_sink("ern.")
-        if hasattr(orch, "tts"):
-            orch.tts.diagnostic_sink = build_foundation_sink("tts.")
         orch.database_diagnostic_sink = build_foundation_sink("database.")
         set_station_feed_diagnostic_sink(orch.database_diagnostic_sink)
         if hasattr(orch, "alert_tracker"):
@@ -533,6 +532,16 @@ async def _run_api_server_impl(
         )
         orch.artifact_service = artifact_composition.service
         orch.artifact_results = artifact_composition.results
+        orch.worker_job_service = job_service
+        orch.worker_repository = job_service.repository
+        orch.worker_active_root = artifact_composition.transport.paths.active
+        if isinstance(orch.synthesizer, WorkerSynthesisClient):
+            orch.synthesizer.bind(
+                job_service=job_service,
+                repository=job_service.repository,
+                active_root=artifact_composition.transport.paths.active,
+                configuration_generation=orch.configuration_generation,
+            )
         scheduler = JobScheduler(
             job_service.repository,
             lifecycle,
@@ -623,6 +632,11 @@ async def _run_api_server_impl(
         job_service=job_service,
         capability_registry=getattr(orch, "capability_registry", None),
         swwp_manager=swwp_manager,
+        required_capabilities=(
+            ("tts.synthesis.v1", "audio.alert_artifact.v1")
+            if str(getattr(getattr(cfg, "tts", None), "backend", "local")) == "local"
+            else ()
+        ),
     )
     app = create_app(
         control,

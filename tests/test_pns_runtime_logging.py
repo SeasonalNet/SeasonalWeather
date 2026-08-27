@@ -1,13 +1,20 @@
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
+from seasonalweather.broadcast.formatters import PnsStateMachine
 from seasonalweather.broadcast.pns_runtime import PnsRuntime
 
 
 def _runtime() -> PnsRuntime:
+    def _state_machine(cfg, *, tz):
+        return PnsStateMachine(cfg, tz=tz)
+
     host = SimpleNamespace(
         cfg=SimpleNamespace(pns=SimpleNamespace()),
         _tz=ZoneInfo("America/New_York"),
+        formatters=SimpleNamespace(
+            pns_state_machine=_state_machine,
+        ),
     )
     return PnsRuntime(host)
 

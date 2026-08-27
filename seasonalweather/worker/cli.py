@@ -9,6 +9,7 @@ import logging
 import os
 import signal
 import uuid
+from pathlib import Path
 
 from ..build_metadata import current_build_info
 from ..build_metadata.compatibility import BuildCompatibilityError, ensure_runtime_compatibility
@@ -60,6 +61,14 @@ def _parser() -> argparse.ArgumentParser:
         "--health-file",
         default=os.environ.get("SEASONALWEATHER_WORKER_HEALTH_FILE"),
         help="local bounded health record path (or SEASONALWEATHER_WORKER_HEALTH_FILE)",
+    )
+    parser.add_argument(
+        "--input-root",
+        default=os.environ.get(
+            "SEASONALWEATHER_WORKER_INPUT_ROOT",
+            "/var/lib/seasonalweather/artifacts/worker-artifacts/staging/controller-inputs",
+        ),
+        help="shared controller input descriptor directory",
     )
     parser.add_argument(
         "--token",
@@ -134,7 +143,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         raise SystemExit(f"seasonalweather worker: incompatible build: {exc}") from None
     worker_id = args.worker_id or worker_id_from_environment(profile)
-    handlers = HandlerRegistry.for_profile(profile.value)
+    handlers = HandlerRegistry.for_profile(
+        profile.value,
+        worker_id=worker_id,
+        input_root=Path(args.input_root),
+    )
     registration = registration_for_profile(
         profile,
         worker_id=worker_id,
@@ -142,6 +155,10 @@ def main(argv: list[str] | None = None) -> int:
         worker_epoch=args.worker_epoch,
         slots=args.slots,
         handler_ready=handlers.ready,
+        handler_ready_job_types=handlers.executable_job_types,
+        handler_ready_capabilities=frozenset(
+            {"tts.synthesis.v1", "audio.alert_artifact.v1"} if handlers.executable_job_types else set()
+        ),
     )
     session = WorkerSession(
         registration=registration,

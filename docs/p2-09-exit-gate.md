@@ -44,7 +44,8 @@ Each image is executed with its entrypoint replaced by Python for bounded
 read-only probes. The probes verify that the build-info CLI agrees with the
 embedded record, every image can explain a catalog code without mutable state,
 the complete catalog is identical across profiles, and package/dependency
-boundaries hold: the controller has no worker package, and workers have no
+boundaries hold: the controller has no worker package or bundled local TTS
+implementation, and workers have no
 controller API, database, broadcast, NWWS, FastAPI, SQLAlchemy, slixmpp, or
 Uvicorn content.
 

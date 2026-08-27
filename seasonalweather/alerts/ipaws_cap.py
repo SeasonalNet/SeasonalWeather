@@ -310,14 +310,6 @@ def _strip_namespaces(elem: ET.Element) -> ET.Element | None:
 
 
 # ---------------------------------------------------------------------------
-# Event codes that are NEVER emitted
-# ---------------------------------------------------------------------------
-
-# SeasonalWeather owns its own RWT/RMT schedule; IPAWS tests must not interact.
-# DMO is never aired on NWR.
-_BLOCKED_EVENT_CODES: frozenset[str] = frozenset({"DMO", "RWT", "RMT"})
-
-# ---------------------------------------------------------------------------
 # IpawsCapEvent dataclass
 # ---------------------------------------------------------------------------
 
@@ -383,7 +375,7 @@ class IpawsCapPoller:
     Key differences from NwsCapPoller:
       - Parses CAP 1.2 XML, not GeoJSON (stdlib xml.etree only — no new deps).
       - XMLDSig Signature blocks are discarded during parse.
-      - DMO / RWT / RMT are blocked at the poller level, never emitted.
+      - Product-type policy is not applied here; the controller owns routing.
       - senderName is cleaned for TTS on ingestion.
       - Dedupe keys are prefixed "IPAWS:" to coexist in the shared cap_seen_ledger.
     """
@@ -504,7 +496,8 @@ class IpawsCapPoller:
     def _parse_single(self, raw_alert: ET.Element) -> IpawsCapEvent | None:
         """
         Parse one raw <alert> element.  Returns None to discard.
-        Applies status, msgType, event-code, and service-area filters.
+        Applies transport/status, msgType, and service-area filters.  Product
+        type admission is deliberately deferred to the controller policy.
         """
         alert = _strip_namespaces(raw_alert)
         if alert is None:
@@ -548,11 +541,6 @@ class IpawsCapPoller:
             if vn.strip().upper() == "SAME":
                 event_code = (ec.findtext("value") or "").strip().upper() or None
                 break
-
-        # Never emit blocked event codes.
-        if event_code and event_code in _BLOCKED_EVENT_CODES:
-            log.debug("IPAWS: dropping blocked code=%s id=%s", event_code, identifier)
-            return None
 
         # SAME FIPS from all <area> blocks.
         same_fips: list[str] = []

@@ -23,10 +23,9 @@ from typing import Iterable, Optional
 
 from seasonalweather.config import load_config
 from seasonalweather.liquidsoap_telnet import LiquidsoapTelnet
-from seasonalweather.tts.tts import TTS
 from seasonalweather.alerts.product import parse_product_text
-from seasonalweather.alerts.builder import build_spoken_alert
-from seasonalweather.same.same import SameHeader, chunk_locations, render_same_bursts_wav, render_same_eom_wav
+from seasonalweather.broadcast.formatters import format_spoken_alert
+from seasonalweather.same.same import SameHeader, chunk_locations
 
 
 DEFAULT_CONFIG = "/etc/seasonalweather/config.yaml"
@@ -243,73 +242,23 @@ def _render_alert_block_wav(
     gap_seconds: float,
     post_seconds: float,
 ) -> pathlib.Path:
-    cfg = load_config(cfg_path)
-    sr = int(cfg.audio.sample_rate)
-    output_dir = pathlib.Path(cfg.paths.temporary_dir) / "seasonalweather-inject-audio"
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    base = f"inject_{_now_stamp()}"
-    same_hdr = output_dir / f"{base}_same_header.wav"
-    same_eom = output_dir / f"{base}_same_eom.wav"
-    gap = output_dir / f"{base}_gap.wav"
-    tone = output_dir / f"{base}_1050.wav"
-    voice = output_dir / f"{base}_voice.wav"
-    out = output_dir / f"{base}.wav"
-
-    _write_silence_wav(gap, gap_seconds, sr)
-    _write_sine_wav(tone, 1050.0, tone_seconds, sr, amplitude=0.22)
-
-    header_ascii = _build_same_header(org=org, event=event, locs=locs, duration_min=duration_min, sender=sender)
-    render_same_bursts_wav(
-        same_hdr,
-        header_ascii,
-        sample_rate=sr,
-        amplitude=float(same_amp),
-        burst_count=3,
-        inter_burst_pause_seconds=float(same_pause),
-        native_encoder=cfg.same.native_encoder,
+    del (
+        cfg_path,
+        spoken_text,
+        org,
+        event,
+        locs,
+        duration_min,
+        sender,
+        tone_seconds,
+        same_amp,
+        same_pause,
+        gap_seconds,
+        post_seconds,
     )
-    render_same_eom_wav(
-        same_eom,
-        sample_rate=sr,
-        amplitude=float(same_amp),
-        burst_count=3,
-        inter_burst_pause_seconds=float(same_pause),
-        native_encoder=cfg.same.native_encoder,
+    raise RuntimeError(
+        "local TTS execution is controller-forbidden; use the controller worker-job path for injection audio"
     )
-
-    tts = TTS(
-        backend=cfg.tts.backend,
-        local_engine=cfg.tts.local.engine,
-        voice=cfg.tts.voice,
-        rate_wpm=cfg.tts.rate_wpm,
-        volume=cfg.tts.volume,
-        sample_rate=sr,
-        text_overrides=cfg.tts.text_overrides,
-        vtp_cfg=cfg.tts.voicetext_paul,
-        fallback_backend=cfg.tts.fallback_backend,
-        tts_data_base=cfg.paths.operational_state_dir,
-    )
-    tts.synth_to_wav(spoken_text, voice, purpose="administrative")
-
-    # Normalize everything to PCM16 stereo at sr
-    parts = [
-        _ensure_pcm16_stereo_sr(same_hdr, sr),
-        _ensure_pcm16_stereo_sr(gap, sr),
-        _ensure_pcm16_stereo_sr(tone, sr),
-        _ensure_pcm16_stereo_sr(gap, sr),
-        _ensure_pcm16_stereo_sr(voice, sr),
-        _ensure_pcm16_stereo_sr(gap, sr),
-        _ensure_pcm16_stereo_sr(same_eom, sr),
-    ]
-
-    if post_seconds and post_seconds > 0:
-        post = output_dir / f"{base}_post.wav"
-        _write_silence_wav(post, post_seconds, sr)
-        parts.append(_ensure_pcm16_stereo_sr(post, sr))
-
-    _concat_wavs(out, parts, sr)
-    return out
 
 
 def _liquidsoap_endpoint(config_path: str, host: str | None, port: int | None) -> tuple[str, int]:
@@ -364,7 +313,7 @@ def cmd_inject_raw(args: argparse.Namespace) -> int:
     if not parsed:
         raise SystemExit("parse_product_text() returned None (bad/unsupported product format).")
 
-    spoken = build_spoken_alert(parsed, raw)
+    spoken = format_spoken_alert(parsed, raw)
     text = spoken.script
 
     _safety_check_text(text, max_chars=args.max_chars, allow_unsafe=args.allow_unsafe, force_long=args.force_long)

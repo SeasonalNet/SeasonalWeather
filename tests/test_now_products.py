@@ -90,6 +90,7 @@ def _host(tmp_path: Path, *, in_area: bool = True):
         target_resolver=_TargetResolver(in_area=in_area),
         conductor=_Conductor(),
         tts=object(),
+        formatters=SimpleNamespace(now_script=build_now_script),
         _nwws_allowed_wfos={"KLWX"},
     )
 

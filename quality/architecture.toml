@@ -232,6 +232,34 @@ compatibility_default_terms = [
   "embedded_worker",
 ]
 
+# All controller-facing spoken/prose output has one physical implementation
+# owner. Source-named modules below are re-export-only compatibility shims;
+# they cannot become parallel formatter authorities.
+formatter_subsystem_root = "seasonalweather/broadcast/formatters.py"
+formatter_owner_roots = ["seasonalweather/broadcast/formatters.py"]
+formatter_compatibility_roots = [
+  "seasonalweather/alerts/builder.py",
+  "seasonalweather/broadcast/cap_text.py",
+  "seasonalweather/broadcast/ern_script.py",
+  "seasonalweather/broadcast/ipaws_text.py",
+  "seasonalweather/broadcast/now.py",
+  "seasonalweather/broadcast/offnt2.py",
+  "seasonalweather/broadcast/pns.py",
+  "seasonalweather/broadcast/product_text.py",
+  "seasonalweather/broadcast/rwr.py",
+]
+formatter_forbidden_imports = [
+  "seasonalweather.alerts.builder",
+  "seasonalweather.broadcast.cap_text",
+  "seasonalweather.broadcast.ern_script",
+  "seasonalweather.broadcast.ipaws_text",
+  "seasonalweather.broadcast.now",
+  "seasonalweather.broadcast.offnt2",
+  "seasonalweather.broadcast.pns",
+  "seasonalweather.broadcast.product_text",
+  "seasonalweather.broadcast.rwr",
+]
+
 # P3-05 package metadata owns dependency declarations. Controller and worker
 # dependency groups are checked separately so a profile can be edited without
 # silently absorbing the other runtime's dependency graph.
@@ -537,3 +565,29 @@ tts_caller_roots = [
   "seasonalweather/broadcast",
 ]
 tts_provider_wire_terms = ["/v1/syntheses", "/v1/audio/speech", "seasonalttsd_client_"]
+tts_execution_owner_roots = [
+  "seasonalweather/tts/tts.py",
+  "seasonalweather/tts/service.py",
+  "seasonalweather/tts/async_bridge.py",
+  "seasonalweather/tts/cancellation.py",
+  "seasonalweather/tts/local.py",
+  "seasonalweather/tts/subprocess.py",
+  "seasonalweather/tts/voicetext_paul_vtml.py",
+  "seasonalweather/worker",
+]
+tts_controller_forbidden_imports = [
+    "seasonalweather.tts.tts",
+    "seasonalweather.tts.service",
+    "seasonalweather.tts.async_bridge",
+    "seasonalweather.tts.adapters",
+    "seasonalweather.tts.local",
+    "seasonalweather.tts.subprocess",
+]
+tts_controller_forbidden_call_attributes = [
+    "TTS",
+    "synth_to_wav",
+  "synthesize_async",
+  "synthesize_completed_wav_async",
+  "synthesize_request",
+]
+tts_controller_forbidden_source_terms = ["LocalEngineRegistry", "ControllerLocalQualificationSource"]

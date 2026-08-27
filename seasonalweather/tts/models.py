@@ -77,6 +77,19 @@ class SynthesisFailure(StrEnum):
 class FinalizationCallbackError(RuntimeError):
     """A finalization callback owns the exact meaning of this exception."""
 
+    def __init__(self, result: object = None) -> None:
+        disposition = getattr(getattr(result, "disposition", None), "value", None)
+        failure = getattr(getattr(result, "failure", None), "value", None)
+        if disposition is not None:
+            detail = f"disposition={disposition}"
+            if failure:
+                detail += f" failure={failure}"
+            message = f"TTS synthesis did not produce a WAV ({detail})"
+        else:
+            message = "TTS finalization callback failed"
+        super().__init__(message)
+        self.result = result
+
 
 class TtsModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)

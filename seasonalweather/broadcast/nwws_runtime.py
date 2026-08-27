@@ -4,15 +4,14 @@ import datetime as dt
 import logging
 
 from ..alerts.active import ActiveAlert, _vtec_track_id
-from ..alerts.builder import build_spoken_alert
 from ..alerts.product import ParsedProduct, parse_product_text
 from ..alerts.vtec import same_codes_for_vtec
 from ..alerts.vtec import toneout_policy as _vtec_toneout_policy
 from ..nwws.source import NwwsProductEnvelope
 from .audio_origination import safe_event_code as _safe_event_code
 from .cap_policy import best_expiry_from_vtec, vtec_matches_configured_toneout_code
-from .pns import parse_nws_header_issued_dt, pns_text_same_issuance
-from .product_text import NwwsScriptRenderResult, render_nws_product_script
+from .formatters import NwwsScriptRenderResult, parse_nws_header_issued_dt, pns_text_same_issuance
+from .formatters import FormatterSubsystem
 from .station_feed_runtime import nwws_area_from_text as _sf_nwws_area_from_text
 from .station_feed_runtime import nwws_best_issued_dt as _sf_nwws_best_issued_dt
 from .station_feed_runtime import nwws_event_label as _sf_nwws_event_label
@@ -68,8 +67,9 @@ class NwwsRuntime:
     side effects.
     """
 
-    def __init__(self, orchestrator) -> None:
+    def __init__(self, orchestrator, formatters: FormatterSubsystem) -> None:
         object.__setattr__(self, "_orchestrator", orchestrator)
+        object.__setattr__(self, "_formatters", formatters)
 
     def __getattr__(self, name: str):
         return getattr(self._orchestrator, name)
@@ -459,7 +459,7 @@ class NwwsRuntime:
             return
 
         try:
-            spoken = build_spoken_alert(parsed, official_text)
+            spoken = self._formatters.spoken_alert(parsed, official_text)
 
             sf_issued_dt = _sf_nwws_best_issued_dt(parsed, official_text)
             sf_event_label = _sf_nwws_event_label(parsed.product_type, vtec_list=vtec, text=official_text)
@@ -484,7 +484,7 @@ class NwwsRuntime:
                 terminal_actions = vtec_actions & {"CAN", "EXP"}
                 full_action = _first_vtec_action(full_actions, ("NEW", "UPG", "EXA", "EXB"))
                 terminal_action = _first_vtec_action(terminal_actions, ("CAN", "EXP"))
-                rendered_script = render_nws_product_script(
+                rendered_script = self._formatters.nwws_product_script(
                     product_type=parsed.product_type,
                     base_script=spoken.script,
                     official_text=official_text,
@@ -499,7 +499,7 @@ class NwwsRuntime:
                     watch_action=full_action if mixed_wcn else None,
                 )
                 if mixed_wcn:
-                    rendered_terminal_script = render_nws_product_script(
+                    rendered_terminal_script = self._formatters.nwws_product_script(
                         product_type=parsed.product_type,
                         base_script=spoken.script,
                         official_text=official_text,

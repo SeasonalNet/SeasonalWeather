@@ -562,6 +562,36 @@ def scan(root: Path, config: dict[str, Any], exceptions: list[dict[str, Any]] | 
                         Finding(relative, line, "SWARCH002", f"worker imports controller authority {imported}")
                     )
 
+        if is_controller and not _under(relative, config.get("formatter_owner_roots", [])):
+            for imported, line in imports:
+                if _matches_prefix(imported, config.get("formatter_forbidden_imports", [])):
+                    findings.append(
+                        Finding(
+                            relative,
+                            line,
+                            "SWARCH055",
+                            f"production prose formatting must use {config['formatter_subsystem_root']}: {imported}",
+                        )
+                    )
+
+        if _under(relative, config.get("formatter_compatibility_roots", [])):
+            allowed_shim_nodes = (ast.Expr, ast.Import, ast.ImportFrom)
+            for node in tree.body:
+                if isinstance(node, allowed_shim_nodes):
+                    continue
+                if isinstance(node, ast.Assign) and all(
+                    isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets
+                ):
+                    continue
+                findings.append(
+                    Finding(
+                        relative,
+                        node.lineno,
+                        "SWARCH056",
+                        f"formatter compatibility module must only re-export from {config['formatter_subsystem_root']}",
+                    )
+                )
+
         if _under(relative, config["api_roots"]):
             for imported, line in imports:
                 if _matches_prefix(imported, config["api_forbidden_imports"]):
@@ -747,6 +777,49 @@ def scan(root: Path, config: dict[str, Any], exceptions: list[dict[str, Any]] | 
                             line,
                             "SWARCH039",
                             f"provider wire detail appears in a TTS caller {term!r}",
+                        )
+                    )
+
+        if is_controller and not _under(relative, ["seasonalweather/tts"]):
+            for imported, line in imports:
+                if _matches_prefix(imported, config.get("tts_controller_forbidden_imports", [])):
+                    findings.append(
+                        Finding(
+                            relative,
+                            line,
+                            "SWARCH054",
+                            f"controller cannot import local TTS execution authority {imported}",
+                        )
+                    )
+            source = path.read_text(encoding="utf-8")
+            for term in config.get("tts_controller_forbidden_source_terms", []):
+                if term in source:
+                    line = next(
+                        (index for index, value in enumerate(source.splitlines(), start=1) if term in value),
+                        1,
+                    )
+                    findings.append(
+                        Finding(
+                            relative,
+                            line,
+                            "SWARCH054",
+                            f"controller cannot retain local TTS authority {term!r}",
+                        )
+                    )
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and (
+                    _qualified_call(node) in config.get("tts_controller_forbidden_call_attributes", [])
+                    or (
+                        isinstance(node.func, ast.Attribute)
+                        and node.func.attr in config.get("tts_controller_forbidden_call_attributes", [])
+                    )
+                ):
+                    findings.append(
+                        Finding(
+                            relative,
+                            node.lineno,
+                            "SWARCH054",
+                            "controller cannot execute local TTS synthesis; submit a worker job",
                         )
                     )
 

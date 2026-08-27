@@ -48,11 +48,13 @@ overall state degraded but does not make `/readyz` return `503`. Disabled and
 not-applicable optional capabilities are neutral.
 
 SQLite is required only when enabled. Runtime directories, the cycle
-conductor, Liquidsoap control, a safe configured TTS path, and current command
-admission are required. Exchange authentication storage is additionally
-required in exchange and hybrid modes. The separate durable job repository
-reports bounded schema/WAL/queue/lease/reconciliation state and gates readiness
-only when `jobs.required` is true.
+conductor, Liquidsoap control, the configured TTS path, and current command
+admission are required. For the local backend, readiness additionally requires
+qualified `tts.synthesis.v1` and `audio.alert_artifact.v1` worker capabilities;
+there is no controller-local fallback. Exchange authentication storage is
+additionally required in exchange and hybrid modes. The separate durable job
+repository reports bounded schema/WAL/queue/lease/reconciliation state and
+gates readiness when `jobs.required` is true.
 
 ## Current source and capability reporting
 

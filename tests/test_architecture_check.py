@@ -150,6 +150,41 @@ def test_tts_architecture_rules_have_independent_matching_negative_fixtures():
     assert by_rule["SWARCH038"] == ["seasonalweather/tts/transport.py"]
     assert by_rule["SWARCH039"] == ["seasonalweather/broadcast/remote.py"]
 
+    controller_findings = [finding for finding in findings if finding.rule == "SWARCH054"]
+    assert [finding.path for finding in controller_findings] == [
+        "seasonalweather/broadcast/segment_registry.py",
+        "seasonalweather/broadcast/segment_registry.py",
+        "seasonalweather/controller_tts.py",
+        "seasonalweather/controller_tts.py",
+        "seasonalweather/controller_tts.py",
+    ]
+
+
+def test_formatter_subsystem_rejects_legacy_prose_imports():
+    assert not any(finding.rule == "SWARCH055" for finding in scan(FIXTURES / "valid", CONFIG))
+    findings = [finding for finding in scan(FIXTURES / "invalid", CONFIG) if finding.rule == "SWARCH055"]
+    assert [(finding.path, finding.line) for finding in findings] == [
+        ("seasonalweather/broadcast/formatter_bypass.py", 1),
+    ]
+
+
+def test_formatter_compatibility_modules_cannot_reimplement_prose(tmp_path) -> None:
+    shim = tmp_path / "_formatter_shim_probe"
+    shim.mkdir()
+    try:
+        path = shim / "seasonalweather/broadcast/product_text.py"
+        path.parent.mkdir(parents=True)
+        path.write_text("def render_product(text: str) -> str:\n    return text\n", encoding="utf-8")
+        findings = scan(shim, CONFIG)
+        assert [(finding.rule, finding.path, finding.line) for finding in findings] == [
+            ("SWARCH056", "seasonalweather/broadcast/product_text.py", 1),
+        ]
+    finally:
+        path.unlink()
+        path.parent.rmdir()
+        path.parent.parent.rmdir()
+        shim.rmdir()
+
 
 def test_segment_registry_architecture_rules_have_independent_matching_negative_fixtures():
     valid_findings = scan(FIXTURES / "valid", CONFIG)

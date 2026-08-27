@@ -476,7 +476,27 @@ def build_runtime_health_service(
     probes.append(ComponentProbe("liquidsoap", True, liquidsoap_probe))
 
     async def tts_probe() -> HealthComponent:
-        available, reason = runtime.tts.availability()
+        if not hasattr(cfg, "tts") and hasattr(runtime, "tts"):
+            available, reason = runtime.tts.availability()
+            return _component(
+                "tts",
+                ComponentState.HEALTHY if available else ComponentState.UNAVAILABLE,
+                True,
+                reason,
+            )
+        backend = str(getattr(getattr(cfg, "tts", None), "backend", "local"))
+        if backend == "local":
+            registry = getattr(runtime, "capability_registry", None)
+            summary = registry.health(_utc_now()) if registry is not None else None
+            snapshots = registry.snapshots(_utc_now()) if registry is not None else ()
+            available = summary is not None and not {
+                "tts.synthesis.v1",
+                "audio.alert_artifact.v1",
+            } - _qualified_worker_capabilities(snapshots)
+            reason = "worker_capability_qualified" if available else "worker_capability_unavailable"
+        else:
+            available = backend in {"seasonal_ttsd", "openai_compatible"}
+            reason = "remote_backend_configured" if available else "backend_unavailable"
         return _component(
             "tts",
             ComponentState.HEALTHY if available else ComponentState.UNAVAILABLE,

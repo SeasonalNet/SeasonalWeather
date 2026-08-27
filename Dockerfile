@@ -79,6 +79,12 @@ from pathlib import Path
 package_root = Path(sysconfig.get_paths()["purelib"]) / "seasonalweather"
 for worker_root in ("worker", "workers"):
     shutil.rmtree(package_root / worker_root, ignore_errors=True)
+
+# Local engine handlers are worker-image authorities. Keeping their source in
+# the controller image would leave an avoidable bypass even though the
+# controller dependency profile does not install the engine runtimes.
+for relative_path in ("tts/local.py", "tts/voicetext_paul_vtml.py"):
+    (package_root / relative_path).unlink(missing_ok=True)
 PY
 
 RUN mkdir -p /usr/share/seasonalweather/diagnostics \

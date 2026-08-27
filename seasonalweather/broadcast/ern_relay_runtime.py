@@ -8,7 +8,7 @@ from typing import Any
 
 from ..alerts.active import ActiveAlert
 from ..same.events import label_or_code as _same_label_or_code
-from .ern_script import build_ern_relay_script as _build_ern_relay_script
+from .formatters import FormatterSubsystem
 from .station_feed_runtime import note_ern as _station_feed_note_ern
 
 log = logging.getLogger("seasonalweather")
@@ -21,8 +21,9 @@ class ErnRelayRuntime:
     active-alert, station-feed, or Discord behavior.
     """
 
-    def __init__(self, host: Any) -> None:
+    def __init__(self, host: Any, formatters: FormatterSubsystem) -> None:
         self.host = host
+        self.formatters = formatters
 
     async def run(self) -> None:
         host = self.host
@@ -133,7 +134,7 @@ class ErnRelayRuntime:
             except Exception:
                 area_text = ""
 
-            script = _build_ern_relay_script(
+            script = self.formatters.ern_relay_script(
                 ev,
                 same_locations=in_area_locs,
                 area_text=area_text,

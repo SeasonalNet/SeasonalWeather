@@ -91,10 +91,15 @@ def _real_segment_refresher(store: SegmentStore, tmp_path: Path) -> SegmentRefre
     synthesis_service._invoke_local_handler = fake_local_handler  # type: ignore[method-assign]
     synthesis_service._normalize_local_audio = fake_normalize  # type: ignore[method-assign]
 
-    return SegmentRefresher(
+    class TestSynthesisClient:
+        async def synthesize(self, text: str, output_path: Path, *, purpose: str = "routine") -> None:
+            del purpose
+            await asyncio.to_thread(tts.synth_to_wav, text, output_path)
+
+    refresher = SegmentRefresher(
         store=store,
         cycle_builder=Builder(),  # type: ignore[arg-type]
-        tts=tts,
+        tts=TestSynthesisClient(),
         alert_tracker=SimpleNamespace(),
         ctx_fn=lambda: CycleContext(mode="normal", last_heightened_ago=None, last_product_desc=None),
         station_name="station",
@@ -104,6 +109,8 @@ def _real_segment_refresher(store: SegmentStore, tmp_path: Path) -> SegmentRefre
         sample_rate=8000,
         registry=DEFAULT_SEGMENT_REGISTRY.resolve(_config()),
     )
+    refresher._legacy_tts_for_bridge_tests = tts
+    return refresher
 
 
 def test_every_static_product_uses_one_independent_builder_method() -> None:
@@ -939,7 +946,7 @@ def test_tts_cancellation_does_not_wait_for_worker_publication_callback(tmp_path
         output = tmp_path / "audio" / "bridge-output.wav"
         task = asyncio.create_task(
             synthesize_completed_wav_async(
-                refresher._tts,
+                refresher._legacy_tts_for_bridge_tests,
                 "blocking publication",
                 output,
                 purpose="routine",
@@ -1769,17 +1776,10 @@ def test_unresolved_prior_same_key_does_not_strand_later_command(tmp_path: Path,
 
 
 def test_synthesis_callback_commits_store_before_returning_success(tmp_path: Path) -> None:
-    from seasonalweather.tts.models import SynthesisDisposition
-
     class TTS:
-        def request_for(self, text, *, purpose, deadline_at):
-            return SimpleNamespace(text=text, purpose=purpose, deadline_at=deadline_at, configuration_generation=0)
-
-        def synthesize_request(self, request, output_path, *, cancellation, finalize):
-            del request
+        async def synthesize(self, _text: str, output_path: Path, *, purpose: str = "routine") -> None:
+            del purpose
             write_silence_wav(output_path, 0.1, 8000)
-            finalize(output_path, cancellation, lambda: None)
-            return SimpleNamespace(disposition=SynthesisDisposition.SUCCEEDED)
 
     async def scenario() -> None:
         store = SegmentStore(tmp_path / "work", tmp_path / "audio")

@@ -76,6 +76,9 @@ def _check_active(config: dict[str, Any]) -> list[str]:
     for token in config.get("forbidden_dockerfile_tokens", []):
         if str(token).lower() in dockerfile:
             errors.append(f"controller Dockerfile contains worker-only content: {token}")
+    for path in config.get("controller_tts_prune_paths", []):
+        if str(path).lower() not in dockerfile:
+            errors.append(f"controller Dockerfile does not prune local TTS authority: {path}")
 
     try:
         document = _metadata(requirements)

@@ -192,6 +192,7 @@ def capability_manifest(
     slots: int = 1,
     now: dt.datetime | None = None,
     handler_ready: bool = False,
+    handler_ready_capabilities: frozenset[str] | None = None,
     dependency_probe: Callable[[WorkerProfileSpec], bool] = _dependency_available,
 ) -> CapabilityManifest:
     spec = profile_spec(profile)
@@ -199,6 +200,7 @@ def capability_manifest(
         raise ValueError("worker epoch and slots must be positive and bounded")
     observed = (now or dt.datetime.now(dt.UTC)).astimezone(dt.UTC).replace(microsecond=0)
     available = dependency_probe(spec)
+    ready_capabilities = handler_ready_capabilities
     records = tuple(
         _capability_record(
             name,
@@ -206,7 +208,7 @@ def capability_manifest(
             now=observed,
             slots=slots,
             dependency_available=available,
-            handler_ready=handler_ready,
+            handler_ready=handler_ready if ready_capabilities is None else name in ready_capabilities,
         )
         for name in spec.capabilities
     )
@@ -232,6 +234,8 @@ def registration_for_profile(
     slots: int = 1,
     now: dt.datetime | None = None,
     handler_ready: bool = False,
+    handler_ready_job_types: frozenset[JobType] | None = None,
+    handler_ready_capabilities: frozenset[str] | None = None,
     dependency_probe: Callable[[WorkerProfileSpec], bool] = _dependency_available,
 ) -> Register:
     spec = profile_spec(profile)
@@ -242,13 +246,19 @@ def registration_for_profile(
         slots=slots,
         now=now,
         handler_ready=handler_ready,
+        handler_ready_capabilities=handler_ready_capabilities,
         dependency_probe=dependency_probe,
     )
+    executable = frozenset(spec.job_types) if handler_ready_job_types is None else handler_ready_job_types
     supported: dict[JobType, tuple[int, ...]] = {
-        job_type: (policy_for(job_type).payload_schema_version,) for job_type in spec.job_types
+        job_type: (policy_for(job_type).payload_schema_version,)
+        for job_type in spec.job_types
+        if job_type in executable
     }
     results: dict[JobType, tuple[int, ...]] = {
-        job_type: (policy_for(job_type).result_schema_version,) for job_type in spec.job_types
+        job_type: (policy_for(job_type).result_schema_version,)
+        for job_type in spec.job_types
+        if job_type in executable
     }
     return Register(
         worker_id=worker_id,

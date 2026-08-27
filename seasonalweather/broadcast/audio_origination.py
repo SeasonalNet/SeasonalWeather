@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import os
+import tempfile
 import wave
 from collections.abc import Callable
 from pathlib import Path
@@ -9,9 +11,8 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from ..config import AppConfig
-from ..tts.audio import write_sine_wav, write_silence_wav, concat_wavs
-from ..tts.async_bridge import FinalizationEvidence, synthesize_completed_wav_async
-from ..tts.tts import TTS
+from ..jobs.worker_client import SynthesisClient
+from ..tts.audio import concat_wavs, write_silence_wav, write_sine_wav
 
 try:
     from ..same.same import SameHeader, chunk_locations, render_same_bursts_wav, render_same_eom_wav
@@ -60,13 +61,13 @@ class AudioOriginator:
         self,
         *,
         cfg: AppConfig,
-        tts: TTS,
+        synthesizer: SynthesisClient,
         local_tz: ZoneInfo,
         paths: Callable[[], tuple[Path, Path, Path, Path]],
         discord: Any | None = None,
     ) -> None:
         self.cfg = cfg
-        self.tts = tts
+        self.synthesizer = synthesizer
         self.local_tz = local_tz
         self._paths = paths
         self.discord = discord
@@ -80,27 +81,17 @@ class AudioOriginator:
         safe_prefix = "".join(ch for ch in prefix if ch.isalnum() or ch in {"_", "-"}).strip() or "voice"
 
         out = audio_dir / f"{safe_prefix}_{ts}.wav"
-
-        def finalize(tts_path, cancellation, fence) -> FinalizationEvidence:
-            del fence
-            staging = tts_path.parent
+        with tempfile.TemporaryDirectory(prefix=".alert-", dir=str(audio_dir)) as root:
+            staging = Path(root)
+            tts_path = staging / "tts.wav"
             pre = staging / "voice-pre.wav"
             post = staging / "voice-post.wav"
             staged = staging / "voice-completed.wav"
             write_silence_wav(post, 1.2, self.cfg.audio.sample_rate)
             write_silence_wav(pre, 0.35, self.cfg.audio.sample_rate)
-            if cancellation.is_set():
-                raise RuntimeError("voice finalization cancelled")
+            await self.synthesizer.synthesize(script_text, tts_path, purpose="routine")
             concat_wavs(staged, [pre, tts_path, post])
-            return FinalizationEvidence(staged)
-
-        await synthesize_completed_wav_async(
-            self.tts,
-            script_text,
-            out,
-            purpose="administrative",
-            finalize=finalize,
-        )
+            os.replace(staged, out)
         return out
 
     async def render_alert_audio(
@@ -114,10 +105,9 @@ class AudioOriginator:
         ts = dt.datetime.now(tz=self.local_tz).strftime("%Y%m%d-%H%M%S")
 
         out = audio_dir / f"alert_{ts}.wav"
-
-        def finalize(tts_path, cancellation, fence) -> FinalizationEvidence:
-            del fence
-            staging = tts_path.parent
+        with tempfile.TemporaryDirectory(prefix=".alert-", dir=str(audio_dir)) as root:
+            staging = Path(root)
+            tts_path = staging / "tts.wav"
             tone = staging / "alert-tone.wav"
             gap = staging / "alert-gap.wav"
             eom = staging / "alert-eom.wav"
@@ -143,13 +133,7 @@ class AudioOriginator:
             )
             write_silence_wav(gap, self.cfg.audio.inter_segment_silence_seconds, self.cfg.audio.sample_rate)
             write_silence_wav(post, self.cfg.audio.post_alert_silence_seconds, self.cfg.audio.sample_rate)
-            parts: list[Path] = []
-            if same_hdr_all:
-                parts.extend([same_hdr_all, gap])
-            parts.extend([tone, gap, tts_path])
-            if same_eom_wav:
-                parts.extend([gap, same_eom_wav])
-            else:
+            if not same_eom_wav:
                 write_sine_wav(
                     eom,
                     self.cfg.audio.eom_beep_hz,
@@ -157,20 +141,18 @@ class AudioOriginator:
                     self.cfg.audio.sample_rate,
                     amplitude=0.18,
                 )
+            await self.synthesizer.synthesize(script_text, tts_path, purpose="alert")
+            parts = []
+            if same_hdr_all:
+                parts.extend([same_hdr_all, gap])
+            parts.extend([tone, gap, tts_path])
+            if same_eom_wav:
+                parts.extend([gap, same_eom_wav])
+            else:
                 parts.extend([gap, eom])
             parts.append(post)
-            if cancellation.is_set():
-                raise RuntimeError("alert finalization cancelled")
             concat_wavs(staged, parts)
-            return FinalizationEvidence(staged)
-
-        await synthesize_completed_wav_async(
-            self.tts,
-            script_text,
-            out,
-            purpose="alert",
-            finalize=finalize,
-        )
+            os.replace(staged, out)
         return out
 
     async def render_pre_recorded_alert_audio(
@@ -252,16 +234,13 @@ class AudioOriginator:
                 log.info(log_disabled_message)
                 return None, None
 
-            if same_locations is not None:
-                locs = list(same_locations)
-            else:
-                locs = list(self.cfg.service_area.same_fips_all)
+            locs = list(same_locations) if same_locations is not None else list(self.cfg.service_area.same_fips_all)
 
             if not locs:
                 locs = ["000000"]
 
             chunks = chunk_locations(locs) if chunk_locations is not None else [[]]
-            issued = dt.datetime.now(tz=dt.timezone.utc)
+            issued = dt.datetime.now(tz=dt.UTC)
 
             hdr_wavs: list[Path] = []
             for i, loc_chunk in enumerate(chunks):

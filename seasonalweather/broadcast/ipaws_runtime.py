@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from ..alerts.active import ActiveAlert
-from .ipaws_text import build_ipaws_script
+from .formatters import FormatterSubsystem
 
 log = logging.getLogger("seasonalweather")
 
@@ -21,8 +21,9 @@ class IpawsRuntime:
     main.py.
     """
 
-    def __init__(self, host: Any) -> None:
+    def __init__(self, host: Any, formatters: FormatterSubsystem) -> None:
         self.host = host
+        self.formatters = formatters
         self._full_last_by_key: dict[tuple[str, str], dt.datetime] = {}
 
     async def run(self) -> None:
@@ -137,7 +138,7 @@ class IpawsRuntime:
         event_code = (ev.event_code or "").strip().upper()
         event_label = (ev.event or event_code or "Alert").strip()
 
-        script = build_ipaws_script(ev)
+        script = self.formatters.ipaws_script(ev)
         if not script.strip():
             return
 
@@ -267,7 +268,7 @@ class IpawsRuntime:
                 mode="full",
                 area=",".join(same_locs or same_locs_raw)[:160],
                 vtec=[],
-                expires=host.cap_text._fmt_local_from_utc_iso(ev.expires or ""),
+                expires=self.formatters.cap_local_expiry(ev.expires or ""),
             )
 
         except Exception:
@@ -283,7 +284,7 @@ class IpawsRuntime:
         event_code = (ev.event_code or "").strip().upper()
         event_label = (ev.event or event_code or "Alert").strip()
 
-        script = build_ipaws_script(ev)
+        script = self.formatters.ipaws_script(ev)
         if not script.strip():
             return
 
@@ -381,7 +382,7 @@ class IpawsRuntime:
                 mode="voice",
                 area=",".join(same_locs or same_locs_raw)[:160],
                 vtec=[],
-                expires=host.cap_text._fmt_local_from_utc_iso(ev.expires or ""),
+                expires=self.formatters.cap_local_expiry(ev.expires or ""),
             )
 
         except Exception:

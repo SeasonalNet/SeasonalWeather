@@ -17,6 +17,7 @@ from threading import Event
 from typing import TYPE_CHECKING, Any, cast
 
 from .preprocess import clean_for_tts, normalize_nws_spoken_times, verbalize_url
+from .models import FinalizationCallbackError
 
 if TYPE_CHECKING:
     from .service import SynthesisService
@@ -24,17 +25,7 @@ if TYPE_CHECKING:
 __all__ = ["TTS", "TTSCompatibilityError", "clean_for_tts", "normalize_nws_spoken_times", "verbalize_url"]
 
 
-class TTSCompatibilityError(RuntimeError):
-    """Bounded failure for callers that require a completed WAV."""
-
-    def __init__(self, result: object) -> None:
-        disposition = getattr(getattr(result, "disposition", None), "value", "unknown")
-        failure = getattr(getattr(result, "failure", None), "value", None)
-        detail = f"disposition={disposition}"
-        if failure:
-            detail += f" failure={failure}"
-        super().__init__(f"TTS synthesis did not produce a WAV ({detail})")
-        self.result = result
+TTSCompatibilityError = FinalizationCallbackError
 
 
 @contextmanager

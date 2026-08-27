@@ -11,8 +11,9 @@ seasonalweather worker \
 
 The same values may be supplied through `SEASONALWEATHER_CONTROLLER_URL`,
 `SEASONALWEATHER_WORKER_ID`, `SEASONALWEATHER_WORKER_INSTANCE_ID`,
-`SEASONALWEATHER_WORKER_EPOCH`, `SEASONALWEATHER_WORKER_SLOTS`, and
-`SEASONALWEATHER_WORKER_PROFILE`. The live connection credential is supplied
+`SEASONALWEATHER_WORKER_EPOCH`, `SEASONALWEATHER_WORKER_SLOTS`,
+`SEASONALWEATHER_WORKER_PROFILE`, and `SEASONALWEATHER_WORKER_INPUT_ROOT`.
+The live connection credential is supplied
 through `--token` or `SEASONALWEATHER_WORKER_TOKEN`; that value is mounted only
 as the worker service's dedicated secret.
 
@@ -30,10 +31,10 @@ as the worker service's dedicated secret.
 
 Each profile emits a complete epoch/digest capability manifest. Dependency
 probes publish unavailable state and zero capacity when a required executable
-is absent. The default reference handlers are intentionally fail-closed, so a
-profile also publishes `implemented=false` and zero capacity until a real
-deployment handler factory is supplied. The worker never changes controller
-compatibility or authorization decisions.
+is absent. TTS-capable profiles resolve controller-written opaque input
+descriptors and execute local synthesis only inside the worker process; all
+other unimplemented profile handlers remain fail-closed. The worker never
+changes controller compatibility or authorization decisions.
 
 P2-06 publishes a bounded local health record (by default at
 `/tmp/seasonalweather-worker-health.json`, or the
@@ -61,7 +62,10 @@ closed when a deployment has not supplied its controller-owned input/artifact
 resolver; they never fabricate a successful result from an opaque reference.
 
 P2-08 owns the controller WebSocket endpoint, live controller/worker cutover,
-and removal of the controller's transitional embedded TTS executor. A missing
-or unqualified worker leaves job readiness unavailable; the controller never
-falls back to local execution. P2-06 adds process health and lifecycle
-reporting without adding a worker-facing HTTP health server.
+and removal of the controller's transitional embedded TTS executor. P3-06
+completes the local path: the controller writes only bounded opaque input
+references, admits a durable SWWP job, and consumes a controller-committed
+artifact receipt. A missing, unqualified, stale, or disconnected worker leaves
+the required capability unavailable; the controller never falls back to local
+execution. P2-06 adds process health and lifecycle reporting without adding a
+worker-facing HTTP health server.

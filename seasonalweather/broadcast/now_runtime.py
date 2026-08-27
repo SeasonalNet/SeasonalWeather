@@ -11,8 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from ..alerts.product import ParsedProduct, parse_product_text
-from .now import build_now_script
-from .pns import parse_nws_header_issued_dt
+from .formatters import parse_nws_header_issued_dt
 from .segment_store import render_segment_wav as _legacy_render_segment_wav
 from .segment_store import render_segment_wav_async
 
@@ -407,7 +406,7 @@ class NowRuntime:
             )
             return False
 
-        script = build_now_script(raw_text, intro=cfg.intro)
+        script = self.host.formatters.now_script(raw_text, intro=cfg.intro)
         if not script:
             log.warning(
                 "NOW suppressed: no safe narrative after .NOW marker wfo=%s awips=%s",
@@ -461,7 +460,7 @@ class NowRuntime:
         else:
             audio_path = Path(self.host.cfg.paths.audio_dir) / f"insert_{insert_id}.wav"
             duration = await _render_now_segment(
-                self.host.tts,
+                getattr(self.host, "synthesizer", getattr(self.host, "tts", None)),
                 script,
                 audio_path,
                 sample_rate=int(self.host.cfg.audio.sample_rate),

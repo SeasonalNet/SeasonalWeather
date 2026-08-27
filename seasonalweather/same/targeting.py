@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 import httpx2
 
 from ..config import AppConfig
-from ..broadcast.product_text import (
+from ..broadcast.formatters import (
     extract_nwws_wcn_area_desc as _extract_nwws_wcn_area_desc,
     match_nwws_wcn_area_same as _match_nwws_wcn_area_same,
 )

@@ -9,8 +9,6 @@ import logging
 from collections.abc import Callable
 
 from ..build_metadata import current_build_info
-from ..jobs.contracts import AttemptOutcome
-from ..jobs.policies import FailureCategory
 from ..lifecycle_records import LifecycleRecordWriter, LifecycleStage
 from ..observability import bind_correlation, bind_trace_context
 from ..observability.tracing import TraceContext
@@ -306,7 +304,11 @@ class WorkerRuntime:
             ):
                 result = await self.handlers.execute(
                     assignment,
-                    HandlerContext(cancellation=cancellation, deadline_at=assignment.deadline_at),
+                    HandlerContext(
+                        cancellation=cancellation,
+                        deadline_at=assignment.deadline_at,
+                        worker_id=self.session.registration.worker_id,
+                    ),
                 )
         except asyncio.CancelledError:
             raise
@@ -314,10 +316,10 @@ class WorkerRuntime:
             await self._send(
                 self.session.failure(
                     assignment.lease,
-                    outcome=AttemptOutcome.PERMANENT_FAILURE,
-                    category=FailureCategory.UNSUPPORTED,
-                    error_code="handler_failed",
-                    summary=f"worker handler failed: {type(exc).__name__}",
+                    outcome=exc.outcome,
+                    category=exc.category,
+                    error_code=exc.code,
+                    summary=exc.summary,
                 )
             )
         else:

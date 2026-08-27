@@ -29,6 +29,8 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+import os
+import tempfile
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -40,9 +42,8 @@ from ..alerts.active import AlertTracker
 from ..alerts.focus import AlertFocusPolicy, alert_holds_focus
 from ..diagnostics.bindings import FOUNDATION_CODES
 from ..liquidsoap_telnet import LiquidsoapTelnet
-from ..tts.async_bridge import FinalizationEvidence, synthesize_completed_wav_async
+from ..jobs.worker_client import SynthesisClient
 from ..tts.audio import concat_wavs, wav_duration_seconds, write_silence_wav
-from ..tts.tts import TTS
 from .segment_registry import DEFAULT_SEGMENT_REGISTRY, ResolvedSegmentRegistry, SegmentBuilderKind
 from .segment_store import SegmentStore, segment_entry_eligible_to_air
 
@@ -177,7 +178,7 @@ class CycleConductor:
         *,
         store: SegmentStore,
         telnet: LiquidsoapTelnet,
-        tts: TTS,
+        tts: SynthesisClient,
         alert_tracker: AlertTracker,
         tz: ZoneInfo,
         audio_dir: Path,
@@ -206,7 +207,7 @@ class CycleConductor:
         telnet:
             Live Liquidsoap telnet client.
         tts:
-            TTS engine (used only for the live time segment).
+            Worker synthesis client used for the live time segment.
         alert_tracker:
             AlertTracker for injecting active-alert voice segments.
         tz:
@@ -226,6 +227,7 @@ class CycleConductor:
         """
         self._store = store
         self._telnet = telnet
+        self._synthesizer = tts
         self._tts = tts
         self._alert_tracker = alert_tracker
         self._registry = registry or DEFAULT_SEGMENT_REGISTRY.resolve()
@@ -404,8 +406,6 @@ class CycleConductor:
             try:
                 pushes = 0
                 while self.estimated_remaining_s < self._lookahead_s:
-                    if self._interrupt_hold:
-                        break
                     pushed = await self._tracked_push_next_segment()
                     pushes += 1
                     if not pushed:
@@ -1002,37 +1002,20 @@ class CycleConductor:
         self._time_buf_idx = (self._time_buf_idx + 1) % _TIME_BUF_COUNT
 
         try:
-            duration: list[float] = []
+            with tempfile.TemporaryDirectory(prefix=".cycle-time-", dir=str(self._audio_dir)) as root:
+                staging = Path(root)
+                raw = staging / "cycle-time-tts.wav"
+                gap = staging / "cycle-time-gap.wav"
+                complete = staging / "cycle-time-completed.wav"
+                await self._synthesizer.synthesize(text, raw, purpose="routine")
+                write_silence_wav(gap, self._seg_gap_s, self._sample_rate)
+                concat_wavs(complete, [gap, raw, gap])
+                dur = wav_duration_seconds(complete)
 
-            def finalize(tts_path, cancellation, fence) -> FinalizationEvidence:
-                del fence
-                staging = tts_path.parent
-                gap_tmp = staging / "cycle-time-gap.wav"
-                out_tmp = staging / "cycle-time-completed.wav"
-                write_silence_wav(gap_tmp, self._seg_gap_s, self._sample_rate)
-                concat_wavs(out_tmp, [gap_tmp, tts_path, gap_tmp])
-                duration.append(wav_duration_seconds(out_tmp))
-                if cancellation.is_set():
-                    raise RuntimeError("live time finalization cancelled")
-                return FinalizationEvidence(out_tmp)
-
-            await synthesize_completed_wav_async(
-                self._tts,
-                text,
-                wav,
-                purpose="routine",
-                finalize=finalize,
-            )
-            if not duration:
-                raise RuntimeError("live time synthesis completed without finalization")
-            dur = duration[0]
-
-            # TTS runs in an executor.  An alert may have been admitted while it
-            # was rendering; do not append this now-stale time request behind the
-            # interrupt hold.
-            if self._interrupt_hold:
-                log.debug("CycleConductor: discarded rendered live time during interrupt hold")
-                return 0.0
+                if self._interrupt_hold:
+                    log.debug("CycleConductor: discarded rendered live time during interrupt hold")
+                    return 0.0
+                os.replace(complete, wav)
 
             meta = self._np_meta_fn(
                 title=self._registry.title_for("time"),

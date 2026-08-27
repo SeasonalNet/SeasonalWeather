@@ -1,14 +1,42 @@
 import datetime as dt
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
+from seasonalweather.broadcast.formatters import CapTextRenderer, build_watch_reminder
 from seasonalweather.broadcast.product_text import (
     build_nwws_watch_action_script,
-    build_nwws_watch_vtec_script,
     build_nwws_watch_partial_cancel_script,
+    build_nwws_watch_vtec_script,
     extract_nwws_wcn_area_desc,
     match_nwws_wcn_area_same,
 )
 from seasonalweather.same.ugc import extract_ugc_zones
+
+
+def test_cap_and_nwws_watch_paths_share_the_canonical_reminder() -> None:
+    event = SimpleNamespace(
+        event="Severe Thunderstorm Watch",
+        area_desc="Montgomery, MD",
+        vtec=["/O.NEW.KLWX.SV.A.0234.260520T1639Z-260521T0000Z/"],
+    )
+    renderer = CapTextRenderer(
+        local_tz=ZoneInfo("America/New_York"),
+        cap_vtec_list=lambda value: value.vtec,
+        vtec_tracks=lambda _value: [],
+        best_expiry_from_vtec=lambda _value: None,
+    )
+
+    cap_script = renderer.build_cap_watch_script(event)
+    nwws_script = build_nwws_watch_vtec_script(
+        "Severe Thunderstorm Watch",
+        event.vtec,
+        local_tz=ZoneInfo("America/New_York"),
+        area_text="Montgomery, MD",
+    )
+    reminder = build_watch_reminder("severe")
+
+    assert reminder in cap_script
+    assert reminder in nwws_script
 
 
 WCN_SVA_NEW = """WWUS61 KLWX 201639

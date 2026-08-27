@@ -7,7 +7,7 @@ import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Callable, cast
+from typing import TYPE_CHECKING, Callable, cast
 
 from seasonalweather.capabilities.qualification import QualificationReason, qualify
 from seasonalweather.capabilities.models import CapabilityRecord, CompatibilityState, OperationalState
@@ -17,7 +17,6 @@ from seasonalweather.jobs.registry import policy_for as job_policy_for
 from seasonalweather.jobs.policies import JobType
 from seasonalweather.validation.admission import AdmissionRejection, admission_error, tts_field
 
-from .local import LocalEngineRegistry
 from .models import (
     BackendId,
     LocalEngineOptions,
@@ -27,6 +26,16 @@ from .models import (
     VoiceTextOptions,
 )
 from .subprocess import ProcessFailure
+
+if TYPE_CHECKING:
+    from .local import LocalEngineRegistry
+
+
+def _local_engine_registry() -> type[LocalEngineRegistry]:
+    """Load local engine metadata only inside a worker execution path."""
+    from .local import LocalEngineRegistry
+
+    return LocalEngineRegistry
 
 
 class LocalQualificationDisposition(StrEnum):
@@ -122,8 +131,8 @@ class P109TtsQualificationAdapter:
         if not isinstance(request, SynthesisRequest):
             raise ProcessFailure("capability_rejected", "invalid TTS request")
         try:
-            requested_engine = LocalEngineRegistry.normalize(request.local.engine)
-            requested_capability = LocalEngineRegistry.capability_for(requested_engine)
+            requested_engine = _local_engine_registry().normalize(request.local.engine)
+            requested_capability = _local_engine_registry().capability_for(requested_engine)
         except (ProcessFailure, ValueError) as exc:
             raise ProcessFailure("capability_rejected", "invalid local TTS profile") from exc
         context = self._qualification_context(request, requested_capability)
@@ -136,7 +145,7 @@ class P109TtsQualificationAdapter:
     def _reserve_qualified(
         self, request: SynthesisRequest, engine: str, reservation_id: str, expires_at: dt.datetime
     ) -> object | None:
-        capability = LocalEngineRegistry.capability_for(engine)
+        capability = _local_engine_registry().capability_for(engine)
         if self.registry is None or self.local_source is None:
             raise ProcessFailure("capability_rejected", "controller-local TTS authority is unavailable")
         snapshot = self.local_source.refresh(engine)
@@ -260,8 +269,8 @@ class P109TtsQualificationAdapter:
         if not isinstance(request, SynthesisRequest):
             return LocalQualification(LocalQualificationDisposition.UNKNOWN, capability, ("invalid_request",), 0)
         try:
-            engine = LocalEngineRegistry.normalize(request.local.engine)
-            expected = LocalEngineRegistry.capability_for(engine)
+            engine = _local_engine_registry().normalize(request.local.engine)
+            expected = _local_engine_registry().capability_for(engine)
         except (ProcessFailure, ValueError):
             return LocalQualification(
                 LocalQualificationDisposition.INCOMPATIBLE,
@@ -344,8 +353,8 @@ class ControllerLocalQualificationSource:
             return None
         if self.current_generation is not None and self.configuration_generation != self.current_generation():
             return None
-        configured_engine = LocalEngineRegistry.normalize(self.configured_options.engine)
-        if LocalEngineRegistry.normalize(engine_name) != configured_engine:
+        configured_engine = _local_engine_registry().normalize(self.configured_options.engine)
+        if _local_engine_registry().normalize(engine_name) != configured_engine:
             return None
         with self._epoch_lock:
             with self.publication_fence.generation_publication(
@@ -355,8 +364,8 @@ class ControllerLocalQualificationSource:
                     return None
                 prior = self.registry.snapshot(self.worker_id, self.clock())
                 self._epoch = max(self._epoch, prior.epoch if prior is not None else 0) + 1
-                capability = LocalEngineRegistry.capability_for(engine_name)
-                evidence = LocalEngineRegistry.qualification_evidence(engine_name, self.configured_options)
+                capability = _local_engine_registry().capability_for(engine_name)
+                evidence = _local_engine_registry().qualification_evidence(engine_name, self.configured_options)
                 now = self.clock()
                 record = CapabilityRecord(
                     name=capability,
@@ -488,8 +497,8 @@ def _validate_local_tts_profile(request: SynthesisRequest) -> AdmissionRejection
     if request.backend is not BackendId.LOCAL and request.fallback_backend is not BackendId.LOCAL:
         return None
     try:
-        engine = LocalEngineRegistry.normalize(request.local.engine)
-        LocalEngineRegistry.validate_voice(engine, request.local.voice)
+        engine = _local_engine_registry().normalize(request.local.engine)
+        _local_engine_registry().validate_voice(engine, request.local.voice)
     except (ValueError, ProcessFailure):
         return _rejection(
             "unsupported_engine",
