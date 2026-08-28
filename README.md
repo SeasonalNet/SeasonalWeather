@@ -1,6 +1,6 @@
 # SeasonalWeather
 
-SeasonalWeather is an unofficial (not endorsed by NOAA or FEMA or other authorities), IP-based weather and alert radio service suite
+SeasonalWeather is an unofficial (not endorsed by NOAA, FEMA or other authorities), IP-based weather and alert radio service suite
 inspired by NOAA Weather Radio workflows.
 
 It ingests NWS and related alert
