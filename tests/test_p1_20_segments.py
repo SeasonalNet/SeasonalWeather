@@ -3633,7 +3633,14 @@ def test_receipt_write_failure_keeps_committed_truth_and_repairs_after_reopen(tm
         )
         assert result.committed
         assert store.get("obs").text == "committed despite receipt failure"
-        assert store._journal_path("obs").exists()
+        with database.connect() as conn:
+            assert (
+                conn.execute(
+                    "SELECT 1 FROM segment_commit_journals WHERE segment_key = ? AND command_id = ?",
+                    ("obs", command.command_id),
+                ).fetchone()
+                is not None
+            )
         assert (await command_store.get(command.command_id)).status is CommandStatus.RUNNING
 
         reopened = SegmentStore(tmp_path / "work", tmp_path / "audio", database=database)
@@ -3642,7 +3649,14 @@ def test_receipt_write_failure_keeps_committed_truth_and_repairs_after_reopen(tm
         assert await reopened.reconcile_committed_refresh_commands(command_store) == 1
         assert (await command_store.get(command.command_id)).status is CommandStatus.SUCCEEDED
         assert reopened.committed_refresh_receipts() == ()
-        assert not reopened._journal_path("obs").exists()
+        with database.connect() as conn:
+            assert (
+                conn.execute(
+                    "SELECT 1 FROM segment_commit_journals WHERE segment_key = ? AND command_id = ?",
+                    ("obs", command.command_id),
+                ).fetchone()
+                is None
+            )
 
     asyncio.run(scenario())
 

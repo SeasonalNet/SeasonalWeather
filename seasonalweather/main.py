@@ -219,6 +219,11 @@ class Orchestrator:
         self.cap_last_severe_at: dt.datetime | None = None
         self.ern_last_tone_at: dt.datetime | None = None
 
+        # Bootstrap controller-owned SQLite before any component constructs a
+        # restart-surviving cache.  Durable state must not silently fall back
+        # to files when the database is enabled.
+        self.database = bootstrap_database_from_config(cfg) if getattr(cfg.database, "enabled", True) else None
+
         self.segment_registry = DEFAULT_SEGMENT_REGISTRY.resolve(cfg.cycle)
         self.cycle_builder = CycleBuilder(
             api=self.api,
@@ -229,6 +234,7 @@ class Orchestrator:
             cycle_cfg=cfg.cycle,
             registry=self.segment_registry,
             work_dir=cfg.paths.operational_state_dir,
+            database=self.database,
         )
 
         # Fast membership checks for "in-area" targeting
@@ -287,7 +293,6 @@ class Orchestrator:
         self._nwws_acted = 0
 
         # --- Embedded SQLite runtime state ---
-        self.database = bootstrap_database_from_config(cfg) if getattr(cfg.database, "enabled", True) else None
         self.cycle_insert_repo = CycleInsertRepository(self.database) if self.database is not None else None
         self.db_housekeeper = DatabaseHousekeeper(cfg, self.database) if self.database is not None else None
         self.station_feed_repo = StationFeedRepository(self.database) if self.database is not None else None

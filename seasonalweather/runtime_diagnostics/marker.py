@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Any
 
 from seasonalweather import __version__
+from seasonalweather.database.core import SeasonalDatabase
+from seasonalweather.database.persistence import ProcessMarkerRepository
 from seasonalweather.diagnostics.bindings import RUNTIME_CODES
 
 from .models import CorrelationContext, DiagnosticRole, PromotionReason, timestamp
@@ -106,8 +108,9 @@ class PriorControllerEvidence:
 
 
 class ProcessMarkerStore:
-    def __init__(self, state_root: Path) -> None:
+    def __init__(self, state_root: Path, database: SeasonalDatabase | None = None) -> None:
         self.state_root = state_root
+        self._repository = ProcessMarkerRepository(database) if database is not None else None
         self.current_path = state_root / "controller-runtime.json"
         self.pending_path = state_root / "controller-runtime.previous.json"
         self.lock_path = state_root / ".controller-runtime.lock"
@@ -118,15 +121,16 @@ class ProcessMarkerStore:
         self._prepare_state_root()
         self._acquire_lifetime_lock()
         try:
-            prior = self._read_marker(self.current_path) if self.current_path.exists() else None
+            prior = self._load_current()
             if prior is not None:
-                if self.pending_path.exists():
-                    pending = self._read_marker(self.pending_path)
+                pending = self._load_pending()
+                if pending is not None:
                     if pending != prior:
                         raise RuntimeError("unreconciled prior marker already exists")
                 else:
-                    self._atomic_write(self.pending_path, prior)
-            self._atomic_write(self.current_path, marker.to_dict())
+                    self._store_pending(prior)
+            self._store_current(marker.to_dict())
+            self._retire_legacy_files()
             self._instance_id = marker.instance_id
             return prior
         except BaseException:
@@ -138,21 +142,24 @@ class ProcessMarkerStore:
             raise RuntimeError("process marker has not started")
         if stage not in MARKER_STAGES:
             raise ValueError("process marker lifecycle stage is invalid")
-        current = self._read_marker(self.current_path)
+        current = self._load_current()
+        if current is None:
+            raise RuntimeError("current process marker is unavailable")
         if current.get("instance_id") != self._instance_id:
             raise RuntimeError("current marker belongs to another instance")
         current["lifecycle_stage"] = stage
-        self._atomic_write(self.current_path, current)
+        self._store_current(current)
 
     def mark_clean(self) -> None:
         if self._instance_id is None:
             return
         try:
-            current = self._read_marker(self.current_path)
+            current = self._load_current()
+            if current is None:
+                raise RuntimeError("current process marker is unavailable")
             if current.get("instance_id") != self._instance_id:
                 raise RuntimeError("refusing to remove another instance marker")
-            self.current_path.unlink()
-            _fsync_directory(self.state_root)
+            self._delete_current()
             self._instance_id = None
         finally:
             self._release_lifetime_lock()
@@ -163,9 +170,9 @@ class ProcessMarkerStore:
         *,
         current_context: CorrelationContext,
     ):
-        if not self.pending_path.exists():
+        prior = self._load_pending()
+        if prior is None:
             return None
-        prior = self._read_marker(self.pending_path)
         prior_evidence = PriorControllerEvidence.from_marker(prior)
         instance = service.build(
             code=RUNTIME_CODES["prior_incomplete_shutdown"],
@@ -187,10 +194,60 @@ class ProcessMarkerStore:
             exception_evidence={"prior_controller": prior_evidence.to_dict()},
         )
         result = service.promote(instance)
-        if self.pending_path.exists() and self._read_marker(self.pending_path) == prior:
+        if self._load_pending() == prior:
+            self._delete_pending()
+        return result
+
+    def _load_current(self) -> dict[str, Any] | None:
+        if self._repository is not None:
+            value = self._repository.get("current")
+            if value is None and self.current_path.exists():
+                value = self._read_marker(self.current_path)
+                self._repository.put("current", value, dt.datetime.now(dt.UTC).isoformat())
+            return _validate_marker(value) if value is not None else None
+        return self._read_marker(self.current_path) if self.current_path.exists() else None
+
+    def _load_pending(self) -> dict[str, Any] | None:
+        if self._repository is not None:
+            value = self._repository.get("pending")
+            if value is None and self.pending_path.exists():
+                value = self._read_marker(self.pending_path)
+                self._repository.put("pending", value, dt.datetime.now(dt.UTC).isoformat())
+            return _validate_marker(value) if value is not None else None
+        return self._read_marker(self.pending_path) if self.pending_path.exists() else None
+
+    def _store_current(self, value: dict[str, Any]) -> None:
+        if self._repository is not None:
+            self._repository.put("current", value, dt.datetime.now(dt.UTC).isoformat())
+        else:
+            self._atomic_write(self.current_path, value)
+
+    def _store_pending(self, value: dict[str, Any]) -> None:
+        if self._repository is not None:
+            self._repository.put("pending", value, dt.datetime.now(dt.UTC).isoformat())
+        else:
+            self._atomic_write(self.pending_path, value)
+
+    def _delete_current(self) -> None:
+        if self._repository is not None:
+            self._repository.delete("current")
+        else:
+            self.current_path.unlink()
+            _fsync_directory(self.state_root)
+
+    def _delete_pending(self) -> None:
+        if self._repository is not None:
+            self._repository.delete("pending")
+        else:
             self.pending_path.unlink()
             _fsync_directory(self.state_root)
-        return result
+
+    def _retire_legacy_files(self) -> None:
+        if self._repository is None:
+            return
+        for path in (self.current_path, self.pending_path):
+            with suppress(FileNotFoundError):
+                path.unlink()
 
     def _read_marker(self, path: Path) -> dict[str, Any]:
         info = path.lstat()

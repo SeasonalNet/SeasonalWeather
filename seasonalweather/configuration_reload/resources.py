@@ -375,6 +375,7 @@ class OrchestratorResourcePreparer:
                 cycle_cfg=configuration.cycle,
                 registry=builder_registry,
                 work_dir=configuration.paths.operational_state_dir,
+                database=getattr(self.orch, "database", None),
             )
             if resource_plan.replace_cycle_builder
             else None

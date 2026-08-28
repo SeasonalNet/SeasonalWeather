@@ -2114,7 +2114,7 @@ def _build_app_config(
         poll_seconds=int(cap_raw.get("poll_seconds", 60)),
         user_agent=str(cap_raw.get("user_agent", "SeasonalWeather (CAP monitor)")),
         url=str(cap_raw.get("url", "")),
-        ledger_path=str(cap_raw.get("ledger_path", Path(paths.operational_state_dir) / "cap_ledger.json")),
+        ledger_path=str(cap_raw.get("ledger_path", "")),
         ledger_max_age_days=int(cap_raw.get("ledger_max_age_days", 14)),
         full=CapFullConfig(
             enabled=bool(cap_full_raw.get("enabled", True)),
@@ -2140,7 +2140,7 @@ def _build_app_config(
         poll_seconds=int(ipaws_raw.get("poll_seconds", 90)),
         user_agent=str(ipaws_raw.get("user_agent", "SeasonalWeather (IPAWS monitor)")),
         url=str(ipaws_raw.get("url", "")),
-        ledger_path=str(ipaws_raw.get("ledger_path", Path(paths.operational_state_dir) / "ipaws_ledger.json")),
+        ledger_path=str(ipaws_raw.get("ledger_path", "")),
         ledger_max_age_days=int(ipaws_raw.get("ledger_max_age_days", 14)),
         full_events=[str(e) for e in ipaws_raw.get("full_events", _ipaws_default_full)],
         voice_events=[str(e) for e in ipaws_raw.get("voice_events", [])],

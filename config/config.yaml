@@ -358,7 +358,6 @@ cap:
   poll_seconds: 60
   user_agent: "SeasonalWeather (CAP monitor)"
   url: ""                      # leave empty to use default NWS alerts endpoint
-  ledger_path: "/var/lib/seasonalweather/state/cap_ledger.json"
   ledger_max_age_days: 14
   full:
     enabled: true

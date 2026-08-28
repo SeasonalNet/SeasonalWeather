@@ -10,13 +10,11 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
-import json
 import logging
 import re
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from math import floor
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
@@ -25,6 +23,8 @@ from ..alerts.product import ParsedProduct
 from ..alerts.vtec import VTEC_PARSE_RE as _VTEC_PARSE_RE
 from ..same.events import label_or_code, org_broadcast_prefix
 from ..tts.preprocess import clean_for_tts
+from ..database.core import SeasonalDatabase
+from ..database.persistence import ObservationPressureRepository
 
 # --- centralized from seasonalweather/alerts/builder.py ---
 _STAR_RE = re.compile(r"^\s*\*\s+")
@@ -5119,36 +5119,34 @@ def parse_rwr(text: str, name_map: Optional[Dict[str, str]] = None) -> Optional[
 class ObsPressureCache:
     """
     Persistent per-station pressure history for trend derivation.
-    Survives service restarts (JSON file in work_dir).
+    Survives service restarts in the controller-owned SQLite database.
     """
 
     def __init__(
         self,
-        path: str,
+        path: str | None = None,
         max_hours: float = 3.0,
         trend_threshold_inhg: float = 0.02,
+        database: SeasonalDatabase | None = None,
     ) -> None:
-        self._path = Path(path)
+        del path  # retained as a source-compatible, non-persistent argument
+        self._repository = ObservationPressureRepository(database) if database is not None else None
         self._max_secs = max_hours * 3600
         self._threshold = trend_threshold_inhg
         self._data: Dict[str, List[Dict]] = {}
-        self._load()
+        self._loaded_stations: set[str] = set()
 
-    def _load(self) -> None:
+    def _load_station(self, station_id: str) -> None:
+        if station_id in self._loaded_stations:
+            return
+        self._loaded_stations.add(station_id)
+        if self._repository is None:
+            return
+        cutoff = (dt.datetime.now(tz=dt.timezone.utc) - dt.timedelta(seconds=self._max_secs)).isoformat()
         try:
-            if self._path.exists():
-                self._data = json.loads(self._path.read_text(encoding="utf-8"))
+            self._data[station_id] = self._repository.recent(station_id, cutoff)
         except Exception:
-            self._data = {}
-
-    def _save(self) -> None:
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self._path.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(self._data), encoding="utf-8")
-            tmp.replace(self._path)
-        except Exception:
-            pass
+            log.exception("observation pressure history load failed station=%s", station_id)
 
     def _now_iso(self) -> str:
         return dt.datetime.now(tz=dt.timezone.utc).isoformat()
@@ -5165,11 +5163,18 @@ class ObsPressureCache:
     def update(self, station_id: str, pressure_inhg: float) -> None:
         """Record a new pressure reading for the given station."""
         sid = station_id.strip().upper()
+        self._load_station(sid)
         if sid not in self._data:
             self._data[sid] = []
         self._data[sid].append({"ts": self._now_iso(), "p": round(pressure_inhg, 4)})
         self._prune(sid)
-        self._save()
+        if self._repository is not None:
+            try:
+                cutoff = (dt.datetime.now(tz=dt.timezone.utc) - dt.timedelta(seconds=self._max_secs)).isoformat()
+                latest = self._data[sid][-1]
+                self._repository.append_and_prune(sid, latest["ts"], latest["p"], cutoff)
+            except Exception:
+                log.exception("observation pressure history persist failed station=%s", sid)
 
     def get_trend(self, station_id: str, current_inhg: float) -> Optional[str]:
         """
@@ -5178,6 +5183,7 @@ class ObsPressureCache:
         Returns None if insufficient history (< 2 readings).
         """
         sid = station_id.strip().upper()
+        self._load_station(sid)
         self._prune(sid)
         entries = self._data.get(sid, [])
         if len(entries) < 2:

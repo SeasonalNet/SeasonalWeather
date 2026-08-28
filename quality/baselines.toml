@@ -5,7 +5,7 @@ version = 1
 # downward; increases require a separately governed exception.
 
 [checks.format]
-maximum = 51
+maximum = 50
 owner = "SeasonalWeather maintainers"
 rationale = "Remaining v0.17.0 Ruff formatter debt after touched-file cleanup."
 scope = "seasonalweather/, tests/, and tools/"
@@ -13,7 +13,7 @@ review_date = "2026-10-23"
 removal_condition = "Reduce whenever legacy files are materially changed; reach zero."
 
 [checks.lint]
-maximum = 835
+maximum = 803
 owner = "SeasonalWeather maintainers"
 rationale = "Initial v0.17.0 Ruff debt."
 scope = "seasonalweather/, tests/, and tools/"
@@ -21,7 +21,7 @@ review_date = "2026-10-23"
 removal_condition = "Reduce as findings are corrected; do not permit net-new findings."
 
 [checks.typecheck]
-maximum = 47
+maximum = 44
 owner = "SeasonalWeather maintainers"
 rationale = "Initial v0.17.0 mypy debt."
 scope = "seasonalweather/ and tools/quality/"
@@ -29,7 +29,7 @@ review_date = "2026-10-23"
 removal_condition = "Reduce as package boundaries gain complete annotations."
 
 [checks.basedpyright]
-maximum = 983
+maximum = 919
 owner = "SeasonalWeather maintainers"
 rationale = "Initial basedpyright repository debt; new findings are not permitted above this ceiling."
 scope = "Repository Python source analyzed by pyrightconfig.json."
@@ -37,7 +37,7 @@ review_date = "2026-10-23"
 removal_condition = "Reduce as existing basedpyright findings are corrected; do not permit net-new findings."
 
 [checks.dependency]
-maximum = 12
+maximum = 11
 owner = "SeasonalWeather maintainers"
 rationale = "Initial v0.17.0 declared/used dependency debt."
 scope = "Repository Python imports and project dependency metadata."
@@ -53,7 +53,7 @@ review_date = "2026-10-23"
 removal_condition = "Review candidates and reduce the baseline when ownership is established."
 
 [checks.security]
-maximum = 107
+maximum = 103
 owner = "SeasonalWeather maintainers"
 rationale = "Initial v0.17.0 Bandit findings pending focused security review."
 scope = "seasonalweather/"

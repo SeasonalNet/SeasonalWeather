@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: (
@@ -311,5 +311,63 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
         "ALTER TABLE cycle_segments ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE cycle_segments ADD COLUMN last_aired TEXT",
         "ALTER TABLE cycle_segments ADD COLUMN next_eligible_airtime TEXT",
+    ),
+    11: (
+        """
+        CREATE TABLE IF NOT EXISTS observation_pressure_history (
+            station_id TEXT NOT NULL,
+            observed_at TEXT NOT NULL,
+            pressure_inhg REAL NOT NULL,
+            PRIMARY KEY (station_id, observed_at)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_observation_pressure_history_time ON observation_pressure_history (observed_at)",
+        """
+        CREATE TABLE IF NOT EXISTS runtime_process_markers (
+            marker_name TEXT PRIMARY KEY,
+            marker_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS configuration_candidates (
+            candidate_reference TEXT PRIMARY KEY,
+            metadata_json TEXT NOT NULL,
+            captured_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS configuration_candidate_reports (
+            candidate_reference TEXT NOT NULL,
+            report_reference TEXT NOT NULL,
+            report_sha256 TEXT NOT NULL,
+            report_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (candidate_reference, report_reference),
+            FOREIGN KEY (candidate_reference) REFERENCES configuration_candidates(candidate_reference) ON DELETE CASCADE
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_configuration_candidate_reports_digest ON configuration_candidate_reports (report_sha256)",
+        """
+        CREATE TABLE IF NOT EXISTS segment_commit_journals (
+            operation_id TEXT PRIMARY KEY,
+            segment_key TEXT NOT NULL,
+            target_path TEXT NOT NULL,
+            previous_path TEXT,
+            command_id TEXT,
+            committed INTEGER NOT NULL CHECK (committed IN (0, 1)),
+            publication_won INTEGER NOT NULL CHECK (publication_won IN (0, 1)),
+            previous_entry_json TEXT
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_segment_commit_journals_key ON segment_commit_journals (segment_key, command_id)",
+        """
+        CREATE TABLE IF NOT EXISTS segment_commit_receipts (
+            segment_key TEXT NOT NULL,
+            command_id TEXT NOT NULL,
+            target_path TEXT NOT NULL,
+            PRIMARY KEY (segment_key, command_id)
+        )
+        """,
     ),
 }

@@ -413,7 +413,15 @@ async def _run_api_server_impl(
         str(build_info.dirty_tree).lower(),
     )
     state_root = _operational_state_root(cfg)
-    marker_store = ProcessMarkerStore(state_root)
+    db = bootstrap_database_from_config(cfg) if getattr(cfg.database, "enabled", True) else None
+    try:
+        marker_store = ProcessMarkerStore(state_root, database=db)
+    except TypeError as exc:
+        # Keep narrow compatibility with injected lifecycle test doubles from
+        # before the SQLite marker repository was introduced.
+        if "database" not in str(exc):
+            raise
+        marker_store = ProcessMarkerStore(state_root)
     marker_store.start(controller_marker(instance_id=instance_id))
     marker_integration = _MarkerLifecycleIntegration(
         marker_store,
@@ -441,7 +449,6 @@ async def _run_api_server_impl(
             runtime_snapshot=orch.conductor.inspection_snapshot,
         )
     control = OrchestratorControl(orch, config_path=config_path, segment_service=segment_service)
-    db = bootstrap_database_from_config(cfg) if getattr(cfg.database, "enabled", True) else None
     diagnostic_service, context = _prepare_runtime_diagnostics(
         database=db,
         marker_store=marker_store,
@@ -608,7 +615,7 @@ async def _run_api_server_impl(
         swwp_session_factory = make_swwp_session
     reload_service = None
     if db is not None and job_service is not None:
-        candidate_store = CandidateStore(_operational_state_root(cfg) / "configuration-candidates")
+        candidate_store = CandidateStore(_operational_state_root(cfg) / "configuration-candidates", database=db)
         reload_service = ConfigurationReloadService(
             config_path=config_path,
             candidate_store=candidate_store,

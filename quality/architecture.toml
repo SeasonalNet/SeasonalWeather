@@ -268,6 +268,30 @@ controller_dependency_group = "controller"
 worker_dependency_groups = ["worker-runtime", "piper"]
 controller_forbidden_worker_dependencies = ["piper-tts"]
 
+# Restart-surviving controller state belongs in the owned database. These are
+# the only callable-level exceptions for JSON files: bounded health probes,
+# worker interchange descriptors, immutable build/diagnostic exports, and the
+# one-start legacy compatibility writers. New JSON filesystem writers must
+# use a database repository instead of adding an exception here.
+json_persistence_roots = ["seasonalweather", "scripts"]
+json_persistence_path_factories = ["_journal_path", "_receipt_path"]
+json_persistence_allowed_scripts = []
+json_persistence_allowed_callables = [
+  "seasonalweather.health_records:HealthRecordStore.write",
+  "seasonalweather.jobs.worker_client:WorkerInputStore.put",
+  "seasonalweather.build_metadata.build_info:main",
+  "seasonalweather.diagnostics.compiler:write_atomic",
+  "seasonalweather.diagnostics.exporter:_populate_stage",
+  "seasonalweather.runtime_diagnostics.marker:ProcessMarkerStore._atomic_write",
+  "seasonalweather.configuration_reload.candidate_store:CandidateStore._persist",
+  "seasonalweather.configuration_reload.candidate_store:CandidateStore.store_report",
+  "seasonalweather.broadcast.segment_store:SegmentStore._write_commit_journal",
+  "seasonalweather.broadcast.segment_store:SegmentStore._mark_publication_won",
+  "seasonalweather.broadcast.segment_store:SegmentStore._mark_commit_committed",
+  "seasonalweather.broadcast.segment_store:SegmentStore._write_commit_receipt",
+  "seasonalweather.broadcast.segment_store:SegmentStore._persist_unlocked",
+]
+
 configuration_core_roots = ["seasonalweather/configuration"]
 configuration_adapter_roots = [
   "seasonalweather/configuration/loader.py",

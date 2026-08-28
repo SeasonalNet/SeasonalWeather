@@ -32,8 +32,8 @@ Design notes:
   - DMO (Practice/Demo Warning), RWT (Required Weekly Test), and RMT (Required
     Monthly Test) are filtered at the poller level and NEVER emitted.
     SeasonalWeather manages its own test schedule independently.
-  - Deduplication: in-memory fast path + persistent CapLedger (DB-backed or JSON
-    fallback) keyed on identifier|sent, matching cap_nws.py behaviour exactly.
+  - Deduplication: in-memory fast path plus the controller-owned SQLite
+    CapLedger keyed on identifier|sent, matching cap_nws.py behaviour exactly.
     The shared cap_seen_ledger table is reused — IPAWS keys are prefixed "IPAWS:"
     so they never collide with NWS CAP entries.
 """
@@ -405,12 +405,10 @@ class IpawsCapPoller:
         # In-memory dedupe (fast path within one process lifetime)
         self._seen_keys: set[str] = set()
 
-        if not ledger_path:
-            raise ValueError("ledger_path must be supplied from the configured operational state root")
-
-        # Persistent dedupe (restart-safe, DB-backed or JSON fallback)
+        # Persistent dedupe is controller-owned SQLite state.  ``ledger_path``
+        # remains accepted for configuration compatibility but is ignored.
         self._ledger = CapLedger(
-            path=Path(ledger_path),
+            path=Path(ledger_path) if ledger_path else None,
             max_age_days=max(3, int(ledger_max_age_days)),
             database=database,
         )

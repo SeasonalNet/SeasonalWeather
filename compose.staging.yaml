@@ -1,0 +1,31 @@
+name: seasonalweather-staging
+
+# This file is an operator-supplied staging overlay.  It deliberately keeps
+# the base service graph and authority boundaries intact while giving the
+# stack its own Compose project, host ports, configuration, and secret root.
+services:
+  controller:
+    ports:
+      - "127.0.0.1:${SEASONALWEATHER_STAGING_API_PORT:-19080}:9080"
+    volumes:
+      - ${SEASONALWEATHER_STAGING_CONFIG_FILE:?SEASONALWEATHER_STAGING_CONFIG_FILE must name a staging-only config file}:/etc/seasonalweather/config.yaml:ro
+
+  liquidsoap:
+    environment:
+      SEASONALWEATHER_ICECAST_HOST: icecast
+      SEASONALWEATHER_ICECAST_PORT: "8000"
+    depends_on:
+      icecast:
+        condition: service_started
+
+  icecast:
+    ports: !override
+      - "127.0.0.1:${SEASONALWEATHER_STAGING_ICECAST_PORT:-18000}:8000"
+
+secrets:
+  ICECAST_SOURCE_PASSWORD:
+    file: ${SEASONALWEATHER_STAGING_SECRET_DIR:?SEASONALWEATHER_STAGING_SECRET_DIR must name a staging-only secret directory}/ICECAST_SOURCE_PASSWORD
+  SEASONAL_API_TOKEN:
+    file: ${SEASONALWEATHER_STAGING_SECRET_DIR:?SEASONALWEATHER_STAGING_SECRET_DIR must name a staging-only secret directory}/SEASONAL_API_TOKEN
+  SEASONAL_WORKER_TOKEN:
+    file: ${SEASONALWEATHER_STAGING_SECRET_DIR:?SEASONALWEATHER_STAGING_SECRET_DIR must name a staging-only secret directory}/SEASONAL_WORKER_TOKEN

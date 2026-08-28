@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
@@ -35,27 +34,22 @@ class RequiredTestRuntime:
             return
 
         try:
-            state_path = str(Path(orch.cfg.paths.operational_state_dir) / "rwt_rmt_state.json")
-
             sched = RwtRmtSchedule(
                 enabled=True,
                 tz_name=orch.cfg.station.timezone,
-
                 rwt_enabled=True,
                 rwt_weekday=orch.cfg.tests.rwt.weekday,
                 rwt_hour=orch.cfg.tests.rwt.hour,
                 rwt_minute=orch.cfg.tests.rwt.minute,
-
                 rmt_enabled=True,
                 rmt_nth=orch.cfg.tests.rmt.nth,
                 rmt_weekday=orch.cfg.tests.rmt.weekday,
                 rmt_hour=orch.cfg.tests.rmt.hour,
                 rmt_minute=orch.cfg.tests.rmt.minute,
-
                 jitter_seconds=orch.cfg.tests.jitter_seconds,
                 postpone_minutes=orch.cfg.tests.postpone_minutes,
                 max_postpone_hours=orch.cfg.tests.max_postpone_hours,
-                state_path=state_path,
+                state_path="",
                 state_key="rwt_rmt",
                 rwt_postpone_policy=orch.cfg.tests.rwt.postpone_policy,
                 rwt_postpone_minutes=orch.cfg.tests.rwt.postpone_minutes,
@@ -83,7 +77,7 @@ class RequiredTestRuntime:
                 required=False,
                 stop=rsch.stop,
             )
-            log.info("RWT/RMT scheduler enabled (state=%s)", state_path)
+            log.info("RWT/RMT scheduler enabled (state=sqlite)")
         except Exception:
             log.exception("Failed to start RWT/RMT scheduler")
 
@@ -110,18 +104,27 @@ class RequiredTestRuntime:
             "service_area_name": service_area_name,
             "auto_area_text": auto_area_text,
         }
-        headline = format_test_presentation_template(
-            pres.headline_template,
-            **fmt_ctx,
-        ) or f"{event_text} for the {service_area_name}"
-        area_text = format_test_presentation_template(
-            pres.area_text,
-            **fmt_ctx,
-        ) or auto_area_text
-        discord_area_text = format_test_presentation_template(
-            pres.discord_area_text,
-            **{**fmt_ctx, "area_text": area_text},
-        ) or area_text
+        headline = (
+            format_test_presentation_template(
+                pres.headline_template,
+                **fmt_ctx,
+            )
+            or f"{event_text} for the {service_area_name}"
+        )
+        area_text = (
+            format_test_presentation_template(
+                pres.area_text,
+                **fmt_ctx,
+            )
+            or auto_area_text
+        )
+        discord_area_text = (
+            format_test_presentation_template(
+                pres.discord_area_text,
+                **{**fmt_ctx, "area_text": area_text},
+            )
+            or area_text
+        )
         return headline, area_text, discord_area_text
 
     def same_codes_for_presentation(self) -> list[str]:
@@ -180,6 +183,7 @@ class RequiredTestRuntime:
         tkey = "rwt" if code == "RWT" else "rmt"
         title = orch._np_alert_title(tkey, event="")
         meta = orch._np_meta(title=title, kind="test", extra={"sw_alert_source": "local", "sw_event_code": code})
+
         async def _render_required_test():
             return await orch.audio_originator.render_alert_audio(dummy, spoken)
 

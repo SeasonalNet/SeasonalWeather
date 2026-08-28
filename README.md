@@ -109,6 +109,9 @@ Freeze products are supported natively. `FZ.W` maps to SAME `FZW` (**Freeze Warn
 - Optional external OpenAI-compatible TTS Compose credential integration,
   bounded provider responses, and fallback behavior are documented in
   [`docs/p3-05-openai-compatible.md`](docs/p3-05-openai-compatible.md).
+- Isolated alternate-stream staging, failure injection, image rollback, and
+  soak-operation boundaries are documented in
+  [`docs/p3-07-staging.md`](docs/p3-07-staging.md).
 - The versioned read-only diagnostic namespace registry, stable configuration
   codes, curated explanations, deterministic catalog build/export, and
   `seasonalweather diagnostics list|explain` commands are documented in

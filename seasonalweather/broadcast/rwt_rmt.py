@@ -5,15 +5,13 @@ import datetime as dt
 import json
 import os
 import random
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Awaitable, Callable, Optional
 from zoneinfo import ZoneInfo
-
-from .tests import normalize_postpone_policy
 
 from ..database.core import SeasonalDatabase
 from ..database.scheduler import SchedulerStateRepository
+from .tests import normalize_postpone_policy
 
 
 @dataclass(frozen=True)
@@ -27,7 +25,7 @@ class RwtRmtSchedule:
     rwt_minute: int
 
     rmt_enabled: bool
-    rmt_nth: int      # 1..5
+    rmt_nth: int  # 1..5
     rmt_weekday: int  # 0=Mon..6=Sun
     rmt_hour: int
     rmt_minute: int
@@ -58,7 +56,7 @@ class TestState:
     last_rmt_period: str = ""
 
     @staticmethod
-    def _payload_from_obj(obj: object) -> "TestState":
+    def _payload_from_obj(obj: object) -> TestState:
         if not isinstance(obj, dict):
             return TestState()
         return TestState(
@@ -72,35 +70,22 @@ class TestState:
         *,
         repository: SchedulerStateRepository | None = None,
         state_key: str = "rwt_rmt",
-    ) -> "TestState":
-        if repository is not None:
-            try:
-                row = repository.get_state(state_key)
-                if row is not None:
-                    return TestState._payload_from_obj(row.get("state") or {})
-            except Exception:
-                pass
-
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                obj = json.load(f) or {}
-            state = TestState._payload_from_obj(obj)
-            if repository is not None:
-                try:
-                    repository.upsert_state(
-                        state_key,
-                        state={
-                            "last_rwt_period": state.last_rwt_period,
-                            "last_rmt_period": state.last_rmt_period,
-                        },
-                    )
-                except Exception:
-                    pass
-            return state
-        except FileNotFoundError:
+    ) -> TestState:
+        if repository is None:
             return TestState()
+        try:
+            row = repository.get_state(state_key)
+            if row is not None:
+                return TestState._payload_from_obj(row.get("state") or {})
+            with open(path, encoding="utf-8") as handle:
+                state = TestState._payload_from_obj(json.load(handle) or {})
+            repository.upsert_state(
+                state_key,
+                state={"last_rwt_period": state.last_rwt_period, "last_rmt_period": state.last_rmt_period},
+            )
+            os.unlink(path)
+            return state
         except Exception:
-            # never crash the station because of a bad state file
             return TestState()
 
     def save(
@@ -112,27 +97,22 @@ class TestState:
         last_run_at: str | None = None,
         next_run_at: str | None = None,
     ) -> None:
+        del path
         payload = {
             "last_rwt_period": self.last_rwt_period,
             "last_rmt_period": self.last_rmt_period,
         }
-        if repository is not None:
-            try:
-                repository.upsert_state(
-                    state_key,
-                    last_run_at=last_run_at,
-                    next_run_at=next_run_at,
-                    state=payload,
-                )
-                return
-            except Exception:
-                pass
-
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2, sort_keys=True)
-        os.replace(tmp, path)
+        if repository is None:
+            return
+        try:
+            repository.upsert_state(
+                state_key,
+                last_run_at=last_run_at,
+                next_run_at=next_run_at,
+                state=payload,
+            )
+        except Exception:
+            return
 
 
 def _weekly_period_key(now: dt.datetime) -> str:
@@ -153,14 +133,11 @@ def _next_weekly(now: dt.datetime, weekday: int, hour: int, minute: int) -> dt.d
 
 
 def _days_in_month(y: int, m: int) -> int:
-    if m == 12:
-        nxt = dt.date(y + 1, 1, 1)
-    else:
-        nxt = dt.date(y, m + 1, 1)
+    nxt = dt.date(y + 1, 1, 1) if m == 12 else dt.date(y, m + 1, 1)
     return (nxt - dt.date(y, m, 1)).days
 
 
-def _nth_weekday_of_month(y: int, m: int, nth: int, weekday: int) -> Optional[dt.date]:
+def _nth_weekday_of_month(y: int, m: int, nth: int, weekday: int) -> dt.date | None:
     if nth < 1 or nth > 5:
         return None
     first = dt.date(y, m, 1)
@@ -303,20 +280,27 @@ class RwtRmtScheduler:
                 next_events.append(("RWT", due))
 
             if self.s.rmt_enabled:
-                due = _next_monthly_nth_weekday(now, self.s.rmt_nth, self.s.rmt_weekday, self.s.rmt_hour, self.s.rmt_minute) + self._jitter()
+                due = (
+                    _next_monthly_nth_weekday(
+                        now, self.s.rmt_nth, self.s.rmt_weekday, self.s.rmt_hour, self.s.rmt_minute
+                    )
+                    + self._jitter()
+                )
                 next_events.append(("RMT", due))
 
             if not next_events:
                 await asyncio.sleep(5)
                 continue
 
-            event_code, due = min(next_events, key=lambda x: (x[1], 0 if x[0] == "RMT" else 1))  # PATCH: prefer RMT on tie
+            event_code, due = min(
+                next_events, key=lambda x: (x[1], 0 if x[0] == "RMT" else 1)
+            )  # PATCH: prefer RMT on tie
             self.log(f"[RWT/RMT] next={event_code} at {due.isoformat()}")
             self.state.save(
                 self.s.state_path,
                 repository=self._repo,
                 state_key=self.s.state_key,
-                next_run_at=due.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat(),
+                next_run_at=due.astimezone(dt.UTC).replace(microsecond=0).isoformat(),
             )
 
             # wait in chunks so stop is responsive
@@ -379,14 +363,13 @@ class RwtRmtScheduler:
                 return
 
             self.log(
-                f"[RWT/RMT] gate blocked for {event_code}: {reason} "
-                f"(policy={policy} next={next_attempt.isoformat()})"
+                f"[RWT/RMT] gate blocked for {event_code}: {reason} (policy={policy} next={next_attempt.isoformat()})"
             )
             self.state.save(
                 self.s.state_path,
                 repository=self._repo,
                 state_key=self.s.state_key,
-                next_run_at=next_attempt.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat(),
+                next_run_at=next_attempt.astimezone(dt.UTC).replace(microsecond=0).isoformat(),
             )
             attempt_at = next_attempt
 
@@ -396,7 +379,7 @@ class RwtRmtScheduler:
         self.log(f"[RWT/RMT] firing {event_code}")
         await self.fire_fn(event_code)
 
-        completed_at = self._now().astimezone(dt.timezone.utc).replace(microsecond=0).isoformat()
+        completed_at = self._now().astimezone(dt.UTC).replace(microsecond=0).isoformat()
         if event_code == "RWT":
             self.state.last_rwt_period = _weekly_period_key(self._now())
         else:

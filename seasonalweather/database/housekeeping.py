@@ -34,11 +34,11 @@ _GENERATED_AUDIO_GLOBS = (
 
 
 def _utc_now() -> dt.datetime:
-    return dt.datetime.now(dt.timezone.utc)
+    return dt.datetime.now(dt.UTC)
 
 
 def _to_utc_iso(value: dt.datetime) -> str:
-    return value.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat()
+    return value.astimezone(dt.UTC).replace(microsecond=0).isoformat()
 
 
 def _safe_unlink(path: Path) -> bool:
@@ -108,7 +108,7 @@ class DatabaseHousekeeper:
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=float(startup_delay))
                 return
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
 
         log.info(
@@ -142,7 +142,7 @@ class DatabaseHousekeeper:
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=float(self._interval_seconds()))
                 break
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
 
     def _diagnose(self, code: str, message: str, exception: BaseException | None = None) -> None:
@@ -190,9 +190,8 @@ class DatabaseHousekeeper:
             wav_path = str(item.get("wav_path") or "").strip()
             if wav_path:
                 removed_files += 1 if _safe_unlink(Path(wav_path)) else 0
-            meta_path = self._uploads_dir / f"{asset_id}.json"
             if asset_id:
-                removed_files += 1 if _safe_unlink(meta_path) else 0
+                removed_files += 1 if _safe_unlink(self._uploads_dir / f"{asset_id}.json") else 0
         if expired_ids:
             removed_rows = self._assets.delete_assets(expired_ids)
 
@@ -208,45 +207,14 @@ class DatabaseHousekeeper:
         grace_cutoff = now - dt.timedelta(seconds=self._audio_asset_grace_seconds())
         grace_ts = grace_cutoff.timestamp()
         live_assets = self._assets.list_live_assets(_to_utc_iso(now))
-        live_asset_ids = {str(item.get("asset_id") or "") for item in live_assets}
         keep_wavs = {str(item.get("wav_path") or "") for item in live_assets if str(item.get("wav_path") or "").strip()}
 
-        legacy_keep_wavs: set[str] = set()
         deleted = 0
 
         for meta_path in sorted(self._uploads_dir.glob("aud_*.json")):
-            asset_id = meta_path.stem
-            if asset_id in live_asset_ids:
-                deleted += 1 if _safe_unlink(meta_path) else 0
-                continue
-            try:
-                payload = json.loads(meta_path.read_text(encoding="utf-8"))
-            except Exception:
-                payload = None
-            if isinstance(payload, dict):
-                wav_path = str(payload.get("path") or "").strip()
-                expires_raw = str(payload.get("expires_at") or "").strip()
-                keep_legacy = False
-                if wav_path:
-                    keep_legacy = True
-                    legacy_keep_wavs.add(wav_path)
-                if expires_raw:
-                    try:
-                        exp = dt.datetime.fromisoformat(expires_raw)
-                        if exp.tzinfo is None:
-                            exp = exp.replace(tzinfo=dt.timezone.utc)
-                        else:
-                            exp = exp.astimezone(dt.timezone.utc)
-                        if exp <= now:
-                            keep_legacy = False
-                    except Exception:
-                        keep_legacy = False
-                if not keep_legacy and meta_path.stat().st_mtime <= grace_ts:
-                    deleted += 1 if _safe_unlink(meta_path) else 0
-            elif meta_path.stat().st_mtime <= grace_ts:
+            if meta_path.stat().st_mtime <= grace_ts:
                 deleted += 1 if _safe_unlink(meta_path) else 0
 
-        keep_wavs.update(legacy_keep_wavs)
         for wav_path in sorted(self._uploads_dir.glob("aud_*.wav")):
             if str(wav_path) in keep_wavs:
                 continue

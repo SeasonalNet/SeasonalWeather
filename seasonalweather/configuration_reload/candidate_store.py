@@ -16,6 +16,8 @@ from typing import Any, cast
 from seasonalweather.configuration.compiler import CompiledConfiguration, compile_source
 from seasonalweather.configuration.origins import ENVIRONMENT_BINDINGS
 from seasonalweather.configuration.source import DEFAULT_LIMITS, SourceDocument
+from seasonalweather.database.core import SeasonalDatabase
+from seasonalweather.database.persistence import ConfigurationCandidateRepository
 from seasonalweather.diagnostics.bindings import RELOAD_CODES, code_for_rule
 from seasonalweather.validation.candidate_identity import canonical_report_sha256
 from seasonalweather.validation.pipeline import CandidateIdentity, EnvironmentInputIdentity
@@ -41,11 +43,13 @@ class CandidateStore:
         environ: Mapping[str, str] | None = None,
         clock: Any = lambda: dt.datetime.now(dt.UTC),
         identity_key: bytes | None = None,
+        database: SeasonalDatabase | None = None,
     ) -> None:
         self.root = Path(root)
         self._environ = os.environ if environ is None else environ
         self._clock = clock
         self._identity_key = identity_key
+        self._repository = ConfigurationCandidateRepository(database) if database is not None else None
         self._initialize_root()
 
     def _initialize_root(self) -> None:
@@ -120,7 +124,7 @@ class CandidateStore:
             environment_inputs=tuple(item.to_dict() for item in identity.environment_inputs),
             captured_at=captured_at,
         )
-        if (self.root / reference).exists():
+        if self._candidate_exists(reference):
             existing = self.load(reference)
             if self._stable_metadata(existing) != self._stable_metadata(record) or self.read_bytes(existing) != data:
                 raise CandidateIntegrityError("candidate identity collision has conflicting content") from None
@@ -157,12 +161,17 @@ class CandidateStore:
         except FileExistsError:
             existing = self.load(record.reference)
             if self._stable_metadata(existing) != self._stable_metadata(record) or self.read_bytes(existing) != data:
-                raise CandidateIntegrityError("candidate identity collision has conflicting content")
+                raise CandidateIntegrityError("candidate identity collision has conflicting content") from None
             return
         try:
             self._exclusive_write(directory / "source.bin", data, 0o600)
-            metadata = json.dumps(record.to_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-            self._exclusive_write(directory / "metadata.json", metadata, 0o600)
+            if self._repository is not None:
+                self._repository.put(record.reference, record.to_dict(), record.captured_at.isoformat())
+            else:
+                metadata = json.dumps(
+                    record.to_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+                ).encode()
+                self._exclusive_write(directory / "metadata.json", metadata, 0o600)
         except BaseException:
             for child in (directory / "source.bin", directory / "metadata.json"):
                 child.unlink(missing_ok=True)
@@ -189,7 +198,19 @@ class CandidateStore:
     def load(self, reference: str) -> CandidateRecord:
         directory = self._candidate_directory(reference)
         try:
-            payload = json.loads(self._safe_read(directory / "metadata.json", 262_144).decode())
+            if self._repository is not None:
+                payload = self._repository.get(reference)
+                if payload is None:
+                    metadata_path = directory / "metadata.json"
+                    payload = json.loads(self._safe_read(metadata_path, 262_144).decode())
+                    if not isinstance(payload, dict):
+                        raise CandidateIntegrityError("candidate metadata could not be admitted")
+                    self._repository.put(
+                        reference, payload, str(payload.get("captured_at") or self._clock().isoformat())
+                    )
+                    metadata_path.unlink()
+            else:
+                payload = json.loads(self._safe_read(directory / "metadata.json", 262_144).decode())
             return CandidateRecord(
                 reference=str(payload["reference"]),
                 source_name=str(payload["source_name"]),
@@ -227,11 +248,17 @@ class CandidateStore:
         self.verify(candidate)
         if report_ref != f"report_{report_sha256[:40]}":
             raise CandidateIntegrityError("report reference does not match its digest")
-        raw = self._safe_read(self._candidate_directory(candidate.reference) / f"{report_ref}.json", 2_097_152)
-        try:
-            payload = json.loads(raw.decode())
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise CandidateIntegrityError("validation report is malformed") from exc
+        if self._repository is not None:
+            payload = self._repository.get_report(candidate.reference, report_ref)
+            if payload is None:
+                raise CandidateIntegrityError("validation report is unavailable")
+            raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+        else:
+            raw = self._safe_read(self._candidate_directory(candidate.reference) / f"{report_ref}.json", 2_097_152)
+            try:
+                payload = json.loads(raw.decode())
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise CandidateIntegrityError("validation report is malformed") from exc
         if not isinstance(payload, dict) or canonical_report_sha256(payload) != report_sha256:
             raise CandidateIntegrityError("validation report digest does not match")
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
@@ -253,23 +280,54 @@ class CandidateStore:
         self.verify(candidate)
         digest = canonical_report_sha256(report)
         reference = f"report_{digest[:40]}"
-        path = self._candidate_directory(candidate.reference) / f"{reference}.json"
         data = json.dumps(report, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-        try:
-            self._exclusive_write(path, data, 0o600)
-        except FileExistsError:
-            if self._safe_read(path, 2_097_152) != data:
-                raise CandidateIntegrityError("report digest collision has conflicting content") from None
+        if self._repository is not None:
+            existing = self._repository.get_report(candidate.reference, reference)
+            if existing is not None:
+                existing_data = json.dumps(existing, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+                if existing_data != data:
+                    raise CandidateIntegrityError("report digest collision has conflicting content") from None
+            else:
+                legacy_path = self._candidate_directory(candidate.reference) / f"{reference}.json"
+                if legacy_path.exists():
+                    legacy = json.loads(self._safe_read(legacy_path, 2_097_152).decode())
+                    if not isinstance(legacy, dict) or canonical_report_sha256(legacy) != digest:
+                        raise CandidateIntegrityError("validation report digest does not match")
+                    self._repository.put_report(
+                        candidate.reference, reference, digest, legacy, self._clock().isoformat()
+                    )
+                    legacy_path.unlink()
+                else:
+                    self._repository.put_report(
+                        candidate.reference, reference, digest, report, self._clock().isoformat()
+                    )
+        else:
+            path = self._candidate_directory(candidate.reference) / f"{reference}.json"
+            try:
+                self._exclusive_write(path, data, 0o600)
+            except FileExistsError:
+                if self._safe_read(path, 2_097_152) != data:
+                    raise CandidateIntegrityError("report digest collision has conflicting content") from None
         return reference, digest
 
     def load_report(self, candidate: CandidateRecord, reference: str, digest: str) -> dict[str, object]:
         if reference != f"report_{digest[:40]}":
             raise CandidateIntegrityError("report reference does not match its digest")
-        raw = self._safe_read(self._candidate_directory(candidate.reference) / f"{reference}.json", 2_097_152)
-        try:
-            payload = json.loads(raw.decode())
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise CandidateIntegrityError("validation report is malformed") from exc
+        if self._repository is not None:
+            payload = self._repository.get_report(candidate.reference, reference)
+            if payload is None:
+                legacy_path = self._candidate_directory(candidate.reference) / f"{reference}.json"
+                payload = json.loads(self._safe_read(legacy_path, 2_097_152).decode())
+                if not isinstance(payload, dict):
+                    raise CandidateIntegrityError("validation report is unavailable")
+                self._repository.put_report(candidate.reference, reference, digest, payload, self._clock().isoformat())
+                legacy_path.unlink()
+        else:
+            raw = self._safe_read(self._candidate_directory(candidate.reference) / f"{reference}.json", 2_097_152)
+            try:
+                payload = json.loads(raw.decode())
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise CandidateIntegrityError("validation report is malformed") from exc
         if not isinstance(payload, dict) or canonical_report_sha256(payload) != digest:
             raise CandidateIntegrityError("validation report digest does not match")
         return payload
@@ -290,7 +348,7 @@ class CandidateStore:
         protected_references: frozenset[str],
     ) -> bool:
         reference = directory.name
-        if reference in protected_references or directory.is_symlink() or not directory.is_dir():
+        if self._candidate_is_protected(directory, reference, protected_references):
             return False
         try:
             record = self.load(reference)
@@ -304,7 +362,20 @@ class CandidateStore:
         for child in children:
             child.unlink()
         directory.rmdir()
+        if self._repository is not None:
+            self._repository.delete(reference)
         return True
+
+    @staticmethod
+    def _candidate_is_protected(
+        directory: Path, reference: str, protected_references: frozenset[str]
+    ) -> bool:
+        return reference in protected_references or directory.is_symlink() or not directory.is_dir()
+
+    def _candidate_exists(self, reference: str) -> bool:
+        if self._repository is not None:
+            return self._repository.get(reference) is not None
+        return (self.root / reference).exists()
 
     def _candidate_directory(self, reference: str) -> Path:
         if not reference.startswith("candidate_") or not reference[10:].isalnum():

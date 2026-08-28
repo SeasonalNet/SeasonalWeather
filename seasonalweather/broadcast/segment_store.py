@@ -3,7 +3,7 @@ broadcast/segment_store.py — Persistent cycle segment registry.
 
 Each cacheable segment (hwo, fcst, obs, id, etc.) has:
   - A *stable* audio file path  (cycle_seg_{key}.wav)
-  - Metadata (text, duration, freshness) persisted to JSON
+  - Metadata (text, duration, freshness) persisted to controller-owned SQLite
 
 Audio files use stable names so Liquidsoap's push queue can hold a path
 reference that is atomically replaced on refresh — no timestamp-named files
@@ -28,13 +28,14 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from collections.abc import Awaitable, Callable
+from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
-from typing import Dict, List, Optional, cast
+from typing import Any, cast
 
 from ..database.core import SeasonalDatabase
+from ..database.persistence import SegmentCommitRepository
 from ..database.segments import SegmentRepository
 from ..jobs.worker_client import SynthesisClient
 from ..tts.audio import concat_wavs, wav_duration_seconds, write_silence_wav
@@ -134,7 +135,7 @@ async def render_segment_wav_async(
 class SegmentEntry:
     """
     Metadata for one cycle segment.  Audio bytes live on disk at *audio_path*;
-    this dataclass only carries index information that is persisted to JSON.
+    this dataclass only carries index information that is persisted to SQLite.
     """
 
     key: str
@@ -277,7 +278,7 @@ def segment_entry_eligible_to_air(entry: SegmentEntry | None) -> bool:
     return path.is_file() and not path.is_symlink()
 
 
-def _entry_from_payload(item: dict) -> SegmentEntry:
+def _entry_from_payload(item: dict[str, Any]) -> SegmentEntry:
     payload = dict(item)
     payload["max_age_s"] = int(item.get("max_age_s", item.get("refresh_interval_s", 0)))
     raw_provenance = payload.pop("provenance", None)
@@ -340,7 +341,7 @@ def _successful_provenance(
 
 class SegmentStore:
     """
-    In-memory registry of cycle segment metadata, backed by a JSON index.
+    In-memory registry of cycle segment metadata, backed by controller-owned SQLite.
 
     Thread/task safety model
     ------------------------
@@ -353,7 +354,7 @@ class SegmentStore:
     so there is at most one concurrent writer in practice.
     """
 
-    INDEX_FILENAME = "segment_store.json"
+    INDEX_FILENAME = "segment_store.json"  # legacy import name; never written in DB mode
     _MAX_UNREFERENCED_GENERATIONS = 2
     _MAX_PRIVATE_CANDIDATES_PER_START = 256
     _JOURNAL_KEY_RE = re.compile(r"^_alert_[A-Za-z0-9_.:-]{1,96}$")
@@ -374,10 +375,11 @@ class SegmentStore:
         self._work_dir = Path(work_dir)
         self._audio_dir = Path(audio_dir)
         self._index_path = self._work_dir / self.INDEX_FILENAME
-        self._entries: Dict[str, SegmentEntry] = {}
+        self._entries: dict[str, SegmentEntry] = {}
         self._lock = asyncio.Lock()
         self._state_lock = threading.RLock()
         self._repo = SegmentRepository(database) if database is not None else None
+        self._commit_repo = SegmentCommitRepository(database) if database is not None else None
         self._committed_receipts: list[SegmentCommitReceipt] = []
         self._static_key_predicate = static_key_predicate or DEFAULT_SEGMENT_REGISTRY.is_managed
         self._metadata_replace_succeeded = False
@@ -427,6 +429,28 @@ class SegmentStore:
             )
 
     def _receipt_evidence_state(self, key: str, command_id: str) -> RefreshEvidenceState:
+        if self._commit_repo is not None:
+            for raw in self._commit_repo.receipts(key):
+                if raw["command_id"] != command_id:
+                    continue
+                try:
+                    target = self._validated_audio_path(raw["target"], key=key, allow_stable=False)
+                except Exception:
+                    return RefreshEvidenceState.UNRESOLVED
+                self._record_receipt(SegmentCommitReceipt(key, command_id, str(target)))
+                return RefreshEvidenceState.COMMITTED
+            # One-start compatibility import for receipts left by a prior
+            # file-backed release. SQLite remains authoritative thereafter.
+            legacy_path = self._receipt_path(key, command_id)
+            if legacy_path.exists():
+                try:
+                    receipt = self._validated_receipt_file(legacy_path)
+                except Exception:
+                    return RefreshEvidenceState.UNRESOLVED
+                self._commit_repo.put_receipt(receipt.key, receipt.command_id, receipt.target)
+                self._record_receipt(receipt)
+                return RefreshEvidenceState.COMMITTED
+            return RefreshEvidenceState.NONE
         receipt_path = self._receipt_path(key, command_id)
         if not receipt_path.exists():
             return RefreshEvidenceState.NONE
@@ -438,6 +462,15 @@ class SegmentStore:
         return RefreshEvidenceState.COMMITTED
 
     def _journal_evidence_state(self, key: str, command_id: str) -> RefreshEvidenceState:
+        if self._commit_repo is not None:
+            for journal in self._commit_repo.journals(key):
+                if journal.get("command_id") == command_id:
+                    return (
+                        RefreshEvidenceState.COMMITTED
+                        if journal.get("committed") or journal.get("publication_won")
+                        else RefreshEvidenceState.UNRESOLVED
+                    )
+            return RefreshEvidenceState.NONE
         token = self._key_token(key)
         command_prefix = f".segment-commit-{token}-{command_id}-"
         legacy_name = f".segment-commit-{token}.json"
@@ -485,6 +518,10 @@ class SegmentStore:
     def acknowledge_refresh_receipt(self, receipt: SegmentCommitReceipt) -> None:
         """Remove one receipt only after its exact command was reconciled."""
         with self._state_lock:
+            if self._commit_repo is not None:
+                self._commit_repo.delete_receipt(receipt.key, receipt.command_id)
+                self._committed_receipts = [item for item in self._committed_receipts if item != receipt]
+                return
             try:
                 self._receipt_path(receipt.key, receipt.command_id).unlink(missing_ok=True)
             except OSError:
@@ -506,6 +543,10 @@ class SegmentStore:
         self.acknowledge_refresh_receipt(receipt)
         if receipt in self._committed_receipts:
             return False
+        if self._commit_repo is not None:
+            operation_id = self._operation_id(target=Path(receipt.target), command_id=receipt.command_id)
+            self._commit_repo.delete_journal(operation_id)
+            return True
         journal_path = self._journal_path(
             receipt.key,
             self._operation_id(target=Path(receipt.target), command_id=receipt.command_id),
@@ -518,6 +559,11 @@ class SegmentStore:
         return True
 
     def _acknowledge_refresh_journal(self, command_id: str, key: str) -> bool:
+        if self._commit_repo is not None:
+            return self._acknowledge_database_refresh_journal(command_id, key)
+        return self._acknowledge_file_refresh_journal(command_id, key)
+
+    def _acknowledge_file_refresh_journal(self, command_id: str, key: str) -> bool:
         for journal_path in self._journal_paths_for_key(key):
             try:
                 journal_key, target, _previous, journal_command_id, committed, publication_won, _previous_entry = (
@@ -539,11 +585,30 @@ class SegmentStore:
                 log.exception("segment_store: failed to reconcile refresh journal key=%s", key)
         return False
 
+    def _acknowledge_database_refresh_journal(self, command_id: str, key: str) -> bool:
+        if self._commit_repo is None:
+            return False
+        for journal in self._commit_repo.journals(key):
+            if journal.get("command_id") != command_id:
+                continue
+            target = self._validated_audio_path(journal.get("target"), key=key, allow_stable=False)
+            if not (journal.get("committed") or journal.get("publication_won")) and not self._accepted_target(
+                key, target
+            ):
+                continue
+            receipt = self._write_commit_receipt(key=key, target=target, command_id=command_id)
+            self._record_receipt(receipt)
+            self.acknowledge_refresh_receipt(receipt)
+            self._commit_repo.delete_journal(str(journal["operation_id"]))
+            return receipt not in self._committed_receipts
+        return False
+
     async def reconcile_committed_refresh_commands(self, command_store: object) -> int:
         """Repair exact durable refresh identities through the CommandStore."""
-        repair = getattr(command_store, "reconcile_committed_segment_refresh", None)
-        if not callable(repair):
+        raw_repair = getattr(command_store, "reconcile_committed_segment_refresh", None)
+        if not callable(raw_repair):
             return 0
+        repair = cast(Callable[..., Awaitable[bool]], raw_repair)
         # A receipt write can fail after the segment metadata and the
         # per-operation commit journal are durable.  Reconcile journals here
         # too, so the in-process repair path has the same exact identity
@@ -562,9 +627,10 @@ class SegmentStore:
         self, command_store: object, command_id: str, key: str
     ) -> RefreshReconciliationOutcome:
         """Reconcile one exact refresh without collapsing disk outcomes."""
-        repair = getattr(command_store, "reconcile_committed_segment_refresh", None)
-        if not callable(repair):
+        raw_repair = getattr(command_store, "reconcile_committed_segment_refresh", None)
+        if not callable(raw_repair):
             return RefreshReconciliationOutcome.STILL_UNRESOLVED
+        repair = cast(Callable[..., Awaitable[bool]], raw_repair)
         outcome, receipt = await asyncio.to_thread(self._reconcile_one_pending_command, command_id, key)
         if outcome is not RefreshReconciliationOutcome.PUBLICATION_PROVEN or receipt is None:
             return outcome
@@ -636,14 +702,28 @@ class SegmentStore:
             log.exception("segment_store: failed to load entries from SQLite")
             return None
         if not raw_entries:
-            return None
+            # Import the old index once, if present. The imported SQLite rows
+            # become authoritative and the file is never rewritten.
+            return self._load_legacy_entries()
         loaded = self._load_entries_from_payload(raw_entries)
         self._reconcile_pending_commits()
         log.info("segment_store: loaded %d entries from SQLite", loaded)
         return loaded
 
+    def _load_database_commit_evidence(self) -> None:
+        if self._commit_repo is None:
+            return
+        for raw in self._commit_repo.receipts():
+            try:
+                target = self._validated_audio_path(raw["target"], key=raw["key"], allow_stable=False)
+                self._record_receipt(SegmentCommitReceipt(raw["key"], raw["command_id"], str(target)))
+            except Exception:
+                log.exception("segment_store: failed to validate SQLite refresh receipt")
+
     def _load_legacy_entries(self) -> int:
         metadata = self._reload_file_backed_entries(bootstrap=True)
+        if self._commit_repo is not None:
+            self._import_legacy_commit_evidence()
         if not metadata.readable:
             log.error("segment_store: authoritative file-backed metadata is unavailable")
             self._reconcile_pending_commits()
@@ -653,6 +733,8 @@ class SegmentStore:
         log.info("segment_store: loaded %d legacy entries from %s", loaded, self._index_path)
         if loaded and self._repo is not None:
             self._import_legacy_entries(loaded)
+        elif self._repo is not None and self._index_path.exists():
+            self._import_legacy_entries(0)
         return loaded
 
     @staticmethod
@@ -685,7 +767,7 @@ class SegmentStore:
                 raise ValueError("segment metadata key is malformed")
             if not Path(entry.audio_path).exists():
                 entry.is_placeholder = True
-                entry.provenance = SegmentProvenance(**{**asdict(entry.provenance), "placeholder": True})
+                entry.provenance = replace(entry.provenance, placeholder=True)
             return entry, None
         except Exception:
             log.warning("segment_store: staged malformed index entry: %s", item)
@@ -749,9 +831,44 @@ class SegmentStore:
         repo = cast(SegmentRepository, self._repo)
         try:
             repo.replace_entries(self._entry_record(e) for e in self._entries.values())
+            self._index_path.unlink(missing_ok=True)
             log.info("segment_store: imported %d legacy entries into SQLite", loaded)
         except Exception:
             log.exception("segment_store: failed to import legacy segment index into SQLite")
+
+    def _import_legacy_commit_evidence(self) -> None:
+        """Move valid file-backed commit witnesses into SQLite once."""
+        if self._commit_repo is None:
+            return
+        for receipt_path in sorted(self._work_dir.glob(".segment-commit-receipt-*.json")):
+            try:
+                receipt = self._validated_receipt_file(receipt_path)
+                self._commit_repo.put_receipt(receipt.key, receipt.command_id, receipt.target)
+                receipt_path.unlink()
+            except Exception:
+                log.exception("segment_store: failed to import legacy refresh receipt %s", receipt_path)
+        for journal_path in sorted(self._work_dir.glob(".segment-commit-*.json")):
+            if journal_path.name.startswith(".segment-commit-receipt-"):
+                continue
+            try:
+                key, target, previous, command_id, committed, publication_won, previous_entry = self._validated_journal(
+                    journal_path
+                )
+                self._commit_repo.put_journal(
+                    {
+                        "operation_id": self._operation_id(target=target, command_id=command_id),
+                        "key": key,
+                        "target": str(target),
+                        "previous": str(previous) if previous is not None else None,
+                        "command_id": command_id,
+                        "committed": committed,
+                        "publication_won": publication_won,
+                        "previous_entry": previous_entry,
+                    }
+                )
+                journal_path.unlink()
+            except Exception:
+                log.exception("segment_store: failed to import legacy commit journal %s", journal_path)
 
     @classmethod
     def _key_token(cls, key: str) -> str:
@@ -814,9 +931,23 @@ class SegmentStore:
         target: Path,
         previous: Path | None,
         command_id: str | None = None,
-        previous_entry: dict | None = None,
+        previous_entry: dict[str, Any] | None = None,
     ) -> None:
         operation_id = self._operation_id(target=target, command_id=command_id)
+        if self._commit_repo is not None:
+            self._commit_repo.put_journal(
+                {
+                    "key": key,
+                    "target": str(target),
+                    "previous": str(previous) if previous is not None else None,
+                    "command_id": command_id,
+                    "operation_id": operation_id,
+                    "committed": False,
+                    "publication_won": False,
+                    "previous_entry": previous_entry,
+                }
+            )
+            return
         self._durable_write(
             self._journal_path(key, operation_id),
             json.dumps(
@@ -837,6 +968,9 @@ class SegmentStore:
     def _mark_publication_won(self, *, key: str, target: Path, command_id: str | None) -> None:
         """Durably witness metadata publication before auxiliary evidence."""
         operation_id = self._operation_id(target=target, command_id=command_id)
+        if self._commit_repo is not None:
+            self._commit_repo.update_flags(operation_id, publication_won=True)
+            return
         journal_path = self._journal_path(key, operation_id)
         raw = json.loads(journal_path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
@@ -846,6 +980,9 @@ class SegmentStore:
 
     def _mark_commit_committed(self, *, key: str, target: Path, command_id: str | None) -> None:
         operation_id = self._operation_id(target=target, command_id=command_id)
+        if self._commit_repo is not None:
+            self._commit_repo.update_flags(operation_id, committed=True)
+            return
         journal_path = self._journal_path(key, operation_id)
         raw = json.loads(journal_path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
@@ -855,6 +992,9 @@ class SegmentStore:
 
     def _write_commit_receipt(self, *, key: str, target: Path, command_id: str) -> SegmentCommitReceipt:
         receipt = SegmentCommitReceipt(key=key, command_id=command_id, target=str(target))
+        if self._commit_repo is not None:
+            self._commit_repo.put_receipt(key, command_id, str(target))
+            return receipt
         self._durable_write(self._receipt_path(key, command_id), json.dumps(asdict(receipt), sort_keys=True))
         return receipt
 
@@ -919,7 +1059,7 @@ class SegmentStore:
         }
 
     @staticmethod
-    def _validated_journal_bool(journal: dict, field: str) -> bool:
+    def _validated_journal_bool(journal: dict[str, Any], field: str) -> bool:
         value = journal.get(field, False)
         if not isinstance(value, bool):
             raise ValueError(f"commit journal {field} marker is malformed")
@@ -927,7 +1067,7 @@ class SegmentStore:
 
     def _validated_journal(
         self, journal_path: Path
-    ) -> tuple[str, Path, Path | None, str | None, bool, bool, dict | None]:
+    ) -> tuple[str, Path, Path | None, str | None, bool, bool, dict[str, Any] | None]:
         journal = json.loads(journal_path.read_text(encoding="utf-8"))
         if not isinstance(journal, dict):
             raise ValueError("commit journal is not an object")
@@ -954,7 +1094,9 @@ class SegmentStore:
         previous_entry = self._validated_previous_entry(journal.get("previous_entry"), key=key, previous=previous)
         return key, target, previous, command_id, committed, publication_won, previous_entry
 
-    def _validated_previous_entry(self, raw: object, *, key: str, previous: Path | None) -> dict | None:
+    def _validated_previous_entry(
+        self, raw: object, *, key: str, previous: Path | None
+    ) -> dict[str, Any] | None:
         if raw is None:
             return None
         if not isinstance(raw, dict) or previous is None:
@@ -998,6 +1140,10 @@ class SegmentStore:
     def _reconcile_pending_commits(self) -> None:
         """Resolve prepared commits only after validating filesystem authority."""
         with self._state_lock:
+            if self._commit_repo is not None:
+                self._reconcile_database_commits()
+                self._cleanup_private_candidates()
+                return
             self._work_dir.mkdir(parents=True, exist_ok=True)
             self._reconcile_receipt_files()
             metadata = self._reload_file_backed_entries()
@@ -1021,10 +1167,67 @@ class SegmentStore:
                     log.exception("segment_store: refused unsafe commit journal %s", journal_path)
             self._cleanup_private_candidates()
 
+    def _reconcile_database_commits(self) -> None:
+        """Resolve SQLite commit witnesses against the published segment rows."""
+        if self._commit_repo is None:
+            return
+        self._load_database_commit_evidence()
+        for journal in self._commit_repo.journals():
+            try:
+                self._reconcile_database_commit(journal)
+            except Exception:
+                log.exception("segment_store: refused unsafe SQLite commit journal")
+
+    def _reconcile_database_commit(self, journal: dict[str, Any]) -> None:
+        if self._commit_repo is None:
+            return
+        key = str(journal["key"])
+        target = self._validated_audio_path(journal["target"], key=key, allow_stable=False)
+        references_target = self._metadata_references_target(key, target)
+        if (journal["committed"] or journal["publication_won"] or references_target) and target.is_file():
+            command_id = journal.get("command_id")
+            if command_id is not None:
+                receipt = self._write_commit_receipt(key=key, target=target, command_id=str(command_id))
+                self._record_receipt(receipt)
+            self._commit_repo.delete_journal(str(journal["operation_id"]))
+            return
+        if journal["committed"] or journal["publication_won"]:
+            log.warning("segment_store: retained contradictory committed SQLite journal key=%s", key)
+            return
+        self._reconcile_uncommitted_database_commit(journal, key, target, references_target)
+
+    def _reconcile_uncommitted_database_commit(
+        self, journal: dict[str, Any], key: str, target: Path, references_target: bool
+    ) -> None:
+        if self._commit_repo is None:
+            return
+        previous = journal.get("previous")
+        previous_entry = journal.get("previous_entry")
+        if previous and previous_entry and Path(previous).is_file():
+            self._restore_previous_entry(key, Path(previous), previous_entry)
+            self._commit_repo.delete_journal(str(journal["operation_id"]))
+        elif target.exists():
+            self._remove_unreferenced_target(key, target)
+            self._commit_repo.delete_journal(str(journal["operation_id"]))
+        elif not references_target:
+            self._commit_repo.delete_journal(str(journal["operation_id"]))
+
     def _reconcile_one_pending_command(
         self, command_id: str, key: str
     ) -> tuple[RefreshReconciliationOutcome, SegmentCommitReceipt | None]:
         with self._state_lock:
+            if self._commit_repo is not None:
+                self._reconcile_database_commits()
+                receipt = next(
+                    (item for item in self._committed_receipts if item.command_id == command_id and item.key == key),
+                    None,
+                )
+                if receipt is not None:
+                    return RefreshReconciliationOutcome.PUBLICATION_PROVEN, receipt
+                state = self.refresh_evidence_state(key, command_id)
+                if state is RefreshEvidenceState.UNRESOLVED:
+                    return RefreshReconciliationOutcome.STILL_UNRESOLVED, None
+                return RefreshReconciliationOutcome.PUBLICATION_NOT_PROVEN, None
             self._work_dir.mkdir(parents=True, exist_ok=True)
             metadata = self._reload_file_backed_entries()
             target = self._exact_journal_target(key, command_id)
@@ -1050,6 +1253,14 @@ class SegmentStore:
         return RefreshReconciliationOutcome.PUBLICATION_NOT_PROVEN, None
 
     def _exact_journal_target(self, key: str, command_id: str | None) -> Path | None:
+        if self._commit_repo is not None:
+            for journal in self._commit_repo.journals(key):
+                if journal.get("command_id") == command_id:
+                    try:
+                        return self._validated_audio_path(journal.get("target"), key=key, allow_stable=False)
+                    except Exception:
+                        return None
+            return None
         for journal_path in self._journal_paths_for_key(key):
             try:
                 journal_key, target, _previous, journal_command_id, _committed, _publication_won, _previous_entry = (
@@ -1062,6 +1273,9 @@ class SegmentStore:
         return None
 
     def _load_exact_receipt(self, key: str, command_id: str) -> None:
+        if self._commit_repo is not None:
+            self._receipt_evidence_state(key, command_id)
+            return
         receipt_path = self._receipt_path(key, command_id)
         if not receipt_path.exists():
             return
@@ -1073,6 +1287,9 @@ class SegmentStore:
     def _reconcile_exact_journals(
         self, key: str, command_id: str, *, entries: dict[str, SegmentEntry] | None = None
     ) -> None:
+        if self._commit_repo is not None:
+            self._reconcile_database_commits()
+            return
         for journal_path in self._journal_paths_for_key(key):
             try:
                 journal_key, _target, _previous, journal_command_id, _committed, _publication_won, _previous_entry = (
@@ -1113,7 +1330,7 @@ class SegmentStore:
         log.info("segment_store: reconciled committed segment key=%s", key)
 
     def _restore_reconciled_journal(
-        self, journal_path: Path, key: str, previous: Path | None, previous_entry: dict | None
+        self, journal_path: Path, key: str, previous: Path | None, previous_entry: dict[str, Any] | None
     ) -> None:
         if self._restore_previous_entry(key, previous, previous_entry):
             journal_path.unlink(missing_ok=True)
@@ -1151,7 +1368,9 @@ class SegmentStore:
             return False
         return True
 
-    def _restore_previous_entry(self, key: str, previous: Path | None, previous_entry: dict | None) -> bool:
+    def _restore_previous_entry(
+        self, key: str, previous: Path | None, previous_entry: dict[str, Any] | None
+    ) -> bool:
         if previous is None or previous_entry is None or not previous.is_file():
             return False
         restored = _entry_from_payload(dict(previous_entry))
@@ -1193,6 +1412,9 @@ class SegmentStore:
 
     def _guard_unresolved_same_key_publication(self, key: str) -> None:
         """Do not supersede a commit whose publication boundary is unresolved."""
+        if self._commit_repo is not None:
+            self._guard_database_unresolved_publication(key)
+            return
         for journal_path in self._journal_paths_for_key(key):
             try:
                 journal_key, target, _previous, command_id, committed, publication_won, _previous_entry = (
@@ -1208,8 +1430,32 @@ class SegmentStore:
                     else:
                         raise SegmentCommitAmbiguousError(key=key, command_id=command_id)
 
+    def _guard_database_unresolved_publication(self, key: str) -> None:
+        if self._commit_repo is None:
+            return
+        for journal in self._commit_repo.journals(key):
+            if journal["committed"] or journal["publication_won"]:
+                continue
+            target = self._validated_audio_path(journal["target"], key=key, allow_stable=False)
+            if not target.exists() and not self._metadata_references_target(key, target):
+                self._commit_repo.delete_journal(str(journal["operation_id"]))
+            else:
+                raise SegmentCommitAmbiguousError(key=key, command_id=journal.get("command_id"))
+
     def _pending_recovery_targets(self, key: str) -> set[Path]:
         targets: set[Path] = set()
+        if self._commit_repo is not None:
+            for journal in self._commit_repo.journals(key):
+                try:
+                    targets.add(self._validated_audio_path(journal["target"], key=key, allow_stable=False).resolve())
+                except Exception:
+                    continue
+            for receipt in self._commit_repo.receipts(key):
+                try:
+                    targets.add(self._validated_audio_path(receipt["target"], key=key, allow_stable=False).resolve())
+                except Exception:
+                    continue
+            return targets
         for journal_path in self._journal_paths_for_key(key):
             target = self._pending_journal_target(journal_path, key)
             if target is not None:
@@ -1259,14 +1505,14 @@ class SegmentStore:
         except OSError:
             log.warning("segment_store: bounded cleanup failed path=%s", path)
 
-    def _load_entries_from_payload(self, items: List[dict]) -> int:
+    def _load_entries_from_payload(self, items: list[dict[str, Any]]) -> int:
         loaded = 0
         for item in items:
             try:
                 e = _entry_from_payload(item)
                 if not Path(e.audio_path).exists():
                     e.is_placeholder = True
-                    e.provenance = SegmentProvenance(**{**asdict(e.provenance), "placeholder": True})
+                    e.provenance = replace(e.provenance, placeholder=True)
                 self._entries[e.key] = e
                 loaded += 1
             except Exception:
@@ -1299,7 +1545,7 @@ class SegmentStore:
         _fsync_directory(self._work_dir)
 
     @staticmethod
-    def _entry_record(entry: SegmentEntry) -> dict:
+    def _entry_record(entry: SegmentEntry) -> dict[str, Any]:
         record = asdict(entry)
         provenance = record.pop("provenance", {})
         if "current_content_hash" in provenance:
@@ -1342,6 +1588,17 @@ class SegmentStore:
         )
 
     def _finish_committed_candidate(self, *, key: str, target: Path, command_id: str | None) -> None:
+        if self._commit_repo is not None:
+            if command_id is not None:
+                try:
+                    self._record_receipt(self._write_commit_receipt(key=key, target=target, command_id=command_id))
+                except OSError:
+                    # The SQLite journal remains the durable witness and can
+                    # materialize the receipt during the next reconciliation.
+                    log.warning("segment_store: failed to write durable refresh receipt key=%s", key)
+                    return
+            self._commit_repo.delete_journal(self._operation_id(target=target, command_id=command_id))
+            return
         journal_path = self._journal_path(key, self._operation_id(target=target, command_id=command_id))
         if command_id is not None:
             try:
@@ -1464,10 +1721,10 @@ class SegmentStore:
     #  Read API  (no lock required)
     # ------------------------------------------------------------------
 
-    def get(self, key: str) -> Optional[SegmentEntry]:
+    def get(self, key: str) -> SegmentEntry | None:
         return self._entries.get(key)
 
-    def all_keys(self) -> List[str]:
+    def all_keys(self) -> list[str]:
         return list(self._entries.keys())
 
     def is_stale(self, key: str) -> bool:
@@ -1479,7 +1736,7 @@ class SegmentStore:
         """True if entry exists, has audio on disk, and is not a placeholder."""
         return segment_entry_eligible_to_air(self._entries.get(key))
 
-    def health_snapshot(self) -> Dict[str, int | float]:
+    def health_snapshot(self) -> dict[str, int | float]:
         """Return bounded freshness counts without exposing text or paths."""
         entries = tuple(self._entries.values())
         now = time.time()
@@ -1564,7 +1821,7 @@ class SegmentStore:
                 provenance = (existing.provenance if existing is not None else SegmentProvenance()).after_failure(
                     error or "content unavailable"
                 )
-                provenance = SegmentProvenance(**{**asdict(provenance), "placeholder": True})
+                provenance = replace(provenance, placeholder=True)
                 self._entries[key] = SegmentEntry(
                     key=key,
                     title=title,
@@ -1673,11 +1930,9 @@ class SegmentStore:
             entry = self._entries.get(key)
             if entry is None:
                 return
-            entry.provenance = SegmentProvenance(
-                **{
-                    **asdict(entry.provenance),
-                    "last_aired": aired_at,
-                    "next_eligible_airtime": next_eligible_airtime,
-                }
+            entry.provenance = replace(
+                entry.provenance,
+                last_aired=aired_at,
+                next_eligible_airtime=next_eligible_airtime,
             )
             self._persist_unlocked()

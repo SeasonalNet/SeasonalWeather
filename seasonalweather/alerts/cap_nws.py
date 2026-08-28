@@ -18,7 +18,6 @@ import random
 import re
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Iterable
 
 import httpx2
@@ -33,12 +32,6 @@ from ..same.locations import (
 )
 
 log = logging.getLogger("seasonalweather.cap")
-
-
-def _required_ledger_path(value: str | None) -> str:
-    if not value:
-        raise ValueError("ledger_path must be supplied from the configured operational state root")
-    return value
 
 
 # Marine SAME FIPS "SS" (digits 1-2 of PSSCCC) that do not map to a state
@@ -278,8 +271,8 @@ class NwsCapPoller:
         self._seen_keys: set[str] = set()
 
         # Persistent dedupe (prevents restart spam)
+        del ledger_path
         self._ledger = CapLedger(
-            path=Path(_required_ledger_path(ledger_path)),
             max_age_days=ledger_max_age_days,
             database=database,
         )

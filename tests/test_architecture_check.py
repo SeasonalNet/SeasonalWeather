@@ -45,6 +45,75 @@ piper = ["fastapi==0.139.0"]
     assert [finding.rule for finding in findings] == ["SWARCH052", "SWARCH053", "SWARCH053"]
 
 
+def test_json_persistence_rule_rejects_json_path_filesystem_mutation(tmp_path):
+    probe = tmp_path / "seasonalweather" / "runtime.py"
+    probe.parent.mkdir(parents=True)
+    probe.write_text(
+        """
+from pathlib import Path
+import os
+
+def persist(root: Path, name: str) -> None:
+    target = root / f"{name}.json"
+    os.replace(root / ".state.tmp", target)
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config = {**CONFIG, "json_persistence_allowed_callables": []}
+    findings = scan(tmp_path, config)
+
+    assert [(finding.rule, finding.path, finding.line) for finding in findings] == [
+        ("SWARCH057", "seasonalweather/runtime.py", 6),
+    ]
+
+
+def test_json_persistence_rule_rejects_hidden_json_writer_path(tmp_path):
+    probe = tmp_path / "seasonalweather" / "runtime.py"
+    probe.parent.mkdir(parents=True)
+    probe.write_text(
+        """
+import json
+import os
+from pathlib import Path
+
+def persist(path: Path, value: dict[str, object]) -> None:
+    encoded = json.dumps(value).encode()
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT)
+    os.write(fd, encoded)
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config = {**CONFIG, "json_persistence_allowed_callables": []}
+    findings = scan(tmp_path, config)
+
+    assert [(finding.rule, finding.path, finding.line) for finding in findings] == [
+        ("SWARCH057", "seasonalweather/runtime.py", 7),
+    ]
+
+
+def test_json_persistence_rule_allows_only_reviewed_non_persistence_boundaries():
+    findings = scan(ROOT, CONFIG)
+
+    assert not any(finding.rule == "SWARCH057" for finding in findings)
+
+
+def test_json_persistence_rule_rejects_script_redirection(tmp_path):
+    probe = tmp_path / "scripts" / "persist.sh"
+    probe.parent.mkdir(parents=True)
+    probe.write_text("printf '{}\\n' > \"$STATE_DIR/state.json\"\n", encoding="utf-8")
+
+    config = {**CONFIG, "json_persistence_allowed_scripts": []}
+    findings = scan(tmp_path, config)
+
+    assert [(finding.rule, finding.path, finding.line) for finding in findings] == [
+        ("SWARCH057", "scripts/persist.sh", 1),
+    ]
+
+
 def test_invalid_architecture_fixture_proves_rules_fail_closed():
     findings = scan(FIXTURES / "invalid", CONFIG)
 

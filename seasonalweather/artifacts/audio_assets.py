@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import datetime as dt
 import hashlib
 import json
@@ -152,6 +151,12 @@ class AudioAssetService:
         return self._probe(destination)
 
     async def stage_upload(self, *, filename: str, content_type: str, data: bytes, actor: str) -> dict[str, Any]:
+        if self._repository is None:
+            raise ControlError(
+                "database_unavailable",
+                "Uploaded audio requires the controller-owned database.",
+                status_code=503,
+            )
         rejection = validate_wav_upload(
             filename=filename,
             content_type=content_type,
@@ -172,7 +177,6 @@ class AudioAssetService:
         asset_dir = self._asset_dir()
         source_path = asset_dir / f"{asset_id}.upload.wav"
         wav_path = asset_dir / f"{asset_id}.wav"
-        metadata_path = asset_dir / f"{asset_id}.json"
         source_path.write_bytes(data)
         try:
             probe = self._normalize(source=source_path, destination=wav_path)
@@ -198,32 +202,30 @@ class AudioAssetService:
             "path": str(wav_path),
             "actor": actor,
         }
-        if self._repository is not None:
-            try:
-                self._repository.upsert_asset(metadata)
-            except Exception:
-                metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
-        else:
-            metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
+        self._repository.upsert_asset(metadata)
         return {key: value for key, value in metadata.items() if key not in {"path", "actor"}}
 
     def load(self, asset_id: str) -> dict[str, Any]:
-        metadata_path = self._asset_dir() / f"{asset_id}.json"
-        metadata: dict[str, Any] | None = None
-        if self._repository is not None:
-            try:
-                metadata = self._repository.get_asset(asset_id)
-            except Exception:
-                metadata = None
+        if self._repository is None:
+            raise ControlError(
+                "database_unavailable", "Audio assets require the controller-owned database.", status_code=503
+            )
+        metadata = self._repository.get_asset(asset_id)
         if metadata is None:
-            if not metadata_path.exists():
-                raise NotFoundError(
-                    "audio_asset_not_found", "Audio asset was not found.", details={"audio_asset_id": asset_id}
-                )
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-            if self._repository is not None:
-                with contextlib.suppress(Exception):
-                    self._repository.upsert_asset(metadata)
+            legacy_path = self._asset_dir() / f"{asset_id}.json"
+            if legacy_path.exists():
+                try:
+                    legacy = json.loads(legacy_path.read_text(encoding="utf-8"))
+                    if isinstance(legacy, dict):
+                        metadata = legacy
+                        self._repository.upsert_asset(metadata)
+                        legacy_path.unlink()
+                except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                    metadata = None
+        if metadata is None:
+            raise NotFoundError(
+                "audio_asset_not_found", "Audio asset was not found.", details={"audio_asset_id": asset_id}
+            )
 
         expires_at = dt.datetime.fromisoformat(metadata["expires_at"])
         if expires_at.tzinfo is None:

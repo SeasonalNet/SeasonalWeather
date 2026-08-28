@@ -10,38 +10,30 @@ from __future__ import annotations
 #      MMMMMMMMMMM                                                Seasonal_Currency      MMMMMMMMMMM                                                            .88
 #                                                                                                                                                           d8888P.
 # =========================================================================================
-
 import datetime as dt
-import json
-import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional
 
 from ..database.alerts import CapLedgerRepository
 from ..database.core import SeasonalDatabase
 
 
 def _utcnow() -> dt.datetime:
-    return dt.datetime.now(tz=dt.timezone.utc)
+    return dt.datetime.now(tz=dt.UTC)
 
 
-def _parse_iso(s: str) -> Optional[dt.datetime]:
+def _parse_iso(s: str) -> dt.datetime | None:
     try:
         if not s:
             return None
         # Accept "Z" or offset forms; normalize to aware UTC
         s2 = s.strip().replace("Z", "+00:00")
         t = dt.datetime.fromisoformat(s2)
-        if t.tzinfo is None:
-            # Treat naive timestamps as UTC (older ledgers, edits, bugs)
-            t = t.replace(tzinfo=dt.timezone.utc)
-        else:
-            t = t.astimezone(dt.timezone.utc)
+        # Treat naive timestamps as UTC (older ledgers, edits, bugs).
+        t = t.replace(tzinfo=dt.UTC) if t.tzinfo is None else t.astimezone(dt.UTC)
         return t
     except Exception:
         return None
-
 
 
 @dataclass
@@ -51,27 +43,17 @@ class CapLedger:
 
     Keys are typically "{logical_alert_id}|{sent_iso}" so updates still emit once.
     """
-    path: Path
+
+    path: Path | None = None
     max_age_days: int = 14
     database: SeasonalDatabase | None = None
 
-    _seen: Dict[str, str] = None  # type: ignore[assignment]
+    _seen: dict[str, str] = field(default_factory=dict)
     _loaded: bool = False
+    _repo: CapLedgerRepository | None = field(init=False, default=None, repr=False)
 
     def __post_init__(self) -> None:
         self._repo = CapLedgerRepository(self.database) if self.database is not None else None
-
-    def _load_legacy_json(self) -> None:
-        try:
-            if not self.path.exists():
-                return
-            raw = self.path.read_text(encoding="utf-8")
-            data = json.loads(raw)
-            seen = data.get("seen", {})
-            if isinstance(seen, dict):
-                self._seen = {str(k): str(v) for k, v in seen.items()}
-        except Exception:
-            self._seen = {}
 
     def _load(self) -> None:
         if self._loaded:
@@ -85,14 +67,6 @@ class CapLedger:
             except Exception:
                 self._seen = {}
 
-        if not self._seen:
-            self._load_legacy_json()
-            if self._seen and self._repo is not None:
-                try:
-                    self._repo.replace_entries(self._seen)
-                except Exception:
-                    pass
-
         self.cleanup()
 
     def _save(self) -> None:
@@ -101,19 +75,7 @@ class CapLedger:
                 self._repo.replace_entries(self._seen)
                 return
             except Exception:
-                pass
-
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_name(self.path.name + ".tmp")
-
-        data = {
-            "version": 1,
-            "updated_utc": _utcnow().isoformat(),
-            "seen": self._seen,
-        }
-
-        tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
-        os.replace(str(tmp), str(self.path))
+                return
 
     @staticmethod
     def make_key(alert_id: str, sent: str | None) -> str:
@@ -136,7 +98,7 @@ class CapLedger:
             return
 
         cutoff = _utcnow() - dt.timedelta(days=max(3, int(self.max_age_days)))
-        out: Dict[str, str] = {}
+        out: dict[str, str] = {}
 
         for k, v in self._seen.items():
             t = _parse_iso(v)

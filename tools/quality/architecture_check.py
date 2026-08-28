@@ -143,7 +143,7 @@ def _import_cycle_findings(root: Path, config: dict[str, Any]) -> list[Finding]:
     for component in _strongly_connected_components(graph):
         component_set = set(component)
         cyclic = len(component) > 1 and any(_matches_prefix(node, cycle_roots) for node in component)
-        if not cyclic:
+        if not cyclic or not component:
             continue
         cycle_text = " -> ".join((*component, component[0]))
         for module in component:
@@ -278,6 +278,249 @@ def _filesystem_mutation(node: ast.Call, path_variables: set[str]) -> str | None
     return None
 
 
+_JSON_SERIALIZERS = {"json.dump", "json.dumps"}
+_JSON_PATH_FACTORY_NAMES = {"_journal_path", "_receipt_path"}
+_JSON_WRITE_METHODS = {"dump", "persist", "save", "store", "write", "write_bytes", "write_text"}
+_JSON_FILE_MUTATIONS = {
+    "os.open",
+    "os.rename",
+    "os.replace",
+    "Path.replace",
+    "pathlib.Path.replace",
+}
+_JSON_SHELL_MUTATION = re.compile(
+    r"(?:>>?|\b(?:cp|install|mv)\b)[^#\n]*\.json\b|\.json\b[^#\n]*(?:>>?|\b(?:cp|install|mv)\b)", re.IGNORECASE
+)
+
+
+def _symbol(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        owner = _symbol(node.value)
+        return f"{owner}.{node.attr}" if owner else node.attr
+    return None
+
+
+def _string_literals(node: ast.AST) -> Iterable[str]:
+    for child in ast.walk(node):
+        if isinstance(child, ast.Constant) and isinstance(child.value, str):
+            yield child.value
+        elif isinstance(child, ast.JoinedStr):
+            for value in child.values:
+                if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                    yield value.value
+
+
+def _looks_like_json_path(node: ast.AST, symbols: set[str], path_factories: set[str]) -> bool:
+    symbol = _symbol(node)
+    if symbol is not None and (symbol in symbols or symbol.rpartition(".")[2] in symbols):
+        return True
+    if any(value.casefold().endswith(".json") or ".json" in value.casefold() for value in _string_literals(node)):
+        return True
+    if isinstance(node, ast.Call):
+        call = _qualified_call(node)
+        if call.rpartition(".")[2] in path_factories:
+            return True
+        if call.rpartition(".")[2] in {"with_name", "with_suffix"}:
+            return any(_looks_like_json_path(argument, symbols, path_factories) for argument in node.args)
+        if call in {"Path", "pathlib.Path"}:
+            return any(_looks_like_json_path(argument, symbols, path_factories) for argument in node.args)
+        return False
+    if isinstance(node, ast.BinOp):
+        return _looks_like_json_path(node.left, symbols, path_factories) or _looks_like_json_path(
+            node.right, symbols, path_factories
+        )
+    if isinstance(node, ast.IfExp):
+        return any(_looks_like_json_path(child, symbols, path_factories) for child in (node.body, node.orelse))
+    return False
+
+
+def _json_path_symbols(tree: ast.AST, path_factories: set[str]) -> set[str]:
+    symbols: set[str] = set()
+    changed = True
+    assignments = [node for node in ast.walk(tree) if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr))]
+    while changed:
+        changed = False
+        for node in assignments:
+            targets: list[ast.expr]
+            value: ast.expr | None
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+                value = node.value
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+                value = node.value
+            else:
+                targets = [node.target]
+                value = node.value
+            if value is None or not _looks_like_json_path(value, symbols, path_factories):
+                continue
+            for target in targets:
+                target_symbol = _symbol(target)
+                if target_symbol is not None and target_symbol not in symbols:
+                    symbols.add(target_symbol)
+                    changed = True
+    return symbols
+
+
+def _open_mode(node: ast.Call) -> str | None:
+    mode: object = None
+    if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
+        mode = node.args[1].value
+    for keyword in node.keywords:
+        if keyword.arg == "mode" and isinstance(keyword.value, ast.Constant):
+            mode = keyword.value.value
+    return mode if isinstance(mode, str) else None
+
+
+def _os_open_is_read_only(node: ast.Call) -> bool:
+    if len(node.args) < 2:
+        return False
+    flags = ast.unparse(node.args[1])
+    return "O_RDONLY" in flags and not any(token in flags for token in ("O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC"))
+
+
+def _json_file_mutation(node: ast.Call, symbols: set[str], path_factories: set[str]) -> str | None:
+    call = _qualified_call(node)
+    if call == "open" or (isinstance(node.func, ast.Attribute) and node.func.attr == "open"):
+        path = (
+            node.args[0]
+            if node.args
+            else next((keyword.value for keyword in node.keywords if keyword.arg in {"file", "path"}), None)
+        )
+        mode = _open_mode(node)
+        if (
+            path is not None
+            and mode is not None
+            and any(flag in mode for flag in "wax+")
+            and _looks_like_json_path(path, symbols, path_factories)
+        ):
+            return call
+        return None
+    if call == "os.open":
+        path = node.args[0] if node.args else None
+        if (
+            path is not None
+            and not _os_open_is_read_only(node)
+            and _looks_like_json_path(path, symbols, path_factories)
+        ):
+            return call
+        return None
+    if call in {"os.replace", "os.rename"}:
+        path = node.args[1] if len(node.args) > 1 else None
+        if path is not None and _looks_like_json_path(path, symbols, path_factories):
+            return call
+        return None
+    if isinstance(node.func, ast.Attribute):
+        owner = node.func.value
+        if node.func.attr in {"write_bytes", "write_text", "replace"}:
+            if _looks_like_json_path(owner, symbols, path_factories):
+                return f"{_symbol(owner) or 'path'}.{node.func.attr}"
+            return None
+        if (
+            node.func.attr in _JSON_WRITE_METHODS
+            and node.args
+            and _looks_like_json_path(node.args[0], symbols, path_factories)
+        ):
+            return call
+    return None
+
+
+def _filesystem_write_call(node: ast.Call) -> bool:
+    call = _qualified_call(node)
+    if call in _JSON_FILE_MUTATIONS or call in {"os.fdopen", "os.write", "Path.write_bytes", "Path.write_text"}:
+        return True
+    if call == "open" or (isinstance(node.func, ast.Attribute) and node.func.attr == "open"):
+        mode = _open_mode(node)
+        return mode is not None and any(flag in mode for flag in "wax+")
+    if call == "os.open":
+        return not _os_open_is_read_only(node)
+    return isinstance(node.func, ast.Attribute) and node.func.attr in {"write_bytes", "write_text"}
+
+
+def _json_persistence_callable(module: str, classes: list[str], functions: list[str]) -> str:
+    owner = ".".join([*classes, *functions])
+    return f"{module}:{owner}" if owner else module
+
+
+class _JsonPersistenceVisitor(ast.NodeVisitor):
+    def __init__(self, module: str) -> None:
+        self.module = module
+        self.classes: list[str] = []
+        self.functions: list[str] = []
+        self.calls: dict[str, list[ast.Call]] = {}
+
+    def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        self.functions.append(node.name)
+        self.generic_visit(node)
+        self.functions.pop()
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._visit_function(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._visit_function(node)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self.classes.append(node.name)
+        self.generic_visit(node)
+        self.classes.pop()
+
+    def visit_Call(self, node: ast.Call) -> None:
+        callable_name = _json_persistence_callable(self.module, self.classes, self.functions)
+        self.calls.setdefault(callable_name, []).append(node)
+        self.generic_visit(node)
+
+
+def _json_persistence_findings(
+    relative: str,
+    module: str,
+    tree: ast.AST,
+    config: dict[str, Any],
+) -> list[Finding]:
+    roots = config.get("json_persistence_roots", ["seasonalweather"])
+    if not _under(relative, roots):
+        return []
+    symbols = _json_path_symbols(tree, set(config.get("json_persistence_path_factories", _JSON_PATH_FACTORY_NAMES)))
+    visitor = _JsonPersistenceVisitor(module)
+    visitor.visit(tree)
+    allowed = set(config.get("json_persistence_allowed_callables", []))
+    path_factories = set(config.get("json_persistence_path_factories", _JSON_PATH_FACTORY_NAMES))
+    findings: list[Finding] = []
+    for callable_name, calls in visitor.calls.items():
+        if callable_name in allowed:
+            continue
+        direct = [
+            (node, mutation)
+            for node in calls
+            if (mutation := _json_file_mutation(node, symbols, path_factories)) is not None
+        ]
+        if direct:
+            findings.extend(
+                Finding(
+                    relative,
+                    node.lineno,
+                    "SWARCH057",
+                    f"JSON file persistence must use the database authority; filesystem mutation via {mutation}",
+                )
+                for node, mutation in direct
+            )
+            continue
+        serializers = [node for node in calls if _qualified_call(node) in _JSON_SERIALIZERS]
+        mutations = [node for node in calls if _filesystem_write_call(node)]
+        if serializers and mutations:
+            findings.append(
+                Finding(
+                    relative,
+                    mutations[0].lineno,
+                    "SWARCH057",
+                    "JSON serialization and filesystem writing must not form an unapproved persistence path",
+                )
+            )
+    return findings
+
+
 def _under(path: str, roots: Iterable[str]) -> bool:
     return any(path == root or path.startswith(f"{root}/") for root in roots)
 
@@ -399,6 +642,7 @@ def scan(root: Path, config: dict[str, Any], exceptions: list[dict[str, Any]] | 
         path_variables = _path_variables(tree)
         is_worker = _matches_prefix(module, worker_roots)
         is_controller = _matches_prefix(module, controller_roots) and not is_worker
+        findings.extend(_json_persistence_findings(relative, module, tree, config))
 
         if _under(relative, config.get("segment_api_roots", [])):
             for imported, line in imports:
@@ -1183,6 +1427,17 @@ def scan(root: Path, config: dict[str, Any], exceptions: list[dict[str, Any]] | 
                 continue
             for line_number, line in enumerate(lines, start=1):
                 lowered = line.lower()
+                if relative not in config.get("json_persistence_allowed_scripts", []) and _JSON_SHELL_MUTATION.search(
+                    line
+                ):
+                    findings.append(
+                        Finding(
+                            relative,
+                            line_number,
+                            "SWARCH057",
+                            "JSON file persistence must use the database authority; shell filesystem mutation detected",
+                        )
+                    )
                 for term in config["script_forbidden_shell_terms"]:
                     if term.lower() in lowered:
                         findings.append(

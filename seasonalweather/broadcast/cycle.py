@@ -4,7 +4,7 @@ import datetime as dt
 import json
 import os
 import re
-import tempfile
+from pathlib import Path
 from dataclasses import dataclass, replace
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, cast
 from zoneinfo import ZoneInfo
@@ -815,6 +815,7 @@ class CycleBuilder:
         cycle_cfg=None,
         registry: ResolvedSegmentRegistry | None = None,
         work_dir: str | None = None,
+        database=None,
     ) -> None:
         self.api = api
         self.tz = ZoneInfo(tz_name)
@@ -823,16 +824,14 @@ class CycleBuilder:
         self.same_fips = set(same_fips_all)
         self._cycle_cfg = cycle_cfg  # CycleConfig | None — None falls back to hardcoded defaults
         self._registry = registry or DEFAULT_SEGMENT_REGISTRY.resolve_for_cycle(cycle_cfg)
-        # Pressure cache for RWR trend derivation (survives restarts)
-        import os as _os
-
-        cache_root = work_dir or tempfile.gettempdir()
-        _cache_path = _os.path.join(cache_root, "obs_pressure_cache.json")
+        # Pressure cache for RWR trend derivation (survives restarts in SQLite).
+        legacy_path = str(Path(work_dir) / "obs_pressure_cache.json") if work_dir else None
         _rwr = cycle_cfg.rwr if cycle_cfg else None
         self._pressure_cache = ObsPressureCache(
-            path=_cache_path,
+            path=legacy_path,
             max_hours=float(_rwr.pressure_cache_hours) if _rwr else 3.0,
             trend_threshold_inhg=float(_rwr.pressure_trend_threshold_inhg) if _rwr else 0.02,
+            database=database,
         )
 
         # Observation station naming
@@ -1189,7 +1188,7 @@ class CycleBuilder:
             "HIGH": 8,
         }
 
-        def get_attr(attrs: dict, *names: str):
+        def get_attr(attrs: dict[str, Any], *names: str) -> Any:
             for n in names:
                 if n in attrs:
                     return attrs.get(n)
@@ -1257,7 +1256,7 @@ class CycleBuilder:
         if layer_id is None:
             return 0
 
-        def get_attr(attrs: dict, *names: str):
+        def get_attr(attrs: dict[str, Any], *names: str) -> Any:
             for n in names:
                 if n in attrs:
                     return attrs.get(n)
@@ -1605,6 +1604,8 @@ class CycleBuilder:
             return None
         if not rwr_product or not rwr_product.marine_stations:
             return None
+        if self._cycle_cfg is None:
+            return None
         cfg = self._cycle_cfg.marine_obs
         return build_marine_obs_text(
             product=rwr_product,
@@ -1706,7 +1707,7 @@ class CycleBuilder:
             return min(max_points, 3)
         return max_points
 
-    def _forecast_settings(self, ctx: CycleContext) -> tuple[int, str, int, int, int, list]:
+    def _forecast_settings(self, ctx: CycleContext) -> tuple[int, str, int, int, int, list[tuple[str, str]]]:
         field = "shortForecast" if (self._cycle_cfg.fc.use_short if self._cycle_cfg else True) else "detailedForecast"
         max_periods = 1 if ctx.mode == "heightened" else (self._cycle_cfg.fc.periods_normal if self._cycle_cfg else 14)
         max_points = self._forecast_max_points(ctx, max_periods)
@@ -1731,7 +1732,13 @@ class CycleBuilder:
         return _trim_chars(_scrub_nws_product_text(f"The forecast for {label}.\n" + "\n".join(groups)), point_max)
 
     async def _forecast_zone_lines(
-        self, zones: list, now: dt.datetime, max_points: int, max_periods: int, per_group: int, point_max: int
+        self,
+        zones: list[tuple[str, str]],
+        now: dt.datetime,
+        max_points: int,
+        max_periods: int,
+        per_group: int,
+        point_max: int,
     ) -> list[str]:
         rotate_period = self._cycle_cfg.fc.rotate_period_s if self._cycle_cfg else 300
         rotate_step = (self._cycle_cfg.fc.rotate_step or max_points) if self._cycle_cfg else max_points
@@ -1761,7 +1768,7 @@ class CycleBuilder:
 
     async def _forecast_point_lines(
         self,
-        points: list,
+        points: list[tuple[float, float, str]],
         now: dt.datetime,
         max_points: int,
         field: str,
@@ -1782,7 +1789,7 @@ class CycleBuilder:
         return lines
 
     @staticmethod
-    def _forecast_point_entries(periods: list[dict], field: str, max_periods: int) -> list[str]:
+    def _forecast_point_entries(periods: list[dict[str, Any]], field: str, max_periods: int) -> list[str]:
         entries = []
         for period in periods[:max_periods]:
             name = _SPACE_RE.sub(" ", str(period.get("name") or "").replace("—", "-")).strip()
