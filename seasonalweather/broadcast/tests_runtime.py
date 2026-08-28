@@ -174,11 +174,16 @@ class RequiredTestRuntime:
         if _cfg_lines:
             lines = list(_cfg_lines)
         else:
-            lines = default_test_script_lines(code)
+            lines = default_test_script_lines(
+                code,
+                organization_name=orch.cfg.station.organization_name,
+                service_name=orch.cfg.station.service_name,
+                station_name=orch.cfg.station.name,
+            )
 
         spoken = "\n".join(lines).strip()
 
-        dummy = SimpleNamespace(product_type=code, awips_id=None, wfo="KLWX", raw_text="")
+        dummy = SimpleNamespace(product_type=code, awips_id=None, wfo=orch.cfg.cycle.primary_wfo, raw_text="")
 
         tkey = "rwt" if code == "RWT" else "rmt"
         title = orch._np_alert_title(tkey, event="")

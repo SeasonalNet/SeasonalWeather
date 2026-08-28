@@ -6,6 +6,7 @@ The stable entrypoints are:
 ```text
 make check
 make phase2-gate
+make phase3-gate
 make image
 make images
 make compose-check
@@ -29,6 +30,10 @@ available. The topology is defined by P3-01; it does not build images or
 start services. Compose deployment still requires operator-provided
 configuration, mode-0400 secret files, and compatible controller/worker image
 references.
+`phase3-gate` runs the repository check interface and then validates the
+checked-in Compose graph. It is the source-side Phase 3 gate; staging reboot,
+stream, rollback, and production migration evidence remain operator-owned
+acceptance items documented in [`p3-08-production-migration.md`](p3-08-production-migration.md).
 
 ## Build record
 
@@ -50,6 +55,21 @@ record's other controlled fields.
 The unqualified Bake matrix defaults to the post-modernization release target
 `0.18.0`; an explicit generated build-info record supplies the authoritative
 version for controlled builds.
+
+## Native SAME tool build
+
+The controller target has a dedicated Rust BuildKit stage. It compiles the
+repository-owned `tools/samegen` crate and installs the pinned `samedec` crate
+release into the controller image as `/usr/local/bin/samegen` and
+`/usr/local/bin/samedec`. The default inputs are exposed in
+`docker-bake.hcl` as `RUST_IMAGE` and `SAMEDEC_VERSION`; the latter is kept in
+step with the legacy installer default for migration compatibility.
+
+Worker images intentionally do not receive these binaries. Their image
+boundary removes controller-owned SAME, broadcast, persistence, and source
+adapters, so native SAME encoding and ERN decoding remain controller
+responsibilities. Python implementations remain available as configured
+fallbacks.
 
 Only these build-time metadata inputs are accepted by the build interface:
 

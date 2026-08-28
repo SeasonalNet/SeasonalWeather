@@ -2,6 +2,24 @@
 
 ARG UV_VERSION=0.12.4
 ARG PYTHON_BASE=python:3.11-slim-bookworm
+ARG RUST_IMAGE=rust:1.85-bookworm
+ARG SAMEDEC_VERSION=0.4.2
+
+FROM ${RUST_IMAGE} AS same-tools
+
+ARG SAMEDEC_VERSION
+
+WORKDIR /build
+
+# Build both native SAME tools into a small copy-only staging tree. samegen is
+# repository-owned; samedec is consumed at an explicitly pinned crates.io
+# release. The controller is the only image that needs these binaries.
+COPY tools/samegen/Cargo.toml tools/samegen/Cargo.lock ./samegen/
+COPY tools/samegen/src ./samegen/src
+RUN cargo build --locked --manifest-path /build/samegen/Cargo.toml --release \
+    && install -D -m 0755 /build/samegen/target/release/samegen /out/usr/local/bin/samegen \
+    && cargo install --locked --root /tmp/samedec-root --version "${SAMEDEC_VERSION}" samedec \
+    && install -D -m 0755 /tmp/samedec-root/bin/samedec /out/usr/local/bin/samedec
 
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 FROM ${PYTHON_BASE} AS builder
@@ -152,6 +170,8 @@ ENV PATH="/opt/venv/bin:${PATH}" \
 
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /usr/share/seasonalweather /usr/share/seasonalweather
+COPY --from=same-tools /out/usr/local/bin/samegen /usr/local/bin/samegen
+COPY --from=same-tools /out/usr/local/bin/samedec /usr/local/bin/samedec
 
 RUN groupadd --gid 10001 seasonalweather \
     && useradd --uid 10001 --gid 10001 --home-dir /nonexistent --no-create-home \

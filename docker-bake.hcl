@@ -3,6 +3,8 @@
 
 variable "SW_PROJECT" { default = "seasonalweather" }
 variable "SW_VERSION" { default = "0.18.0" }
+variable "RUST_IMAGE" { default = "rust:1.85-bookworm" }
+variable "SAMEDEC_VERSION" { default = "0.4.2" }
 variable "SW_BUILD_ID" { default = "unbuilt" }
 variable "SW_BUILD_IDENTITY" { default = "seasonalweather-0.18.0" }
 variable "SW_GIT_COMMIT" { default = "unknown" }
@@ -31,6 +33,8 @@ target "common" {
   context = "."
   dockerfile = "Dockerfile"
   args = {
+    RUST_IMAGE = RUST_IMAGE
+    SAMEDEC_VERSION = SAMEDEC_VERSION
     SW_PROJECT = SW_PROJECT
     SW_VERSION = SW_VERSION
     SW_BUILD_ID = SW_BUILD_ID
@@ -78,6 +82,8 @@ target "common" {
 
 target "controller" {
   inherits = ["common"]
+  args = { SW_IMAGE_PROFILE = "controller" }
+  labels = { "io.seasonalweather.build.profile" = "controller" }
   tags = ["seasonalweather:standard"]
 }
 

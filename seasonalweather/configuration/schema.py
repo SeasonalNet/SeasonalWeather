@@ -248,6 +248,10 @@ SCHEMA_V1 = _o(
                 "service_area_name": _s(required=True),
                 "timezone": _s(required=True),
                 "disclaimer": _s(required=True),
+                "organization_name": _s(default="SeasonalNet"),
+                "service_name": _s(default="I P Weather Radio Station"),
+                "now_playing_artist": _s(default="SeasonalNet"),
+                "now_playing_album": _s(default=""),
                 "deployment_type": _s(
                     default="land",
                     enum=frozenset(
@@ -330,6 +334,7 @@ SCHEMA_V1 = _o(
         ),
         "cycle": _o(
             {
+                "primary_wfo": _s(default="LWX"),
                 "normal_interval_seconds": _i(required=True),
                 "heightened_interval_seconds": _i(required=True),
                 "min_heightened_seconds": _i(required=True),
@@ -857,6 +862,18 @@ SCHEMA_V1 = _o(
                 "tts_stop_seconds": _n(default=8.0),
                 "task_cancel_seconds": _n(default=5.0),
                 "resource_close_seconds": _n(default=5.0),
+                "optional_tasks": _o(
+                    {
+                        "policy": _s(default="restart", enum=frozenset({"never", "restart", "always"})),
+                        "stable_after_seconds": _n(default=60.0),
+                        "restart_initial_delay_seconds": _n(default=1.0),
+                        "restart_max_delay_seconds": _n(default=30.0),
+                        "thrash_window_seconds": _n(default=300.0),
+                        "thrash_limit": _i(default=3),
+                        "cooldown_seconds": _n(default=300.0),
+                    },
+                    default={},
+                ),
             },
             default={},
         ),

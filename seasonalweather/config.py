@@ -50,7 +50,7 @@ from .configuration.semantic_rules import (
     REMOTE_TOKEN_TIMEOUT_MAX,
     remote_tts_configuration_errors,
 )
-from .lifecycle import LifecycleTimeouts
+from .lifecycle import LifecycleTimeouts, OptionalTaskRestartConfig
 
 _DEFAULT_SWWP_BIND_HOST = str(ipaddress.IPv4Address(0))
 _DEFAULT_TEMPORARY_DIR = tempfile.gettempdir()
@@ -94,6 +94,10 @@ class StationConfig:
     service_area_name: str
     timezone: str
     disclaimer: str
+    organization_name: str = "SeasonalNet"
+    service_name: str = "I P Weather Radio Station"
+    now_playing_artist: str = "SeasonalNet"
+    now_playing_album: str = ""
     # Governs which broadcast segments are generated.
     # land         - ZFP land zones only, no marine segment
     # coastal      - CWF marine segment only (pure marine station)
@@ -268,6 +272,7 @@ class CycleMarineObsConfig:
 
 @dataclass(frozen=True)
 class CycleConfig:
+    primary_wfo: str
     normal_interval_seconds: int
     heightened_interval_seconds: int
     min_heightened_seconds: int
@@ -1638,6 +1643,10 @@ def _build_app_config(
         service_area_name=str(st["service_area_name"]),
         timezone=str(st["timezone"]),
         disclaimer=str(st["disclaimer"]),
+        organization_name=str(st.get("organization_name", "SeasonalNet")),
+        service_name=str(st.get("service_name", "I P Weather Radio Station")),
+        now_playing_artist=str(st.get("now_playing_artist", st.get("organization_name", "SeasonalNet"))),
+        now_playing_album=str(st.get("now_playing_album", "")),
         deployment_type=str(st.get("deployment_type", "land")),
     )
 
@@ -1707,6 +1716,7 @@ def _build_app_config(
     marine_obs_raw = cy.get("marine_obs", {})
 
     cycle = CycleConfig(
+        primary_wfo=str(cy.get("primary_wfo", "LWX")).upper().strip(),
         normal_interval_seconds=int(cy["normal_interval_seconds"]),
         heightened_interval_seconds=int(cy["heightened_interval_seconds"]),
         min_heightened_seconds=int(cy["min_heightened_seconds"]),
@@ -2581,6 +2591,7 @@ def _build_app_config(
     # controller lifecycle
     # ------------------------------------------------------------------
     lifecycle_raw = raw.get("lifecycle", {}) or {}
+    optional_tasks_raw = lifecycle_raw.get("optional_tasks", {}) or {}
     lifecycle = LifecycleTimeouts(
         total_seconds=float(lifecycle_raw.get("total_seconds", 30.0)),
         active_request_seconds=float(lifecycle_raw.get("active_request_seconds", 10.0)),
@@ -2589,6 +2600,15 @@ def _build_app_config(
         tts_stop_seconds=float(lifecycle_raw.get("tts_stop_seconds", 8.0)),
         task_cancel_seconds=float(lifecycle_raw.get("task_cancel_seconds", 5.0)),
         resource_close_seconds=float(lifecycle_raw.get("resource_close_seconds", 5.0)),
+        optional_tasks=OptionalTaskRestartConfig(
+            policy=str(optional_tasks_raw.get("policy", "restart")),
+            stable_after_seconds=float(optional_tasks_raw.get("stable_after_seconds", 60.0)),
+            restart_initial_delay_seconds=float(optional_tasks_raw.get("restart_initial_delay_seconds", 1.0)),
+            restart_max_delay_seconds=float(optional_tasks_raw.get("restart_max_delay_seconds", 30.0)),
+            thrash_window_seconds=float(optional_tasks_raw.get("thrash_window_seconds", 300.0)),
+            thrash_limit=int(optional_tasks_raw.get("thrash_limit", 3)),
+            cooldown_seconds=float(optional_tasks_raw.get("cooldown_seconds", 300.0)),
+        ),
     )
     lifecycle.validate()
 

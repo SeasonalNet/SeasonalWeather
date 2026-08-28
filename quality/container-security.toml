@@ -103,5 +103,5 @@ required_context_excludes = [
 ]
 controller_dependency_group = "controller"
 worker_dependency_groups = ["worker-runtime", "piper"]
-forbidden_controller_dependencies = ["piper-tts", "ffmpeg", "samedec", "samegen", "espeak"]
+forbidden_controller_dependencies = ["piper-tts", "ffmpeg", "espeak"]
 forbidden_worker_dependencies = ["slixmpp", "sqlalchemy", "fastapi", "uvicorn"]

@@ -16,6 +16,7 @@ from seasonalweather.configuration.semantic_rules import (
     job_repository_identity_errors,
     job_repository_timing_errors,
     lifecycle_timeout_error,
+    optional_task_restart_error,
     remote_tts_configuration_errors,
     static_credential_sources_conflict,
 )
@@ -714,8 +715,48 @@ def _lifecycle_issues(
         return (_nonpositive_lifecycle_issue(compiled, values, paths),)
     largest_name = max(tuple(values)[1:], key=values.__getitem__)
     if values["total_seconds"] >= values[largest_name]:
-        return ()
+        return _optional_lifecycle_issues(compiled, value)
     return (_short_total_lifecycle_issue(compiled, values, paths, largest_name),)
+
+
+def _optional_lifecycle_issues(
+    compiled: CompiledConfiguration,
+    value: Mapping[str, object],
+) -> tuple[ValidationIssue, ...]:
+    defaults = {
+        "stable_after_seconds": 60.0,
+        "restart_initial_delay_seconds": 1.0,
+        "restart_max_delay_seconds": 30.0,
+        "thrash_window_seconds": 300.0,
+        "cooldown_seconds": 300.0,
+    }
+    optional_values = {
+        name: float(cast(Any, _get(value, ("lifecycle", "optional_tasks", name), default)))
+        for name, default in defaults.items()
+    }
+    optional_values["thrash_limit"] = float(cast(Any, _get(value, ("lifecycle", "optional_tasks", "thrash_limit"), 3)))
+    optional_paths = {name: ConfigPath(("lifecycle", "optional_tasks", name)) for name in optional_values}
+    optional_error = optional_task_restart_error(
+        stable_after_seconds=optional_values["stable_after_seconds"],
+        restart_initial_delay_seconds=optional_values["restart_initial_delay_seconds"],
+        restart_max_delay_seconds=optional_values["restart_max_delay_seconds"],
+        thrash_window_seconds=optional_values["thrash_window_seconds"],
+        thrash_limit=int(optional_values["thrash_limit"]),
+        cooldown_seconds=optional_values["cooldown_seconds"],
+    )
+    if optional_error is None:
+        return ()
+    invalid = next((name for name, item in optional_values.items() if item <= 0), "restart_max_delay_seconds")
+    return (
+        _semantic_issue(
+            compiled,
+            path=optional_paths[invalid],
+            related_paths=tuple(path for name, path in optional_paths.items() if name != invalid),
+            message="Optional-task restart timing is invalid.",
+            help_text=optional_error,
+            validator_rule_id="semantic.lifecycle.optional_restart",
+        ),
+    )
 
 
 def _nonpositive_lifecycle_issue(

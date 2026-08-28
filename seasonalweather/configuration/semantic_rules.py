@@ -289,3 +289,31 @@ def lifecycle_timeout_error(
     if total_seconds < max(stage_seconds):
         return "lifecycle.total_seconds must cover every stage timeout"
     return None
+
+
+def optional_task_restart_error(
+    *,
+    stable_after_seconds: float,
+    restart_initial_delay_seconds: float,
+    restart_max_delay_seconds: float,
+    thrash_window_seconds: float,
+    thrash_limit: int,
+    cooldown_seconds: float,
+) -> str | None:
+    if (
+        any(
+            value <= 0
+            for value in (
+                stable_after_seconds,
+                restart_initial_delay_seconds,
+                restart_max_delay_seconds,
+                thrash_window_seconds,
+                cooldown_seconds,
+            )
+        )
+        or thrash_limit < 1
+    ):
+        return "lifecycle.optional_tasks timing values must be positive"
+    if restart_max_delay_seconds < restart_initial_delay_seconds:
+        return "lifecycle.optional_tasks.restart_max_delay_seconds must cover the initial restart delay"
+    return None

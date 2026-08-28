@@ -355,6 +355,8 @@ class Orchestrator:
             station_name=cfg.station.name,
             service_area_name=cfg.station.service_area_name,
             disclaimer=cfg.station.disclaimer,
+            organization_name=cfg.station.organization_name,
+            service_name=cfg.station.service_name,
             tz=self._tz,
             sample_rate=cfg.audio.sample_rate,
             registry=self.segment_registry,
@@ -476,8 +478,8 @@ class Orchestrator:
         #   - title/artist/album/song
         # Plus internal keying fields prefixed with sw_ (most players ignore them).
         station = self.cfg.station.name
-        artist = "SeasonalNet"
-        album = "Weather information for Baltimore, Washington DC, and surrounding areas"
+        artist = self.cfg.station.now_playing_artist or self.cfg.station.organization_name
+        album = self.cfg.station.now_playing_album or f"Weather information for {self.cfg.station.service_area_name}"
         t = (title or "").strip() or "SeasonalWeather"
         song = f"{station} — {t}"
 

@@ -6,9 +6,11 @@ import asyncio
 import contextvars
 import inspect
 import logging
+import time
+from collections import deque
 from collections.abc import Awaitable, Callable, Coroutine
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import partial
 from typing import Any, cast
@@ -56,6 +58,52 @@ class RequiredTaskStoppedError(RuntimeError):
 TransitionCallback = Callable[[LifecycleState], object]
 
 
+class OptionalTaskRestartPolicy(StrEnum):
+    NEVER = "never"
+    RESTART = "restart"
+    ALWAYS = "always"
+
+
+@dataclass(frozen=True)
+class OptionalTaskRestartConfig:
+    """Bounded recovery policy for optional long-running tasks.
+
+    ``restart`` permits one bounded recovery circuit and then leaves the task
+    degraded if it continues to fail.  ``always`` keeps trying after each
+    cooldown.  Neither policy applies once lifecycle shutdown has begun.
+    """
+
+    policy: str = OptionalTaskRestartPolicy.RESTART.value
+    stable_after_seconds: float = 60.0
+    restart_initial_delay_seconds: float = 1.0
+    restart_max_delay_seconds: float = 30.0
+    thrash_window_seconds: float = 300.0
+    thrash_limit: int = 3
+    cooldown_seconds: float = 300.0
+
+    def validate(self) -> None:
+        try:
+            policy = OptionalTaskRestartPolicy(str(self.policy).strip().lower())
+        except ValueError as exc:
+            raise ValueError("lifecycle.optional_tasks.policy must be one of: never, restart, always") from exc
+        if any(
+            value <= 0
+            for value in (
+                self.stable_after_seconds,
+                self.restart_initial_delay_seconds,
+                self.restart_max_delay_seconds,
+                self.thrash_window_seconds,
+                self.cooldown_seconds,
+            )
+        ):
+            raise ValueError("lifecycle.optional_tasks timing values must be positive")
+        if self.restart_max_delay_seconds < self.restart_initial_delay_seconds:
+            raise ValueError("lifecycle.optional_tasks.restart_max_delay_seconds must cover the initial restart delay")
+        if self.thrash_limit < 1:
+            raise ValueError("lifecycle.optional_tasks.thrash_limit must be positive")
+        del policy
+
+
 @dataclass(frozen=True)
 class LifecycleTimeouts:
     total_seconds: float = 30.0
@@ -65,6 +113,7 @@ class LifecycleTimeouts:
     tts_stop_seconds: float = 8.0
     task_cancel_seconds: float = 5.0
     resource_close_seconds: float = 5.0
+    optional_tasks: OptionalTaskRestartConfig = field(default_factory=OptionalTaskRestartConfig)
 
     def validate(self) -> None:
         from .configuration.semantic_rules import lifecycle_timeout_error
@@ -82,6 +131,7 @@ class LifecycleTimeouts:
             stage_seconds=stage_seconds,
         ):
             raise ValueError(error)
+        self.optional_tasks.validate()
 
 
 _ALLOWED_TRANSITIONS: dict[LifecycleState, frozenset[LifecycleState]] = {
@@ -305,15 +355,22 @@ class PublicationFence:
 
 StopCallback = Callable[[], object | Awaitable[object]]
 FailureCallback = Callable[[str, BaseException], object]
+RestartFactory = Callable[[], Coroutine[Any, Any, Any]]
 
 
-@dataclass(frozen=True)
+@dataclass
 class SupervisedTask:
     name: str
     required: bool
     task: asyncio.Task[Any]
     stop: StopCallback | None
     stop_timeout_seconds: float
+    restart_factory: RestartFactory | None = None
+    restart_config: OptionalTaskRestartConfig = field(default_factory=OptionalTaskRestartConfig)
+    started_at: float = 0.0
+    failure_times: deque[float] = field(default_factory=deque)
+    restart_task: asyncio.Task[Any] | None = None
+    restart_exhausted: bool = False
 
 
 class TaskSupervisor:
@@ -330,6 +387,7 @@ class TaskSupervisor:
         self._tasks: dict[str, SupervisedTask] = {}
         self._fatal: asyncio.Future[BaseException] | None = None
         self._optional_failures: set[str] = set()
+        self._stopping = False
 
     @property
     def tasks(self) -> tuple[SupervisedTask, ...]:
@@ -347,6 +405,8 @@ class TaskSupervisor:
         required: bool,
         stop: StopCallback | None = None,
         stop_timeout_seconds: float | None = None,
+        restart_factory: RestartFactory | None = None,
+        restart_config: OptionalTaskRestartConfig | None = None,
     ) -> asyncio.Task[Any]:
         if not self.lifecycle.permits_service_start():
             coroutine.close()
@@ -365,9 +425,12 @@ class TaskSupervisor:
                 if stop_timeout_seconds is not None
                 else self.lifecycle.timeouts.task_cancel_seconds
             ),
+            restart_factory=restart_factory,
+            restart_config=restart_config or self.lifecycle.timeouts.optional_tasks,
+            started_at=time.monotonic(),
         )
         self._tasks[name] = registration
-        task.add_done_callback(partial(self._task_done, name))
+        task.add_done_callback(partial(self._task_done, registration))
         return task
 
     async def wait_for_fatal(self) -> BaseException:
@@ -382,12 +445,25 @@ class TaskSupervisor:
         self._record_required_failure(exception)
 
     async def stop(self) -> None:
+        self._stopping = True
         registrations = self.tasks
+        await self._stop_restart_workers(registrations)
         for registration in registrations:
             if registration.stop is None or registration.task.done():
                 continue
             await self._bounded_stop(registration)
 
+        await self._cancel_pending_tasks(registrations)
+
+    async def _stop_restart_workers(self, registrations: tuple[SupervisedTask, ...]) -> None:
+        workers = [registration.restart_task for registration in registrations if registration.restart_task is not None]
+        for worker in workers:
+            if not worker.done():
+                worker.cancel()
+        if workers:
+            await asyncio.gather(*workers, return_exceptions=True)
+
+    async def _cancel_pending_tasks(self, registrations: tuple[SupervisedTask, ...]) -> None:
         pending = [registration.task for registration in registrations if not registration.task.done()]
         for task in pending:
             task.cancel()
@@ -430,28 +506,122 @@ class TaskSupervisor:
                 exc_info=True,
             )
 
-    def _task_done(self, name: str, task: asyncio.Task[Any]) -> None:
-        if task.cancelled() or self.lifecycle.is_shutting_down:
+    def _task_done(self, registration: SupervisedTask, task: asyncio.Task[Any]) -> None:
+        if registration.task is not task or task.cancelled() or self._stopping or self.lifecycle.is_shutting_down:
             return
         try:
             exception = task.exception()
         except asyncio.CancelledError:
             return
-        registration = self._tasks[name]
         if exception is None and not registration.required:
+            self._handle_optional_clean_return(registration)
             return
         if exception is None:
-            exception = RequiredTaskStoppedError(f"supervised task ended unexpectedly: {name}")
+            exception = RequiredTaskStoppedError(f"supervised task ended unexpectedly: {registration.name}")
         if not registration.required:
-            self._optional_failures.add(name)
-            log.warning("optional_supervised_task_failed task=%s", name)
-            if self.optional_failure is not None:
-                try:
-                    self.optional_failure(name, exception)
-                except Exception:
-                    log.warning("optional_supervised_task_diagnostic_failed task=%s", name)
+            self._handle_optional_failure(registration, exception)
             return
         self._record_required_failure(exception)
+
+    def _handle_optional_clean_return(self, registration: SupervisedTask) -> None:
+        if registration.restart_config.policy == OptionalTaskRestartPolicy.ALWAYS.value:
+            self._schedule_optional_restart(registration, clean_return=True)
+
+    def _handle_optional_failure(self, registration: SupervisedTask, exception: BaseException) -> None:
+        self._optional_failures.add(registration.name)
+        log.warning("optional_supervised_task_failed task=%s", registration.name)
+        if self.optional_failure is not None:
+            try:
+                self.optional_failure(registration.name, exception)
+            except Exception:
+                log.warning("optional_supervised_task_diagnostic_failed task=%s", registration.name)
+        self._schedule_optional_restart(registration, clean_return=False)
+
+    def _schedule_optional_restart(self, registration: SupervisedTask, *, clean_return: bool) -> None:
+        config = registration.restart_config
+        policy = str(config.policy).strip().lower()
+        if not self._restart_is_enabled(registration, policy, clean_return):
+            return
+        if registration.restart_task is not None and not registration.restart_task.done():
+            return
+
+        failure_count = self._record_optional_failure(registration, config)
+        recovery = self._restart_recovery(registration, config, policy, failure_count)
+        if recovery is None:
+            return
+        delay, thrashing = recovery
+        worker = asyncio.create_task(
+            self._restart_optional(registration, delay=delay, thrashing=thrashing),
+            name=f"restart:{registration.name}",
+        )
+        registration.restart_task = worker
+        worker.add_done_callback(partial(self._restart_done, registration))
+
+    @staticmethod
+    def _restart_is_enabled(registration: SupervisedTask, policy: str, clean_return: bool) -> bool:
+        if registration.restart_factory is None or policy == OptionalTaskRestartPolicy.NEVER.value:
+            return False
+        return not clean_return or policy == OptionalTaskRestartPolicy.ALWAYS.value
+
+    def _restart_recovery(
+        self,
+        registration: SupervisedTask,
+        config: OptionalTaskRestartConfig,
+        policy: str,
+        failure_count: int,
+    ) -> tuple[float, bool] | None:
+        if policy == OptionalTaskRestartPolicy.RESTART.value and registration.restart_exhausted:
+            log.error("optional_supervised_task_restart_exhausted task=%s", registration.name)
+            return None
+        thrashing = failure_count >= config.thrash_limit
+        if thrashing:
+            if policy == OptionalTaskRestartPolicy.RESTART.value:
+                registration.restart_exhausted = True
+            return config.cooldown_seconds, True
+        delay = min(
+            config.restart_max_delay_seconds,
+            config.restart_initial_delay_seconds * (2 ** max(0, failure_count - 1)),
+        )
+        return delay, False
+
+    def _record_optional_failure(self, registration: SupervisedTask, config: OptionalTaskRestartConfig) -> int:
+        now = time.monotonic()
+        while registration.failure_times and now - registration.failure_times[0] > config.thrash_window_seconds:
+            registration.failure_times.popleft()
+        if registration.started_at and now - registration.started_at >= config.stable_after_seconds:
+            registration.failure_times.clear()
+            registration.restart_exhausted = False
+        registration.failure_times.append(now)
+        return len(registration.failure_times)
+
+    async def _restart_optional(self, registration: SupervisedTask, *, delay: float, thrashing: bool) -> None:
+        log.warning(
+            "optional_supervised_task_restart_scheduled task=%s delay=%.1fs thrashing=%s policy=%s",
+            registration.name,
+            delay,
+            thrashing,
+            registration.restart_config.policy,
+        )
+        await asyncio.sleep(delay)
+        if self._stopping or self.lifecycle.is_shutting_down or registration.restart_factory is None:
+            return
+        coroutine = registration.restart_factory()
+        task = asyncio.create_task(coroutine, name=registration.name)
+        registration.task = task
+        registration.started_at = time.monotonic()
+        task.add_done_callback(partial(self._task_done, registration))
+
+    def _restart_done(self, registration: SupervisedTask, task: asyncio.Task[Any]) -> None:
+        if registration.restart_task is task:
+            registration.restart_task = None
+        if task.cancelled():
+            return
+        try:
+            task.exception()
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            log.warning("optional_supervised_task_restart_worker_failed task=%s", registration.name, exc_info=True)
 
     def _record_required_failure(self, exception: BaseException) -> None:
         if self._fatal is None:

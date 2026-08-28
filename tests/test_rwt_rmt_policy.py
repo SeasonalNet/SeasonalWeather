@@ -72,6 +72,17 @@ def test_default_test_scripts_are_outside_main() -> None:
     assert all("End of message." not in line for line in rwt + rmt)
 
 
+def test_default_test_scripts_use_configured_station_identity() -> None:
+    lines = default_test_script_lines(
+        "RWT",
+        organization_name="Example Broadcaster",
+        service_name="Weather Radio Service",
+        station_name="Example Station",
+    )
+    assert lines[0] == "This is the Example Broadcaster Weather Radio Service, Example Station."
+    assert "Example Broadcaster" in lines[-1]
+
+
 def test_presentation_template_falls_back_to_literal_on_bad_template() -> None:
     assert format_test_presentation_template("{event}", event="Required Weekly Test") == "Required Weekly Test"
     assert format_test_presentation_template("{missing", event="Required Weekly Test") == "{missing"

@@ -25,6 +25,8 @@ from seasonalweather.lifecycle import (
     LifecycleState,
     LifecycleTimeouts,
     LifecycleTransitionError,
+    OptionalTaskRestartConfig,
+    OptionalTaskRestartPolicy,
     PublicationFence,
     TaskSupervisor,
     WorkClass,
@@ -191,6 +193,86 @@ def test_optional_task_failure_is_degraded_not_fatal() -> None:
         await asyncio.gather(task, return_exceptions=True)
         assert lifecycle.state is LifecycleState.RUNNING
         assert supervisor.optional_failures == frozenset({"optional-source"})
+
+    asyncio.run(exercise())
+
+
+def test_optional_task_restart_recovers_after_bounded_delay() -> None:
+    async def exercise() -> None:
+        lifecycle = Lifecycle(_short_timeouts())
+        lifecycle.mark_running()
+        supervisor = TaskSupervisor(lifecycle)
+        recovered = asyncio.Event()
+        attempts = 0
+
+        async def run_source() -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise RuntimeError("transient source failure")
+            recovered.set()
+            await asyncio.Event().wait()
+
+        supervisor.create_task(
+            run_source(),
+            name="optional-restart",
+            required=False,
+            restart_factory=run_source,
+            restart_config=OptionalTaskRestartConfig(
+                policy=OptionalTaskRestartPolicy.RESTART.value,
+                stable_after_seconds=0.05,
+                restart_initial_delay_seconds=0.01,
+                restart_max_delay_seconds=0.02,
+                thrash_window_seconds=0.2,
+                thrash_limit=3,
+                cooldown_seconds=0.05,
+            ),
+        )
+        await asyncio.wait_for(recovered.wait(), timeout=0.2)
+        assert attempts == 2
+        assert lifecycle.state is LifecycleState.RUNNING
+        await supervisor.stop()
+
+    asyncio.run(exercise())
+
+
+def test_always_restart_retries_clean_return_but_drain_wins() -> None:
+    async def exercise() -> None:
+        lifecycle = Lifecycle(_short_timeouts())
+        lifecycle.mark_running()
+        supervisor = TaskSupervisor(lifecycle)
+        attempts = 0
+        restarted = asyncio.Event()
+
+        async def run_source() -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                return
+            restarted.set()
+            await asyncio.Event().wait()
+
+        supervisor.create_task(
+            run_source(),
+            name="always-restart",
+            required=False,
+            restart_factory=run_source,
+            restart_config=OptionalTaskRestartConfig(
+                policy=OptionalTaskRestartPolicy.ALWAYS.value,
+                stable_after_seconds=0.05,
+                restart_initial_delay_seconds=0.01,
+                restart_max_delay_seconds=0.02,
+                thrash_window_seconds=0.2,
+                thrash_limit=3,
+                cooldown_seconds=0.05,
+            ),
+        )
+        await asyncio.wait_for(restarted.wait(), timeout=0.2)
+        assert attempts == 2
+        lifecycle.request_shutdown()
+        await supervisor.stop()
+        await asyncio.sleep(0.03)
+        assert attempts == 2
 
     asyncio.run(exercise())
 

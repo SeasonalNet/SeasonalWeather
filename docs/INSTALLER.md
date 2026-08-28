@@ -1,8 +1,14 @@
-# Installer and configuration assistant
+# Legacy bare-metal installer and configuration assistant
 
-SeasonalWeather is intended to run on a modern Debian server VM. The bootstrapper
-is interactive by default when attached to a terminal, while still supporting
-non-interactive automation through flags and environment variables.
+This document describes the retired systemd/bare-metal deployment. New
+installations should use the Docker Compose deployment in the
+[operator guide](operator-guide.md). The bootstrapper remains here for
+migration and historical reference; it is not required on a host that runs
+published SeasonalWeather images.
+
+The legacy bootstrapper targets a modern Debian server VM. It is interactive by
+default when attached to a terminal, while still supporting non-interactive
+automation through flags and environment variables.
 
 ## Bootstrap profiles
 

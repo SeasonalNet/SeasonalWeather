@@ -68,9 +68,14 @@ optional under current degraded-source policy.
 Unexpected required-task completion or failure is fatal. The original
 exception object, traceback, cause chain, and any `ExceptionGroup` members are
 preserved for the top-level process boundary. Optional task failure is recorded
-as degraded supervisor state without restarting the task during the same
-process. Expected cancellation during drain is not fatal. The supervisor never
-cancels arbitrary event-loop tasks that it does not own.
+as degraded supervisor state and, for registrations with a restart factory,
+follows the configured bounded recovery policy. A stable hot period clears the
+crash history; repeated failures use exponential backoff and then enter a
+cooldown. `restart` stops after one cooldown recovery circuit if the task
+continues to fail, while `always` continues retrying after cooldown. `never`
+leaves the task degraded. Expected cancellation during drain is not fatal and
+never schedules a restart. The supervisor never cancels arbitrary event-loop
+tasks that it does not own.
 
 ## Admission and publication
 
@@ -148,11 +153,26 @@ lifecycle:
   tts_stop_seconds: 8.0
   task_cancel_seconds: 5.0
   resource_close_seconds: 5.0
+  optional_tasks:
+    policy: "restart"                 # never | restart | always
+    stable_after_seconds: 60.0
+    restart_initial_delay_seconds: 1.0
+    restart_max_delay_seconds: 30.0
+    thrash_window_seconds: 300.0
+    thrash_limit: 3
+    cooldown_seconds: 300.0
 ```
 
 Every value must be positive. `total_seconds` must be at least the largest
 individual stage value. The total is a cap across the ordered sequence, not a
 sum multiplied by the number of components.
+
+The station identity and primary NWS office are configuration values:
+`station.organization_name`, `station.service_name`,
+`station.now_playing_artist`, `station.now_playing_album`, and
+`cycle.primary_wfo`. An empty Now Playing album derives from the configured
+service-area name. Station identity and service-name changes refresh the ID
+segment; Now Playing metadata changes take effect after process restart.
 
 ## Current limits and future integration
 

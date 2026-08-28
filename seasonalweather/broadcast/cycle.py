@@ -71,7 +71,15 @@ def _short_tz(now: dt.datetime) -> str:
     return _expand_tz_token(now.tzname() or "local")
 
 
-def station_id_text(ctx: object, station_name: str, service_area_name: str, disclaimer: str) -> str:
+def station_id_text(
+    ctx: object,
+    station_name: str,
+    service_area_name: str,
+    disclaimer: str,
+    *,
+    organization_name: str = "SeasonalNet",
+    service_name: str = "I P Weather Radio Station",
+) -> str:
     """Build the canonical station-ID wording used by refresh and composition."""
     if getattr(ctx, "health_detached_loop_only", False):
         return (
@@ -79,8 +87,8 @@ def station_id_text(ctx: object, station_name: str, service_area_name: str, disc
             or "SeasonalWeather is temporarily unable to receive current National Weather Service information. Please use another weather information source or visit weather.gov for the latest information."
         ).strip()
     base = (
-        f"This is the SeasonalNet I P Weather Radio Station, {station_name}, "
-        f"with station programming and streaming facilities originating from SeasonalNet, "
+        f"This is the {organization_name} {service_name}, {station_name}, "
+        f"with station programming and streaming facilities originating from {organization_name}, "
         f"providing weather information for {service_area_name}. "
     )
     if getattr(ctx, "mode", "") == "heightened":
@@ -848,6 +856,10 @@ class CycleBuilder:
             # fail-safe (should never happen with a real config)
             self.alert_areas = ["MD", "VA", "DC", "WV"]
 
+    @property
+    def primary_wfo(self) -> str:
+        return (getattr(self._cycle_cfg, "primary_wfo", None) or "LWX").strip().upper()
+
     async def _fetch_station_name(self, station_id: str) -> Optional[str]:
         st = (station_id or "").strip().upper()
         if not st:
@@ -984,7 +996,7 @@ class CycleBuilder:
           4) None (fail closed; never read full ZFP by accident)
         """
         # 1) Dedicated synopsis product (a few offices only)
-        syn_fetched = await self._fetch_product("SYN", "LWX")
+        syn_fetched = await self._fetch_product("SYN", self.primary_wfo)
         if syn_fetched:
             syn_product, syn_evidence = syn_fetched
             syn_clean = clean_for_tts(syn_product.product_text)
@@ -994,7 +1006,7 @@ class CycleBuilder:
                 return syn_clean, syn_evidence
 
         # 2) Regional Weather Summary — broadcast-ready prose, same format real NWR uses
-        rws_fetched = await self._fetch_product("RWS", "LWX")
+        rws_fetched = await self._fetch_product("RWS", self.primary_wfo)
         if rws_fetched:
             rws_product, rws_evidence = rws_fetched
             rws_clean = clean_for_tts(rws_product.product_text)
@@ -1004,7 +1016,7 @@ class CycleBuilder:
                 return rws_clean, rws_evidence
 
         # 3) AFD synopsis extraction fallback
-        afd_fetched = await self._fetch_product("AFD", "LWX")
+        afd_fetched = await self._fetch_product("AFD", self.primary_wfo)
         if afd_fetched:
             afd_product, afd_evidence = afd_fetched
             syn = _extract_afd_synopsis(afd_product.product_text)
@@ -1638,18 +1650,18 @@ class CycleBuilder:
         )
 
     async def build_hwo_segment(self, request: SegmentBuildInput) -> SegmentCandidate | None:
-        fetched = await self._fetch_product("HWO", "LWX")
+        fetched = await self._fetch_product("HWO", self.primary_wfo)
         if not fetched:
             if self._registry.fallback_enabled("hwo"):
                 return SegmentCandidate.from_cycle_segment(
                     CycleSegment(
                         key="hwo",
                         title=self._registry.title_for("hwo"),
-                        text="The hazardous weather outlook from LWX was unavailable.",
+                        text=f"The hazardous weather outlook from {self.primary_wfo} was unavailable.",
                     ),
                     source_name="nws",
                     product_type="HWO",
-                    issuing_office="LWX",
+                    issuing_office=self.primary_wfo,
                 )
             return None
         product, evidence = fetched
@@ -2000,7 +2012,7 @@ class CycleBuilder:
         return CycleSegment(
             key="hwo-unavailable",
             title=self._registry.title_for("hwo"),
-            text="The hazardous weather outlook from LWX was unavailable.",
+            text=f"The hazardous weather outlook from {self.primary_wfo} was unavailable.",
         )
 
     async def build_text(

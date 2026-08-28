@@ -1,8 +1,8 @@
-version = 2
+version = 3
 status = "active"
 owner = "SeasonalWeather maintainers"
-rationale = "P2-02 and P2-03 define separate controller and worker image ownership with negative dependency and package-boundary checks."
-scope = "P2-02 controller image and P2-03 worker image profiles only; deployment hardening remains deferred to later packets."
+rationale = "P2-02 and P2-03 define separate controller and worker image ownership with negative dependency and package-boundary checks; the controller additionally owns native SAME tooling."
+scope = "P2-02 controller image and P2-03 worker image profiles, including controller-owned native SAME tooling; deployment hardening remains deferred to later packets."
 review_date = "2026-10-23"
 removal_condition = "Replace these rules only when the controller image ownership or profile boundary is deliberately revised."
 controller_definition = "Dockerfile"
@@ -16,11 +16,14 @@ controller_uid = 10001
 controller_gid = 10001
 required_dockerfile_tokens = [
   "FROM ${PYTHON_BASE} AS builder",
+  "FROM ${RUST_IMAGE} AS same-tools",
   "FROM ${PYTHON_BASE} AS controller",
   "COPY seasonalweather ./seasonalweather",
   "COPY pyproject.toml uv.lock README.md ./",
   "uv sync --frozen --no-dev --group controller",
   "seasonalweather diagnostics export --output /usr/share/seasonalweather/diagnostics",
+  "COPY --from=same-tools /out/usr/local/bin/samegen /usr/local/bin/samegen",
+  "COPY --from=same-tools /out/usr/local/bin/samedec /usr/local/bin/samedec",
   "/usr/share/seasonalweather/build-info.json",
   "groupadd --gid 10001 seasonalweather",
   "useradd --uid 10001 --gid 10001",
@@ -34,8 +37,6 @@ forbidden_dockerfile_tokens = [
   "ffmpeg",
   "sox",
   "espeak",
-  "samedec",
-  "samegen",
   "legacy-tts",
   "routine-worker",
   "maintenance",

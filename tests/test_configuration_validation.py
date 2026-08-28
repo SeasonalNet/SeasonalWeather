@@ -516,7 +516,17 @@ def test_default_and_generated_origins_do_not_fabricate_semantic_spans() -> None
         "  source_stop_seconds: 8.0\n"
         "  tts_stop_seconds: 8.0\n"
         "  task_cancel_seconds: 5.0\n"
-        "  resource_close_seconds: 5.0\n",
+        "  resource_close_seconds: 5.0\n"
+        "  optional_tasks:\n"
+        "    # never = leave degraded, restart = bounded recovery, always = retry\n"
+        "    # after each cooldown. Drain/cancel always suppresses restart.\n"
+        '    policy: "restart"\n'
+        "    stable_after_seconds: 60.0\n"
+        "    restart_initial_delay_seconds: 1.0\n"
+        "    restart_max_delay_seconds: 30.0\n"
+        "    thrash_window_seconds: 300.0\n"
+        "    thrash_limit: 3\n"
+        "    cooldown_seconds: 300.0\n",
         "",
         1,
     )

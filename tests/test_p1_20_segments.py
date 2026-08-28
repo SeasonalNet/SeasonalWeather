@@ -2072,6 +2072,15 @@ def test_real_independent_builder_seams_have_distinct_target_results(tmp_path: P
     ]
     assert len({candidate.text for candidate in candidates if candidate}) == 9
     assert station_id_text(context, "station", "area", "disclaimer").startswith("This is the SeasonalNet")
+    custom_id = station_id_text(
+        context,
+        "CustomStation",
+        "Custom service area",
+        "Custom disclaimer",
+        organization_name="Example Broadcaster",
+        service_name="Weather Radio Service",
+    )
+    assert custom_id.startswith("This is the Example Broadcaster Weather Radio Service, CustomStation")
 
 
 def test_refresh_command_cancellation_before_publication_cannot_commit(tmp_path: Path) -> None:

@@ -158,7 +158,8 @@ class SeasonalWeatherServiceRuntime:
             _purged = o.alert_tracker.purge_expired()
             log.info(
                 "AlertTracker: loaded %d entries, purged %d expired on startup",
-                _loaded, _purged,
+                _loaded,
+                _purged,
             )
         except Exception:
             log.exception("AlertTracker: startup load/purge failed")
@@ -192,7 +193,7 @@ class SeasonalWeatherServiceRuntime:
             await o.api.active_alerts(o.cycle_builder.alert_areas)
 
         async def _health_probe_nws_api() -> None:
-            await o.api.latest_product_id("HWO", "LWX")
+            await o.api.latest_product_id("HWO", o.cfg.cycle.primary_wfo)
 
         o.health_state.register_probe("cap_api", _health_probe_cap_api)
         o.health_state.register_probe("nws_api", _health_probe_nws_api)
@@ -275,17 +276,21 @@ class SeasonalWeatherServiceRuntime:
                     await source.drain()
                     await source.stop()
 
+                nwws_sink = _NwwsQueueSink(o.nwws_queue, admission_fence, source)
+
                 supervisor.create_task(
-                    source.start(_NwwsQueueSink(o.nwws_queue, admission_fence, source)),
+                    source.start(nwws_sink),
                     name="nwws_xmpp",
                     required=False,
                     stop=_stop_nwws,
                     stop_timeout_seconds=o.lifecycle.timeouts.source_stop_seconds,
+                    restart_factory=lambda: source.start(nwws_sink),
                 )
                 supervisor.create_task(
                     o.nwws_runtime.run(),
                     name="nwws_consumer",
                     required=False,
+                    restart_factory=o.nwws_runtime.run,
                 )
         # CycleConductor runs the cycle continuously.
 
@@ -314,13 +319,20 @@ class SeasonalWeatherServiceRuntime:
                     required=False,
                     stop=cap.aclose,
                     stop_timeout_seconds=o.lifecycle.timeouts.source_stop_seconds,
+                    restart_factory=cap.run_forever,
                 )
                 supervisor.create_task(
                     o.cap_runtime.run(),
                     name="cap_consumer",
                     required=False,
+                    restart_factory=o.cap_runtime.run,
                 )
-                log.info("CAP ingest enabled (dryrun=%s full=%s voice=%s)", o.cfg.cap.dryrun, o.cfg.cap.full.enabled, o.cfg.cap.voice.enabled)
+                log.info(
+                    "CAP ingest enabled (dryrun=%s full=%s voice=%s)",
+                    o.cfg.cap.dryrun,
+                    o.cfg.cap.full.enabled,
+                    o.cfg.cap.voice.enabled,
+                )
         else:
             log.info("CAP ingest disabled (set cap.enabled: true in config.yaml to enable)")
 
@@ -385,11 +397,13 @@ class SeasonalWeatherServiceRuntime:
                         mon.run_forever(),
                         name="ern_monitor",
                         required=False,
+                        restart_factory=mon.run_forever,
                     )
                     supervisor.create_task(
                         o.ern_relay_runtime.run(),
                         name="ern_consumer",
                         required=False,
+                        restart_factory=o.ern_relay_runtime.run,
                     )
                     log.info(
                         "ERN monitor enabled (dryrun=%s url=%s relay=%s decoder=%s)",

@@ -10,8 +10,12 @@ Build locally:
 ```bash
 cd tools/samegen
 cargo build --release
-sudo install -m 0755 target/release/samegen /usr/local/bin/samegen
 ```
+
+The supported deployment build compiles this crate in the controller
+Dockerfile and copies the result to `/usr/local/bin/samegen`. A host-local
+installation is useful only for isolated development; the retired bare-metal
+installer did not provision this binary automatically.
 
 Example:
 

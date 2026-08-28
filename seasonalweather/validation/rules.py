@@ -67,6 +67,7 @@ RULES = (
     ValidatorRule("semantic.jobs.path_distinct", ValidationStage.SEMANTIC, _SEMANTIC),
     ValidatorRule("semantic.jobs.lease_timing", ValidationStage.SEMANTIC, _SEMANTIC),
     ValidatorRule("semantic.lifecycle.positive", ValidationStage.SEMANTIC, _SEMANTIC),
+    ValidatorRule("semantic.lifecycle.optional_restart", ValidationStage.SEMANTIC, _SEMANTIC),
     ValidatorRule(
         "semantic.lifecycle.total_covers_stage",
         ValidationStage.SEMANTIC,

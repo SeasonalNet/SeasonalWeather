@@ -30,6 +30,21 @@ def test_controller_dockerfile_rejects_worker_profiles() -> None:
     assert "USER seasonalweather" in dockerfile
 
 
+def test_controller_dockerfile_builds_and_carries_native_same_tools() -> None:
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    bake = (ROOT / "docker-bake.hcl").read_text(encoding="utf-8")
+
+    assert "FROM ${RUST_IMAGE} AS same-tools" in dockerfile
+    assert "cargo build --locked --manifest-path /build/samegen/Cargo.toml --release" in dockerfile
+    assert 'cargo install --locked --root /tmp/samedec-root --version "${SAMEDEC_VERSION}" samedec' in dockerfile
+    assert "COPY --from=same-tools /out/usr/local/bin/samegen /usr/local/bin/samegen" in dockerfile
+    assert "COPY --from=same-tools /out/usr/local/bin/samedec /usr/local/bin/samedec" in dockerfile
+    assert 'variable "SAMEDEC_VERSION" { default = "0.4.2" }' in bake
+    assert "SAMEDEC_VERSION = SAMEDEC_VERSION" in bake
+    assert 'args = { SW_IMAGE_PROFILE = "controller" }' in bake
+    assert '"io.seasonalweather.build.profile" = "controller"' in bake
+
+
 def test_controller_dockerfile_removes_local_tts_implementation() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 

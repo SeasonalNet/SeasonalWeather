@@ -294,6 +294,12 @@ class OrchestratorPreparedResources:
                 cfg.station.service_area_name,
             ),
             "/station/disclaimer": (refresher, "_disclaimer", cfg.station.disclaimer),
+            "/station/organization_name": (
+                refresher,
+                "_organization_name",
+                cfg.station.organization_name,
+            ),
+            "/station/service_name": (refresher, "_service_name", cfg.station.service_name),
             "/audio/sample_rate": (refresher, "_sample_rate", cfg.audio.sample_rate),
         }
         items: list[tuple[Any, str, object]] = [

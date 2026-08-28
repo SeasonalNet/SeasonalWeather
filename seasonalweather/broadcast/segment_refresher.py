@@ -99,6 +99,8 @@ class SegmentRefresher:
         station_name: str,
         service_area_name: str,
         disclaimer: str,
+        organization_name: str = "SeasonalNet",
+        service_name: str = "I P Weather Radio Station",
         tz: ZoneInfo,
         sample_rate: int,
         registry: ResolvedSegmentRegistry | None = None,
@@ -118,6 +120,8 @@ class SegmentRefresher:
         self._station_name = station_name
         self._service_area_name = service_area_name
         self._disclaimer = disclaimer
+        self._organization_name = organization_name
+        self._service_name = service_name
         self._tz = tz
         self._sample_rate = sample_rate
         self._registry = registry or DEFAULT_SEGMENT_REGISTRY.resolve()
@@ -412,7 +416,14 @@ class SegmentRefresher:
         time so the spoken time is always accurate.
         """
         ctx = self._ctx_fn()
-        text = station_id_text(ctx, self._station_name, self._service_area_name, self._disclaimer)
+        text = station_id_text(
+            ctx,
+            self._station_name,
+            self._service_area_name,
+            self._disclaimer,
+            organization_name=self._organization_name,
+            service_name=self._service_name,
+        )
 
         await self._synth(
             key="id",

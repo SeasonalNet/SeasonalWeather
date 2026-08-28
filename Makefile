@@ -8,7 +8,7 @@ TARGET_PLATFORM ?= unknown
 .PHONY: format-check lint typecheck basedpyright architecture-check dependency-check suppressions-check
 .PHONY: dead-code-check security-check complexity-check image-boundaries-check container-security-check
 .PHONY: exceptions-check diagnostics-check diagnostics-build diagnostics-export
-.PHONY: quality test compile check phase2-gate phase2-images build-info version image images compose-check staging-check release
+.PHONY: quality test compile check phase2-gate phase2-images phase3-gate build-info version image images compose-check staging-check release
 
 DIAGNOSTICS_EXPORT_DIR ?= build/diagnostics
 QUALITY_SUPPRESSIONS_BASE ?= HEAD
@@ -78,6 +78,8 @@ phase2-gate: check
 phase2-images:
 	$(MAKE) images
 	$(PYTHON) -m tools.quality.phase2_exit_gate --images
+
+phase3-gate: check compose-check
 
 build-info:
 	$(PYTHON) -m seasonalweather.build_metadata \

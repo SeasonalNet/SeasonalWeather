@@ -5,6 +5,10 @@ station:
   service_area_name: "The Baltimore and Washington, D.C. region, and surrounding counties across Maryland, Virginia, West Virginia, and Pennsylvania"
   timezone: "America/New_York"
   disclaimer: "Please note, SeasonalWeather is not NOAA Weather Radio and is not endorsed by the National Weather Service. For critical information, you should use NOAA Weather Radio, and weather.gov."
+  organization_name: "SeasonalNet"
+  service_name: "I P Weather Radio Station"
+  now_playing_artist: "SeasonalNet"
+  now_playing_album: ""
 
 stream:
   icecast_host: "127.0.0.1"
@@ -49,6 +53,7 @@ network:
 
 # Two-mode cycle: normal vs heightened/focus mode
 cycle:
+  primary_wfo: "LWX"
   normal_interval_seconds: 300
   heightened_interval_seconds: 180
   min_heightened_seconds: 1800  # stay heightened at least this long after a tone-out
@@ -657,6 +662,16 @@ lifecycle:
   tts_stop_seconds: 8.0
   task_cancel_seconds: 5.0
   resource_close_seconds: 5.0
+  optional_tasks:
+    # never = leave degraded, restart = bounded recovery, always = retry
+    # after each cooldown. Drain/cancel always suppresses restart.
+    policy: "restart"
+    stable_after_seconds: 60.0
+    restart_initial_delay_seconds: 1.0
+    restart_max_delay_seconds: 30.0
+    thrash_window_seconds: 300.0
+    thrash_limit: 3
+    cooldown_seconds: 300.0
 
 database:
   enabled: true
