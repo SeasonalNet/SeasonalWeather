@@ -48,7 +48,7 @@ def test_ci_workflows_enable_best_effort_dependency_and_build_caches() -> None:
 
     for workflow in (github_ci, forgejo_ci):
         assert "actions/cache@v4" in workflow
-        assert "UV_CACHE_DIR" in workflow
+        assert "path: ~/.cache/uv" in workflow
         assert "uv.lock" in workflow
         assert "SW_BUILD_CACHE_FROM" in workflow
         assert "SW_BUILD_CACHE_TO" in workflow
@@ -64,7 +64,7 @@ def test_release_workflows_enable_best_effort_dependency_and_build_caches() -> N
 
     for workflow in (github_release, forgejo_release):
         assert "actions/cache@v4" in workflow
-        assert "UV_CACHE_DIR" in workflow
+        assert "path: ~/.cache/uv" in workflow
         assert "uv.lock" in workflow
         assert "SW_BUILD_CACHE_FROM" in workflow
         assert "SW_BUILD_CACHE_TO" in workflow

@@ -101,9 +101,12 @@ GHCR and the Forgejo workflow uses the instance container registry; neither
 workflow uses mutable `latest` references.
 
 CI and release workflows use best-effort caches. UV downloads are cached under
-`.cache/uv` using the lockfile and project metadata as the key. Docker BuildKit
-layers are cached independently for each image profile. GitHub uses the Actions
-cache backend; Forgejo uses registry-backed cache references under
+`~/.cache/uv` using the lockfile and project metadata as the key; the cache is
+kept outside the repository so static analysis does not scan dependency files.
+The type-check configuration also excludes generated `.cache` content as a
+defense in depth measure. Docker BuildKit layers are cached independently for
+each image profile. GitHub uses the Actions cache backend; Forgejo uses
+registry-backed cache references under
 `seasonalweather-cache`. A missing or unavailable cache does not replace the
 normal dependency installation or image build, and cache export errors are
 ignored. The cache is an acceleration mechanism only; quality, test, image

@@ -27,10 +27,6 @@ jobs:
     needs: [ci, security, semver]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    env:
-      UV_CACHE_DIR: .cache/uv
-      SW_BUILD_CACHE_FROM: type=gha,scope=seasonalweather-{profile}
-      SW_BUILD_CACHE_TO: type=gha,mode=max,ignore-error=true,scope=seasonalweather-{profile}
     permissions:
       contents: write
       packages: write
@@ -44,7 +40,7 @@ jobs:
         uses: actions/cache@v4
         continue-on-error: true
         with:
-          path: .cache/uv
+          path: ~/.cache/uv
           key: ${{ runner.os }}-${{ runner.arch }}-uv-${{ hashFiles('uv.lock', 'pyproject.toml') }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-uv-

@@ -4,6 +4,7 @@
     ".venv",
     ".venv-ci",
     "build",
+    ".cache",
     "tests/architecture/fixtures/invalid"
   ],
   "ignore": [
