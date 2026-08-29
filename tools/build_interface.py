@@ -79,11 +79,28 @@ def _controlled_environment(
     return environment
 
 
-def run_image(*, build_info: Path, targets: tuple[str, ...]) -> int:
+def run_image(
+    *,
+    build_info: Path,
+    targets: tuple[str, ...],
+    push: bool = False,
+    image_reference: str | None = None,
+) -> int:
     if not BAKE_FILE.is_file():
         raise SystemExit(f"image matrix is missing: {BAKE_FILE}")
+    if push != (image_reference is not None):
+        raise SystemExit("image publishing requires exactly one image reference")
+    if push and len(targets) != 1:
+        raise SystemExit("image publishing accepts exactly one image target")
+    if image_reference is not None and (not image_reference or any(char.isspace() for char in image_reference)):
+        raise SystemExit("image reference must be a non-empty value without whitespace")
     info = _load(build_info)
-    command = ["docker", "buildx", "bake", "--load", "--file", str(BAKE_FILE), *targets]
+    command = ["docker", "buildx", "bake", "--file", str(BAKE_FILE)]
+    if push:
+        command.extend(("--push", "--set", f"{targets[0]}.tags={image_reference}"))
+    else:
+        command.append("--load")
+    command.extend(targets)
     docker_environment = {key: os.environ[key] for key in DOCKER_ENVIRONMENT_KEYS if key in os.environ}
     try:
         completed = subprocess.run(
@@ -120,6 +137,8 @@ def _parser() -> argparse.ArgumentParser:
     image.add_argument("--build-info", type=Path, required=True)
     image.add_argument("--target", choices=IMAGE_TARGETS)
     image.add_argument("--all", action="store_true")
+    image.add_argument("--push", action="store_true")
+    image.add_argument("--image-reference")
     commands.add_parser("compose-check")
     return parser
 
@@ -131,7 +150,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.all == (args.target is not None):
         raise SystemExit("choose exactly one of --target or --all")
     targets = IMAGE_TARGETS if args.all else (args.target,)
-    return run_image(build_info=args.build_info, targets=targets)
+    return run_image(
+        build_info=args.build_info,
+        targets=targets,
+        push=args.push,
+        image_reference=args.image_reference,
+    )
 
 
 if __name__ == "__main__":

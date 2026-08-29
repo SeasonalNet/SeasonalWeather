@@ -14,6 +14,7 @@ from seasonalweather.api.auth import ApiPrincipal, get_api_principal
 from seasonalweather.build_metadata import BuildInfo, collect_build_info
 from seasonalweather.control import OrchestratorControl
 from seasonalweather.swwp.messages import Register
+from tools import build_interface
 from tools.build_interface import IMAGE_TARGETS, _controlled_environment
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -124,6 +125,39 @@ def test_bake_environment_preserves_only_docker_transport_inputs() -> None:
 
     assert environment["DOCKER_HOST"] == "unix:///tmp/docker.sock"
     assert "SECRET_TOKEN" not in environment
+
+
+def test_build_interface_can_push_one_target_to_an_explicit_release_reference(tmp_path, monkeypatch) -> None:
+    build_info = tmp_path / "build-info.json"
+    build_info.write_text(_info().to_json(), encoding="utf-8")
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(build_interface.subprocess, "run", fake_run)
+
+    assert (
+        build_interface.run_image(
+            build_info=build_info,
+            targets=("controller",),
+            push=True,
+            image_reference="ghcr.io/seasonalnet/seasonalweather:v0.18.0-alpha.2-controller",
+        )
+        == 0
+    )
+    assert calls[0][0] == [
+        "docker",
+        "buildx",
+        "bake",
+        "--file",
+        str(build_interface.BAKE_FILE),
+        "--push",
+        "--set",
+        "controller.tags=ghcr.io/seasonalnet/seasonalweather:v0.18.0-alpha.2-controller",
+        "controller",
+    ]
 
 
 def test_swwp_registration_defaults_to_current_build_identity() -> None:

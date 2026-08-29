@@ -8,7 +8,7 @@ TARGET_PLATFORM ?= unknown
 .PHONY: format-check lint typecheck basedpyright architecture-check dependency-check suppressions-check
 .PHONY: dead-code-check security-check complexity-check image-boundaries-check container-security-check
 .PHONY: exceptions-check diagnostics-check diagnostics-build diagnostics-export
-.PHONY: quality test compile check phase2-gate phase2-images phase3-gate build-info version image images compose-check staging-check release release-artifacts
+.PHONY: quality test compile check phase2-gate phase2-images phase3-gate build-info version image images compose-check staging-check release release-artifacts release-images
 
 DIAGNOSTICS_EXPORT_DIR ?= build/diagnostics
 QUALITY_SUPPRESSIONS_BASE ?= HEAD
@@ -119,3 +119,28 @@ release-artifacts:
 	@test -z "$$(git status --porcelain)" || (echo "release artifacts require a clean working tree" >&2; exit 1)
 	uv build --clear --no-create-gitignore --sdist --wheel --out-dir dist/release
 	sha256sum dist/release/* > dist/release/SHA256SUMS
+
+IMAGE_REPOSITORY_BASE ?=
+IMAGE_TAG ?=
+IMAGE_REFERENCES_FILE ?= dist/release/IMAGE-REFERENCES.txt
+
+release-images:
+	@test -n "$(IMAGE_REPOSITORY_BASE)" || (echo "IMAGE_REPOSITORY_BASE is required" >&2; exit 1)
+	@test -n "$(IMAGE_TAG)" || (echo "IMAGE_TAG is required" >&2; exit 1)
+	@test -z "$$(git status --porcelain)" || (echo "release images require a clean working tree" >&2; exit 1)
+	@mkdir -p "$$(dirname "$(IMAGE_REFERENCES_FILE)")"
+	@set -eu; \
+	base="$${IMAGE_REPOSITORY_BASE%/}"; \
+	: > "$(IMAGE_REFERENCES_FILE)"; \
+	for profile in controller routine-worker piper legacy-tts voicetext-paul spfy maintenance development; do \
+		$(MAKE) PYTHON="$(PYTHON)" BUILD_INFO="$(BUILD_INFO)" BUILD_PROFILE="$$profile" \
+			TARGET_PLATFORM="$(TARGET_PLATFORM)" SOURCE_DATE_EPOCH="$(SOURCE_DATE_EPOCH)" build-info; \
+		case "$$profile" in \
+			controller|development) repository="$$base" ;; \
+			*) repository="$${base}-worker" ;; \
+		esac; \
+		image_reference="$$repository:$(IMAGE_TAG)-$$profile"; \
+		$(PYTHON) -m tools.build_interface image --build-info "$(BUILD_INFO)" \
+			--target "$$profile" --push --image-reference "$$image_reference"; \
+		printf '%s\t%s\n' "$$profile" "$$image_reference" >> "$(IMAGE_REFERENCES_FILE)"; \
+	done

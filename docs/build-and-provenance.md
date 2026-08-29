@@ -12,6 +12,7 @@ make images
 make compose-check
 make release
 make release-artifacts
+make release-images
 ```
 
 `make check` runs compilation, the repository quality gates, and the complete
@@ -89,6 +90,15 @@ explicit `SOURCE_DATE_EPOCH` and a clean tree.
 `dist/release/` and writes a `SHA256SUMS` manifest. The Forgejo and GitHub
 Release workflows invoke this target only after their CI, security, and
 SemVer guardrail workflows pass for the tagged commit.
+
+`make release-images` builds each target in the declared Bake matrix with its
+profile-specific build record and pushes an explicit release reference. It
+requires `IMAGE_REPOSITORY_BASE` and `IMAGE_TAG`, and writes the resulting
+profile-to-image mapping to `IMAGE_REFERENCES_FILE` (by default
+`dist/release/IMAGE-REFERENCES.txt`). Release workflows authenticate to their
+own container registry before invoking this target. The GitHub workflow uses
+GHCR and the Forgejo workflow uses the instance container registry; neither
+workflow uses mutable `latest` references.
 
 The runtime loads the embedded record when present and uses a bounded source
 fallback for unbuilt checkouts. The same identity feeds `seasonalweather

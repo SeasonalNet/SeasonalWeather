@@ -59,5 +59,22 @@ runtime compatibility check consumes a software version.
 
 Pushing an annotated `v*` tag starts the Release workflow after CI, Security,
 and SemVer guardrails have all passed. It builds the source distribution and
-wheel, plus `SHA256SUMS`, in `dist/release/`, then publishes those files to the
-Forgejo or GitHub release. No release is published for an untagged commit.
+wheel, plus `SHA256SUMS`, in `dist/release/`. It also builds and pushes all
+declared controller and worker image profiles to the provider's container
+registry. `IMAGE-REFERENCES.txt` records the exact image references included
+by that release. The release is published only after the archives and images
+are complete. No release is published for an untagged commit.
+
+Container image tags are profile-qualified and immutable. For a release such
+as `v0.18.0-alpha.2`, the controller and development images use the
+`seasonalweather` repository, while worker profiles use
+`seasonalweather-worker`; each image tag ends in its profile name. The Compose
+deployment should use these exact release references rather than a mutable
+`latest` tag.
+
+The current provider locations are `ghcr.io/seasonalnet/seasonalweather` for
+GitHub and `git.seasonalnet.org/seasonalnet/seasonalweather` for Forgejo.
+Worker references use the corresponding `seasonalweather-worker` repository.
+The release workflow writes the complete profile mapping to
+`dist/release/IMAGE-REFERENCES.txt` so operators do not need to reconstruct
+the names manually.
