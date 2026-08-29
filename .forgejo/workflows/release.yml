@@ -57,10 +57,6 @@ jobs:
         run: |
           printf '%s\n' "$FORGEJO_REGISTRY_TOKEN" \
             | docker login git.seasonalnet.org --username "$FORGEJO_REGISTRY_USER" --password-stdin
-          {
-            echo 'SW_BUILD_CACHE_FROM=type=registry,ref=git.seasonalnet.org/seasonalnet/seasonalweather-cache:{profile}'
-            echo 'SW_BUILD_CACHE_TO=type=registry,ref=git.seasonalnet.org/seasonalnet/seasonalweather-cache:{profile},mode=min,compression=zstd,ignore-error=true'
-          } >> "$FORGEJO_ENV"
       - name: Build and publish release images
         env:
           IMAGE_REPOSITORY_BASE: git.seasonalnet.org/seasonalnet/seasonalweather

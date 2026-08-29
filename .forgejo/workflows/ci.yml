@@ -74,24 +74,6 @@ jobs:
       - name: Prepare runner-provided Docker
         shell: bash
         run: bash ./tools/ci/bootstrap_docker.sh
-      - name: Enable Forgejo registry build cache
-        env:
-          FORGEJO_REGISTRY_USER: ${{ secrets.PACKAGE_REGISTRY_USER }}
-          FORGEJO_REGISTRY_TOKEN: ${{ secrets.PACKAGE_REGISTRY_TOKEN }}
-        run: |
-          if [ -z "$FORGEJO_REGISTRY_USER" ] || [ -z "$FORGEJO_REGISTRY_TOKEN" ]; then
-            echo "Forgejo registry cache credentials are unavailable; continuing without a remote build cache."
-            exit 0
-          fi
-          if ! printf '%s\n' "$FORGEJO_REGISTRY_TOKEN" \
-            | docker login git.seasonalnet.org --username "$FORGEJO_REGISTRY_USER" --password-stdin; then
-            echo "Forgejo registry cache login failed; continuing without a remote build cache."
-            exit 0
-          fi
-          {
-            echo 'SW_BUILD_CACHE_FROM=type=registry,ref=git.seasonalnet.org/seasonalnet/seasonalweather-cache:{profile}'
-            echo 'SW_BUILD_CACHE_TO=type=registry,ref=git.seasonalnet.org/seasonalnet/seasonalweather-cache:{profile},mode=min,compression=zstd,ignore-error=true'
-          } >> "$FORGEJO_ENV"
       - name: Install Python tooling
         run: |
           apt-get update

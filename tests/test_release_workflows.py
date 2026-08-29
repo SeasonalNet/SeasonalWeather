@@ -42,7 +42,7 @@ def test_forgejo_registry_uses_package_scoped_credentials() -> None:
     assert "forge.token" not in login_step[: login_step.index("Publish Forgejo release")]
 
 
-def test_ci_workflows_enable_best_effort_dependency_and_build_caches() -> None:
+def test_ci_workflows_enable_best_effort_dependency_and_provider_build_caches() -> None:
     github_ci = (ROOT / ".github/workflows/ci.yml").read_text()
     forgejo_ci = (ROOT / ".forgejo/workflows/ci.yml").read_text()
 
@@ -50,17 +50,15 @@ def test_ci_workflows_enable_best_effort_dependency_and_build_caches() -> None:
         assert "actions/cache@v4" in workflow
         assert "path: ~/.cache/uv" in workflow
         assert "uv.lock" in workflow
-        assert "SW_BUILD_CACHE_FROM" in workflow
-        assert "SW_BUILD_CACHE_TO" in workflow
-        assert "ignore-error=true" in workflow
 
     assert "type=gha,scope=seasonalweather-{profile}" in github_ci
-    assert "type=registry,ref=git.seasonalnet.org/seasonalnet/seasonalweather-cache:{profile}" in forgejo_ci
     assert "mode=max,ignore-error=true" in github_ci
-    assert "mode=min,compression=zstd,ignore-error=true" in forgejo_ci
+    assert "SW_BUILD_CACHE_FROM" not in forgejo_ci
+    assert "SW_BUILD_CACHE_TO" not in forgejo_ci
+    assert "seasonalweather-cache" not in forgejo_ci
 
 
-def test_release_workflows_enable_best_effort_dependency_and_build_caches() -> None:
+def test_release_workflows_enable_best_effort_dependency_and_provider_build_caches() -> None:
     github_release = (ROOT / ".github/workflows/release.yml").read_text()
     forgejo_release = (ROOT / ".forgejo/workflows/release.yml").read_text()
 
@@ -68,11 +66,9 @@ def test_release_workflows_enable_best_effort_dependency_and_build_caches() -> N
         assert "actions/cache@v4" in workflow
         assert "path: ~/.cache/uv" in workflow
         assert "uv.lock" in workflow
-        assert "SW_BUILD_CACHE_FROM" in workflow
-        assert "SW_BUILD_CACHE_TO" in workflow
-        assert "ignore-error=true" in workflow
 
     assert "type=gha,scope=seasonalweather-{profile}" in github_release
-    assert "type=registry,ref=git.seasonalnet.org/seasonalnet/seasonalweather-cache:{profile}" in forgejo_release
     assert "mode=max,ignore-error=true" in github_release
-    assert "mode=min,compression=zstd,ignore-error=true" in forgejo_release
+    assert "SW_BUILD_CACHE_FROM" not in forgejo_release
+    assert "SW_BUILD_CACHE_TO" not in forgejo_release
+    assert "seasonalweather-cache" not in forgejo_release

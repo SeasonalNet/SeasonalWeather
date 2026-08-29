@@ -105,22 +105,25 @@ CI and release workflows use best-effort caches. UV downloads are cached under
 kept outside the repository so static analysis does not scan dependency files.
 The type-check configuration also excludes generated `.cache` content as a
 defense in depth measure. Docker BuildKit layers are cached independently for
-each image profile. GitHub uses the Actions cache backend; Forgejo uses
-registry-backed cache references under
-`seasonalweather-cache`. A missing or unavailable cache does not replace the
-normal dependency installation or image build, and cache export errors are
-ignored. Forgejo uses compressed `mode=min` registry cache exports so the cache
-stays below the deployment's proxy upload limit; GitHub retains `mode=max` in
-its Actions cache backend. The cache is an acceleration mechanism only;
-quality, test, image inspection, and release publication gates still run.
+each image profile. GitHub uses the Actions cache backend. Forgejo intentionally
+does not export BuildKit cache layers through the instance registry: the
+deployment's proxy rejects some large cache blobs with HTTP 413, and a failed
+export wastes build time even when it is configured as best effort. Forgejo
+therefore relies on the local cache of its dedicated runner-provided Docker
+daemon when that daemon persists between jobs. Replacing or cleaning that
+daemon only causes a slower uncached build; it does not affect build
+correctness. A missing or unavailable cache does not replace the normal
+dependency installation or image build. The cache is an acceleration mechanism
+only; quality, test, image inspection, and release publication gates still run.
 
 Forgejo's automatic workflow token is sufficient for creating the Forgejo
 release but is not package-scoped. The Forgejo workflow or organization
 Actions secrets must define `PACKAGE_REGISTRY_USER` and
 `PACKAGE_REGISTRY_TOKEN`, where the latter is a user token with `write:package`
 access and the user can write to the package owner. Release publication
-requires these credentials; the ordinary CI image job treats unavailable or
-invalid cache credentials as a cache miss and continues with an uncached build.
+requires these credentials. The ordinary CI image job does not require
+package-registry credentials because it uses only the runner-local BuildKit
+cache.
 
 The runtime loads the embedded record when present and uses a bounded source
 fallback for unbuilt checkouts. The same identity feeds `seasonalweather

@@ -54,9 +54,13 @@ the endpoint is absent.
 
 Keep `victus-builder` at capacity one unless each concurrent builder has an
 independent DIND daemon. Jobs sharing a daemon can inspect or mutate one
-another's images and containers. Protect the loopback-only plaintext endpoint,
-periodically maintain DIND storage, and do not expose the host Docker socket as
-an incidental workflow workaround.
+another's images and containers. The SeasonalWeather Forgejo workflows do not
+use the registry as a BuildKit cache backend because the deployment proxy can
+reject large cache blobs; they can still reuse the DIND daemon's local BuildKit
+cache while it persists. Replacing or cleaning the daemon removes that
+optimization but does not change build correctness. Protect the loopback-only
+plaintext endpoint, periodically maintain DIND storage, and do not expose the
+host Docker socket as an incidental workflow workaround.
 
 ## Other supported runner authorities
 
