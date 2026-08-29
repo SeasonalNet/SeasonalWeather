@@ -1304,19 +1304,20 @@ def _extract_wrapped_headline(lines: list[str]) -> tuple[str, int, int]:
 
         parts = [s]
         end_idx = i
-        if s.endswith("...") and len(s) > 6:
-            raw = s
-        else:
-            raw = s
-            for j in range(i + 1, len(lines)):
-                sj = lines[j].strip()
-                if not sj:
-                    break
-                parts.append(sj)
-                end_idx = j
-                raw = " ".join(parts)
-                if sj.endswith("..."):
-                    break
+        # The opening and closing ellipses are presentation markers, not a
+        # reliable indication that the headline fits on one physical line.
+        # NWS may place an ellipsis at the end of an intermediate wrapped line,
+        # as in ``...COUNTIES...``.  The blank line after the headline paragraph
+        # is the structural boundary; consume the whole paragraph before
+        # applying headline case normalization.
+        for j in range(i + 1, len(lines)):
+            sj = lines[j].strip()
+            if not sj:
+                break
+            parts.append(sj)
+            end_idx = j
+
+        raw = " ".join(parts)
 
         headline = raw.strip().strip(".").strip()
         return _fix_headline_case(headline).rstrip("."), i, end_idx

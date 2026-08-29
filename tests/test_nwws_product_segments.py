@@ -299,6 +299,94 @@ def test_expiry_summary_script_sentence_cases_all_caps_svs_headline_for_tts():
     assert "will expire at 3:00 PM EDT." in spoken
     assert " AT " not in spoken
 
+
+WRAPPED_LIFECYCLE_EXP_SVS = """659
+WWUS51 KLWX 272156 RRA
+SVSLWX
+
+Severe Weather Statement
+National Weather Service Baltimore MD/Washington DC
+556 PM EDT Thu Aug 27 2026
+
+VAC015-139-165-660-272206-
+/O.EXP.KLWX.SV.W.0450.000000T0000Z-260827T2200Z/
+Rockingham VA-Page VA-Augusta VA-City of Harrisonburg VA-
+556 PM EDT Thu Aug 27 2026
+
+...THE SEVERE THUNDERSTORM WARNING FOR SOUTHEASTERN ROCKINGHAM...
+SOUTHWESTERN PAGE...AND NORTHEASTERN AUGUSTA COUNTIES AND THE CITY OF
+HARRISONBURG WILL EXPIRE AT 600 PM EDT...
+
+The storm which prompted the warning has weakened below severe
+limits, and no longer poses an immediate threat to life or property.
+Therefore, the warning will be allowed to expire.  However, heavy
+rain is still possible with this thunderstorm.
+
+A Severe Thunderstorm Watch remains in effect until 1000 PM EDT for
+central, western and northwestern Virginia.
+
+To report severe weather, contact your nearest law enforcement
+agency. They will relay your report to the National Weather Service
+Sterling Virginia.
+
+&&
+
+LAT...LON 3852 7886 3848 7862 3847 7862 3845 7856
+      3843 7855 3842 7849 3835 7856 3833 7856
+      3833 7859 3831 7861 3829 7866 3825 7866
+      3825 7871 3822 7874 3814 7878 3831 7905
+TIME...MOT...LOC 2156Z 307DEG 17KT 3832 7869
+
+$$
+
+Belak
+"""
+
+
+def test_wrapped_lifecycle_headline_consumes_the_whole_nonblank_block() -> None:
+    segments = parse_nwws_product_segments(WRAPPED_LIFECYCLE_EXP_SVS)
+
+    assert len(segments) == 1
+    segment = segments[0]
+    assert segment.headline == (
+        "The severe thunderstorm warning for southeastern rockingham... "
+        "southwestern page...and northeastern augusta counties and the city of "
+        "harrisonburg will expire at 600 PM EDT"
+    )
+    assert segment.reason_text.startswith("The storm which prompted the warning")
+    assert "SOUTHWESTERN PAGE" not in segment.reason_text
+    assert "will expire at 600 PM EDT" not in segment.reason_text
+
+
+def test_wrapped_lifecycle_headline_stays_sentence_cased_through_paul_vtml() -> None:
+    from seasonalweather.alerts.builder import build_spoken_alert
+    from seasonalweather.alerts.product import parse_product_text
+    from seasonalweather.broadcast.product_text import render_nws_product_script
+    from seasonalweather.tts.voicetext_paul_vtml import apply_voicetext_paul_vtml
+
+    parsed = parse_product_text(WRAPPED_LIFECYCLE_EXP_SVS)
+    assert parsed is not None
+    spoken = build_spoken_alert(parsed, WRAPPED_LIFECYCLE_EXP_SVS)
+    rendered = render_nws_product_script(
+        product_type="SVS",
+        base_script=spoken.script,
+        official_text=WRAPPED_LIFECYCLE_EXP_SVS,
+        vtec=["/O.EXP.KLWX.SV.W.0450.000000T0000Z-260827T2200Z/"],
+        vtec_actions={"EXP"},
+        has_tracks=True,
+        should_full=False,
+        event_text="Severe Thunderstorm Warning",
+        area_text="",
+        headline="",
+    )
+
+    paul_input = apply_voicetext_paul_vtml(rendered.script)
+
+    assert rendered.renderer == "nwws-detailed-terminal-cancel-expiry"
+    assert "SOUTHWESTERN PAGE" not in rendered.script
+    assert "will expire at 600 PM EDT" in rendered.script
+    assert " AT " not in paul_input
+
 KLWX_CON_SVS = """435
 WWUS51 KLWX 201903
 SVSLWX
