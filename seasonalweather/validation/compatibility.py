@@ -10,11 +10,12 @@ from functools import total_ordering
 from types import MappingProxyType
 from typing import Any
 
-_SEMVER_RE = re.compile(
+_PEP440_RE = re.compile(
     r"^(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)"
-    r"(?:-(?P<prerelease>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
+    r"(?:(?P<pre>a|b|rc)(?P<pre_number>0|[1-9]\d*))?"
     r"(?:\.dev(?P<development>0|[1-9]\d*))?"
-    r"(?:\+(?P<build>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
+    r"(?:\+(?P<local>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$",
+    re.IGNORECASE,
 )
 
 
@@ -92,10 +93,10 @@ class SupportedCompatibility:
     def __post_init__(self) -> None:
         object.__setattr__(self, "job_payload_schemas", frozenset(self.job_payload_schemas))
         object.__setattr__(self, "job_result_schemas", frozenset(self.job_result_schemas))
-        minimum = _semver(self.software_minimum)
-        maximum = _semver(self.software_maximum_exclusive)
+        minimum = _pep440(self.software_minimum)
+        maximum = _pep440(self.software_maximum_exclusive)
         if minimum is None or maximum is None or minimum >= maximum:
-            raise ValueError("software compatibility bounds must be ordered semantic versions")
+            raise ValueError("software compatibility bounds must be ordered PEP 440 versions")
         if not self.job_payload_schemas or not self.job_result_schemas:
             raise ValueError("job compatibility schema sets cannot be empty")
         if any(item < 1 for item in (*self.job_payload_schemas, *self.job_result_schemas)):
@@ -124,26 +125,24 @@ class CompatibilityFinding:
 
 @total_ordering
 @dataclass(frozen=True)
-class _SemVer:
+class _Pep440Version:
     major: int
     minor: int
     patch: int
-    prerelease: tuple[str, ...] = ()
+    pre: tuple[str, int] | None = None
     development: int | None = None
 
     def __lt__(self, other: object) -> bool:
-        if not isinstance(other, _SemVer):
+        if not isinstance(other, _Pep440Version):
             return NotImplemented
         core = (self.major, self.minor, self.patch)
         other_core = (other.major, other.minor, other.patch)
         if core != other_core:
             return core < other_core
-        if self.prerelease != other.prerelease:
-            if not self.prerelease:
-                return False
-            if not other.prerelease:
-                return True
-            return _prerelease_less(self.prerelease, other.prerelease)
+        pre_order = _pre_order(self.pre, self.development)
+        other_pre_order = _pre_order(other.pre, other.development)
+        if pre_order != other_pre_order:
+            return pre_order < other_pre_order
         if self.development is None:
             return False
         if other.development is None:
@@ -151,24 +150,10 @@ class _SemVer:
         return self.development < other.development
 
 
-def _prerelease_less(left_items: tuple[str, ...], right_items: tuple[str, ...]) -> bool:
-    for left, right in zip(left_items, right_items, strict=False):
-        comparison = _identifier_order(left, right)
-        if comparison is not None:
-            return comparison
-    return len(left_items) < len(right_items)
-
-
-def _identifier_order(left: str, right: str) -> bool | None:
-    if left == right:
-        return None
-    left_numeric = left.isdigit()
-    right_numeric = right.isdigit()
-    if left_numeric and right_numeric:
-        return int(left) < int(right)
-    if left_numeric != right_numeric:
-        return left_numeric
-    return left < right
+def _pre_order(pre: tuple[str, int] | None, development: int | None) -> tuple[int, int]:
+    if pre is None:
+        return (-1, 0) if development is not None else (3, 0)
+    return ({"a": 0, "b": 1, "rc": 2}[pre[0]], pre[1])
 
 
 def _freeze_json(value: Any) -> Any:
@@ -187,28 +172,26 @@ def _thaw_json(value: Any) -> Any:
     return value
 
 
-def _semver(value: str | None) -> _SemVer | None:
+def _pep440(value: str | None) -> _Pep440Version | None:
     if value is None:
         return None
-    match = _SEMVER_RE.fullmatch(value)
+    match = _PEP440_RE.fullmatch(value)
     if match is None:
         return None
-    prerelease = tuple((match.group("prerelease") or "").split(".")) if match.group("prerelease") else ()
-    if any(identifier.isdigit() and len(identifier) > 1 and identifier.startswith("0") for identifier in prerelease):
-        return None
-    return _SemVer(
+    pre = match.group("pre")
+    return _Pep440Version(
         int(match.group("major")),
         int(match.group("minor")),
         int(match.group("patch")),
-        prerelease,
+        (pre.lower(), int(match.group("pre_number"))) if pre is not None else None,
         int(match.group("development")) if match.group("development") else None,
     )
 
 
 def _software_finding(value: str | None, supported: SupportedCompatibility) -> CompatibilityFinding:
-    parsed = _semver(value)
-    minimum = _semver(supported.software_minimum)
-    maximum = _semver(supported.software_maximum_exclusive)
+    parsed = _pep440(value)
+    minimum = _pep440(supported.software_minimum)
+    maximum = _pep440(supported.software_maximum_exclusive)
     bound = {
         "minimum": supported.software_minimum,
         "maximum_exclusive": supported.software_maximum_exclusive,

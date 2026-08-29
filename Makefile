@@ -8,7 +8,7 @@ TARGET_PLATFORM ?= unknown
 .PHONY: format-check lint typecheck basedpyright architecture-check dependency-check suppressions-check
 .PHONY: dead-code-check security-check complexity-check image-boundaries-check container-security-check
 .PHONY: exceptions-check diagnostics-check diagnostics-build diagnostics-export
-.PHONY: quality test compile check phase2-gate phase2-images phase3-gate build-info version image images compose-check staging-check release
+.PHONY: quality test compile check phase2-gate phase2-images phase3-gate build-info version image images compose-check staging-check release release-artifacts
 
 DIAGNOSTICS_EXPORT_DIR ?= build/diagnostics
 QUALITY_SUPPRESSIONS_BASE ?= HEAD
@@ -114,3 +114,8 @@ release:
 	@test -n "$(SOURCE_DATE_EPOCH)" || (echo "SOURCE_DATE_EPOCH is required for release provenance" >&2; exit 1)
 	@test -z "$$(git status --porcelain)" || (echo "release requires a clean working tree" >&2; exit 1)
 	$(MAKE) BUILD_PROFILE=release build-info
+
+release-artifacts:
+	@test -z "$$(git status --porcelain)" || (echo "release artifacts require a clean working tree" >&2; exit 1)
+	uv build --clear --no-create-gitignore --sdist --wheel --out-dir dist/release
+	sha256sum dist/release/* > dist/release/SHA256SUMS

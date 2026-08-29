@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  ci:
+    name: CI
+    uses: ./.forgejo/workflows/ci.yml
+
+  security:
+    name: Security
+    uses: ./.forgejo/workflows/security.yml
+
+  semver:
+    name: SemVer guardrails
+    uses: ./.forgejo/workflows/semver.yml
+
+  release:
+    name: Publish release
+    needs: [ci, security, semver]
+    if: startsWith(forge.ref, 'refs/tags/v')
+    runs-on: docker
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ forge.ref }}
+      - name: Install release tooling
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends make python3 python3-venv python3-pip
+          python3 -m venv .venv-release
+          . .venv-release/bin/activate
+          python -m pip install --upgrade pip uv==0.12.4
+          make release-artifacts SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          test -n "$(find dist/release -maxdepth 1 -type f -print -quit)"
+      - name: Publish Forgejo release
+        uses: https://code.forgejo.org/actions/forgejo-release@v2.13.4
+        with:
+          direction: upload
+          release-dir: dist/release/
+          token: ${{ forge.token }}
+          tag: ${{ forge.ref_name }}
+          sha: ${{ forge.sha }}
+          prerelease: ${{ contains(forge.ref_name, '-') }}

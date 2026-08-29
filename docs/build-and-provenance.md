@@ -11,6 +11,7 @@ make image
 make images
 make compose-check
 make release
+make release-artifacts
 ```
 
 `make check` runs compilation, the repository quality gates, and the complete
@@ -83,6 +84,11 @@ TARGET_PLATFORM
 Arbitrary environment variables are not forwarded to Docker Buildx. Dirty
 local source trees are marked explicitly. Release provenance requires an
 explicit `SOURCE_DATE_EPOCH` and a clean tree.
+
+`make release-artifacts` builds the PEP 517 source distribution and wheel into
+`dist/release/` and writes a `SHA256SUMS` manifest. The Forgejo and GitHub
+Release workflows invoke this target only after their CI, security, and
+SemVer guardrail workflows pass for the tagged commit.
 
 The runtime loads the embedded record when present and uses a bounded source
 fallback for unbuilt checkouts. The same identity feeds `seasonalweather

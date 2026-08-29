@@ -52,7 +52,7 @@ seasonalweather = "seasonalweather.__main__:_main"
 
 [tool.setuptools_scm]
 version_file = "seasonalweather/_version.py"
-tag_regex = "^(?:v)?(?P<version>\\d+\\.\\d+\\.\\d+(?:[-.][0-9A-Za-z.-]+)?)$"
+tag_regex = "^(?:v)?(?P<version>\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?)$"
 
 [tool.setuptools.packages.find]
 include = ["seasonalweather*"]

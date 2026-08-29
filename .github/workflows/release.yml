@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+
+  security:
+    name: Security
+    uses: ./.github/workflows/security.yml
+
+  semver:
+    name: SemVer guardrails
+    uses: ./.github/workflows/semver.yml
+
+  release:
+    name: Publish release
+    needs: [ci, security, semver]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}
+      - name: Install release tooling
+        run: |
+          python3 -m venv .venv-release
+          . .venv-release/bin/activate
+          python -m pip install --upgrade pip uv==0.12.4
+      - name: Build release artifacts
+        run: |
+          . .venv-release/bin/activate
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)" make release-artifacts
+          test -n "$(find dist/release -maxdepth 1 -type f -print -quit)"
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: dist/release/*
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}

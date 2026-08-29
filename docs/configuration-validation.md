@@ -126,9 +126,11 @@ epoch, worker/instance/session identity, digest, and the complete normalized
 record as a stable key. Caller ordering cannot change analysis, evidence, or
 serialized reports.
 
-Software compatibility follows SemVer precedence, including prerelease and
-Git-derived `.devN` development versions, plus rejection of empty identifiers,
-invalid characters, and numeric prerelease identifiers with leading zeroes.
+Software compatibility follows PEP 440 precedence. Runtime identities use
+canonical forms such as `0.18.0`, `0.18.0a1`, `0.18.0rc1`, and
+`0.18.0.dev55+gabc1234`; VCS tags remain a separate SemVer concern. Non-PEP
+440 tag spellings such as `0.18.0-alpha.1` are not accepted as runtime
+software identities.
 
 ## Environmental probes
 

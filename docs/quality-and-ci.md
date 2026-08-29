@@ -53,12 +53,15 @@ Forgejo is the canonical SeasonalWeather CI authority:
   explicit suppression comparison base, then runs `make phase2-images` on the
   dedicated `victus-builder` Docker lane.
 - `.forgejo/workflows/security.yml` runs the repository Gitleaks contract.
-- `.forgejo/workflows/semver.yml` validates working and release-tag versions.
+- `.forgejo/workflows/semver.yml` validates PEP 440 working versions and
+  SemVer release tags.
 
 GitHub parity is maintained in the corresponding `.github/workflows/` files.
 GitHub uses `ubuntu-latest` and the equivalent hosted-runner package setup;
 the repository phase gate, suppression base selection, security scan, and
-SemVer guardrails remain the same. GitHub uses its native Docker support.
+SemVer guardrails remain the same. The Release workflow calls all three
+workflows as reusable jobs and publishes only after all three pass. GitHub uses
+its native Docker support.
 Forgejo's CI-only bootstrap runs only on `victus-builder`, installs only the
 Docker client, and rejects a missing runner-owned endpoint; ordinary runners
 receive no Docker authority. The administrator contract is documented in

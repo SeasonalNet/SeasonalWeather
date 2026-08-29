@@ -7,6 +7,7 @@ build/
 dist/
 *.egg-info/
 seasonalweather/_version.py
+.venv-release/
 *.pyc
 # ==================================== 
 # local dependency artifacts / backups

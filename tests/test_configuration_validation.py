@@ -603,10 +603,10 @@ def test_candidate_hash_uses_exact_bytes_and_deterministic_bundle_order() -> Non
     assert not unavailable.reproducible
 
 
-def test_compatibility_ranges_sets_and_semver_are_explicit() -> None:
+def test_compatibility_ranges_sets_and_pep440_are_explicit() -> None:
     supported = default_supported_compatibility()
     malformed = CompatibilityIdentity(
-        software_version="not-semver",
+        software_version="not-pep440",
         build_identity=None,
         validation_protocol_version=1,
         config_schema_version=1,
@@ -755,14 +755,14 @@ def test_software_compatibility_orders_development_builds_before_release() -> No
     "version",
     (
         "1.0.0-01",
-        "1.0.0-alpha..1",
-        "1.0.0-alpha_1",
+        "1.0.0-alpha1",
+        "1.0.0-alpha.1",
         "1.0",
         "01.0.0",
         "1.0.0+build..1",
     ),
 )
-def test_semver_rejects_malformed_identifiers(version: str) -> None:
+def test_pep440_rejects_noncanonical_or_malformed_identifiers(version: str) -> None:
     identity = replace(
         current := CompatibilityIdentity(
             software_version=version,
@@ -785,14 +785,14 @@ def test_semver_rejects_malformed_identifiers(version: str) -> None:
     assert finding.disposition is CompatibilityDisposition.MALFORMED
 
 
-def test_semver_prerelease_precedence_is_spec_ordered() -> None:
+def test_pep440_prerelease_precedence_is_spec_ordered() -> None:
     supported = replace(
         default_supported_compatibility(),
-        software_minimum="1.0.0-alpha.1",
+        software_minimum="1.0.0a1",
         software_maximum_exclusive="1.0.0",
     )
     base = CompatibilityIdentity(
-        software_version="1.0.0-alpha.beta",
+        software_version="1.0.0b1",
         build_identity=None,
         validation_protocol_version=1,
         config_schema_version=1,
@@ -805,7 +805,7 @@ def test_semver_prerelease_precedence_is_spec_ordered() -> None:
         report_schema_version=1,
     )
     inside = analyze_compatibility(base, supported)[0]
-    older = analyze_compatibility(replace(base, software_version="1.0.0-alpha"), supported)[0]
+    older = analyze_compatibility(replace(base, software_version="1.0.0a0"), supported)[0]
     release = analyze_compatibility(replace(base, software_version="1.0.0"), supported)[0]
 
     assert inside.disposition.compatible

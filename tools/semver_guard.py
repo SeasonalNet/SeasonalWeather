@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""SeasonalWeather SemVer guardrails.
+"""SeasonalWeather release-tag and PEP 440 version guardrails.
 
 This script derives the development version from Git instead of importing the
-package or requiring runtime dependencies. Stable releases remain annotated
-SemVer tags; untagged commits are valid development versions.
+package or requiring runtime dependencies. Release tags use SemVer; Python
+package and runtime versions use the corresponding PEP 440 spelling.
 """
 
 from __future__ import annotations
@@ -21,13 +21,23 @@ SEMVER_RE = re.compile(
     r"(?P<minor>0|[1-9]\d*)\."
     r"(?P<patch>0|[1-9]\d*)"
     r"(?:-(?P<prerelease>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
-    r"(?:\.dev(?P<development>0|[1-9]\d*))?"
     r"(?:\+(?P<build>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
+)
+PEP440_RE = re.compile(
+    r"^(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)"
+    r"(?:(?P<pre>a|b|rc)(?P<pre_number>0|[1-9]\d*))?"
+    r"(?:\.dev(?P<development>0|[1-9]\d*))?"
+    r"(?:\+(?P<local>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$",
+    re.IGNORECASE,
 )
 
 
 class SemVerError(ValueError):
     """Raised when a version string violates the local SemVer policy."""
+
+
+class Pep440Error(ValueError):
+    """Raised when a generated software version is not valid PEP 440."""
 
 
 @dataclass(frozen=True)
@@ -37,7 +47,6 @@ class SemVer:
     minor: int
     patch: int
     prerelease: tuple[str, ...]
-    development: int | None
 
     @classmethod
     def parse(cls, value: str) -> SemVer:
@@ -57,7 +66,6 @@ class SemVer:
             minor=int(match.group("minor")),
             patch=int(match.group("patch")),
             prerelease=prerelease,
-            development=(int(match.group("development")) if match.group("development") is not None else None),
         )
 
     def precedence_key(self) -> tuple[int, int, int]:
@@ -91,13 +99,7 @@ class SemVer:
             )
             if prerelease_result:
                 return prerelease_result
-        if self.development is None and other.development is None:
-            return 0
-        if self.development is None:
-            return 1
-        if other.development is None:
-            return -1
-        return (self.development > other.development) - (self.development < other.development)
+        return 0
 
     def __lt__(self, other: SemVer) -> bool:
         return self.compare(other) < 0
@@ -126,25 +128,67 @@ def git(*args: str, check: bool = True) -> str:
     return proc.stdout.strip()
 
 
+def _pep440(value: str) -> None:
+    if PEP440_RE.fullmatch(value) is None:
+        raise Pep440Error(f"invalid PEP 440 software version: {value!r}")
+
+
+def _semver_prerelease_to_pep440(prerelease: tuple[str, ...]) -> str:
+    if not prerelease:
+        return ""
+    if len(prerelease) == 1:
+        match = re.fullmatch(r"(?P<label>alpha|beta|rc|dev)(?:[-.](?P<number>0|[1-9]\d*))?", prerelease[0])
+        if match is None:
+            raise Pep440Error(f"unsupported SemVer prerelease for PEP 440 conversion: {'.'.join(prerelease)!r}")
+        label = match.group("label")
+        number = match.group("number") or "0"
+    elif len(prerelease) == 2 and prerelease[0] in {"alpha", "beta", "rc", "dev"}:
+        label, number = prerelease
+        if not number.isdigit() or (len(number) > 1 and number.startswith("0")):
+            raise Pep440Error(f"unsupported SemVer prerelease number: {'.'.join(prerelease)!r}")
+    else:
+        raise Pep440Error(f"unsupported SemVer prerelease for PEP 440 conversion: {'.'.join(prerelease)!r}")
+
+    pep_label = {"alpha": "a", "beta": "b", "rc": "rc", "dev": ".dev"}[label]
+    return f"{pep_label}{number}"
+
+
+def pep440_from_git_describe(describe: str) -> str:
+    """Convert a Git-describe SemVer tag into a PEP 440 software version."""
+
+    match = re.fullmatch(
+        r"v(?P<version>.+)-(?P<distance>\d+)-g(?P<sha>[0-9a-f]+)(?P<dirty>-dirty)?",
+        describe,
+    )
+    if match is None:
+        raise Pep440Error(f"unsupported Git describe output: {describe}")
+
+    parsed_base = SemVer.parse(match.group("version"))
+    distance = int(match.group("distance"))
+    prerelease = _semver_prerelease_to_pep440(parsed_base.prerelease)
+    if distance == 0 and match.group("dirty") is None:
+        software_version = f"{parsed_base.major}.{parsed_base.minor}.{parsed_base.patch}{prerelease}"
+    elif parsed_base.prerelease and prerelease.startswith(".dev"):
+        raise Pep440Error("cannot represent commits after a SemVer development tag in PEP 440")
+    else:
+        if parsed_base.prerelease:
+            release = f"{parsed_base.major}.{parsed_base.minor}.{parsed_base.patch}{prerelease}.dev{distance}"
+        else:
+            release = f"{parsed_base.major}.{parsed_base.minor}.{parsed_base.patch + 1}.dev{distance}"
+        local = f"g{match.group('sha')}"
+        if match.group("dirty"):
+            local += ".dirty"
+        software_version = f"{release}+{local}"
+    _pep440(software_version)
+    return software_version
+
+
 def vcs_version() -> str:
     describe = git("describe", "--tags", "--long", "--dirty", "--match", "v[0-9]*")
-    match = re.fullmatch(r"v(?P<version>[^-]+)-(?P<distance>\d+)-g(?P<sha>[0-9a-f]+)(?P<dirty>-dirty)?", describe)
-    if match is None:
-        die(f"unsupported Git describe output: {describe}")
-    base = match.group("version")
     try:
-        SemVer.parse(base)
-    except SemVerError as exc:
+        return pep440_from_git_describe(describe)
+    except (Pep440Error, SemVerError) as exc:
         die(str(exc))
-    distance = int(match.group("distance"))
-    if distance == 0 and match.group("dirty") is None:
-        return base
-    parsed_base = SemVer.parse(base)
-    development_base = f"{parsed_base.major}.{parsed_base.minor}.{parsed_base.patch + 1}"
-    suffix = f"+g{match.group('sha')}"
-    if match.group("dirty"):
-        suffix += ".dirty"
-    return f"{development_base}.dev{distance}{suffix}"
 
 
 def tag_to_version(tag_name: str) -> str:
@@ -182,10 +226,10 @@ def command_version(_: argparse.Namespace) -> None:
 def command_check_working(_: argparse.Namespace) -> None:
     version = vcs_version()
     try:
-        SemVer.parse(version)
-    except SemVerError as exc:
+        _pep440(version)
+    except Pep440Error as exc:
         die(str(exc))
-    print(f"version ok: {version}")
+    print(f"PEP 440 version ok: {version}")
 
 
 def command_check_version(args: argparse.Namespace) -> None:
@@ -193,7 +237,7 @@ def command_check_version(args: argparse.Namespace) -> None:
         SemVer.parse(args.version)
     except SemVerError as exc:
         die(str(exc))
-    print(f"version ok: {args.version}")
+    print(f"SemVer tag version ok: {args.version}")
 
 
 def command_check_tag(args: argparse.Namespace) -> None:
@@ -244,16 +288,16 @@ def command_check_tag_order(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="SeasonalWeather SemVer guardrails")
+    parser = argparse.ArgumentParser(description="SeasonalWeather SemVer and PEP 440 guardrails")
     subparsers = parser.add_subparsers(required=True)
 
     version = subparsers.add_parser("version", help="print the code version")
     version.set_defaults(func=command_version)
 
-    check_working = subparsers.add_parser("check-working", help="validate seasonalweather.__version__")
+    check_working = subparsers.add_parser("check-working", help="validate the Git-derived PEP 440 package version")
     check_working.set_defaults(func=command_check_working)
 
-    check_version = subparsers.add_parser("check-version", help="validate a version string")
+    check_version = subparsers.add_parser("check-version", help="validate a SemVer release-tag version")
     check_version.add_argument("version")
     check_version.set_defaults(func=command_check_version)
 
