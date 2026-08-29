@@ -541,7 +541,7 @@ def test_deprecation_and_suggestion_are_separate_nonblocking_phases() -> None:
     report = _report(text)
 
     deprecation = next(item for item in report.issues if item.phase is ValidationStage.DEPRECATION)
-    suggestion = next(item for item in report.issues if item.severity is DiagnosticSeverity.SUGGESTION)
+    suggestion = next(item for item in report.issues if item.rule_id == "advisory.configuration")
     assert deprecation.fixes[0].operation.value == "remove"
     assert deprecation.fixes[0].expected_source_sha256 == report.candidate.source_manifest[0].sha256
     assert suggestion.phase is ValidationStage.ADVISORY
