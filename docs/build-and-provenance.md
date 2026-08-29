@@ -100,6 +100,23 @@ own container registry before invoking this target. The GitHub workflow uses
 GHCR and the Forgejo workflow uses the instance container registry; neither
 workflow uses mutable `latest` references.
 
+CI and release workflows use best-effort caches. UV downloads are cached under
+`.cache/uv` using the lockfile and project metadata as the key. Docker BuildKit
+layers are cached independently for each image profile. GitHub uses the Actions
+cache backend; Forgejo uses registry-backed cache references under
+`seasonalweather-cache`. A missing or unavailable cache does not replace the
+normal dependency installation or image build, and cache export errors are
+ignored. The cache is an acceleration mechanism only; quality, test, image
+inspection, and release publication gates still run.
+
+Forgejo's automatic workflow token is sufficient for creating the Forgejo
+release but is not package-scoped. The Forgejo workflow or organization
+Actions secrets must define `PACKAGE_REGISTRY_USER` and
+`PACKAGE_REGISTRY_TOKEN`, where the latter is a user token with `write:package`
+access and the user can write to the package owner. Release publication
+requires these credentials; the ordinary CI image job treats unavailable or
+invalid cache credentials as a cache miss and continues with an uncached build.
+
 The runtime loads the embedded record when present and uses a bounded source
 fallback for unbuilt checkouts. The same identity feeds `seasonalweather
 version [--json]`, authenticated `GET /v1/version`, controller startup logs,

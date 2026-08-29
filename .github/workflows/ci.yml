@@ -13,11 +13,36 @@ on:
 jobs:
   python:
     runs-on: ubuntu-latest
+    env:
+      UV_CACHE_DIR: .cache/uv
+      SW_BUILD_CACHE_FROM: type=gha,scope=seasonalweather-{profile}
+      SW_BUILD_CACHE_TO: type=gha,mode=max,ignore-error=true,scope=seasonalweather-{profile}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ github.ref }}
+      - name: Cache Python packages
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: .cache/uv
+          key: ${{ runner.os }}-${{ runner.arch }}-uv-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-uv-
+      - name: Expose GitHub cache runtime
+        uses: crazy-max/ghaction-github-runtime@v3
+        continue-on-error: true
+      - name: Enable GitHub BuildKit cache
+        run: |
+          if [ -z "${ACTIONS_RUNTIME_TOKEN:-}" ] || [ -z "${ACTIONS_CACHE_URL:-}${ACTIONS_RESULTS_URL:-}" ]; then
+            echo "GitHub BuildKit cache runtime is unavailable; continuing without a remote build cache."
+            exit 0
+          fi
+          {
+            echo 'SW_BUILD_CACHE_FROM=type=gha,scope=seasonalweather-{profile}'
+            echo 'SW_BUILD_CACHE_TO=type=gha,mode=max,ignore-error=true,scope=seasonalweather-{profile}'
+          } >> "$GITHUB_ENV"
       - name: Select suppression comparison base
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -42,6 +67,8 @@ jobs:
           . .venv-ci/bin/activate
           python -m pip install --upgrade pip uv==0.12.4
           uv sync --frozen --active --group controller --group worker-runtime --group dev
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
       - name: Run the Phase 2 exit gate
         run: |
           . .venv-ci/bin/activate

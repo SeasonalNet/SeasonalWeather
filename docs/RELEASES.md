@@ -78,3 +78,11 @@ Worker references use the corresponding `seasonalweather-worker` repository.
 The release workflow writes the complete profile mapping to
 `dist/release/IMAGE-REFERENCES.txt` so operators do not need to reconstruct
 the names manually.
+
+The Forgejo workflow uses the repository's automatic `forge.token` for release
+creation, but container uploads require a separate user token with the
+`write:package` scope. Configure that token and its owner as the
+`PACKAGE_REGISTRY_TOKEN` and `PACKAGE_REGISTRY_USER` Actions secrets. A
+repository-restricted token cannot carry package scope; use a suitably
+restricted user token whose owner has write access to the `SeasonalNet`
+organization.

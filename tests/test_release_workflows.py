@@ -32,3 +32,43 @@ def test_release_image_publishing_is_gated_before_provider_release_creation() ->
         release_step = "Publish Forgejo release" if provider == ".forgejo" else "Create GitHub release"
         provider_release = release.index(release_step)
         assert image_step < provider_release
+
+
+def test_forgejo_registry_uses_package_scoped_credentials() -> None:
+    release = (ROOT / ".forgejo/workflows/release.yml").read_text()
+    login_step = release[release.index("Log in to Forgejo Container Registry") :]
+    assert "secrets.PACKAGE_REGISTRY_USER" in login_step
+    assert "secrets.PACKAGE_REGISTRY_TOKEN" in login_step
+    assert "forge.token" not in login_step[: login_step.index("Publish Forgejo release")]
+
+
+def test_ci_workflows_enable_best_effort_dependency_and_build_caches() -> None:
+    github_ci = (ROOT / ".github/workflows/ci.yml").read_text()
+    forgejo_ci = (ROOT / ".forgejo/workflows/ci.yml").read_text()
+
+    for workflow in (github_ci, forgejo_ci):
+        assert "actions/cache@v4" in workflow
+        assert "UV_CACHE_DIR" in workflow
+        assert "uv.lock" in workflow
+        assert "SW_BUILD_CACHE_FROM" in workflow
+        assert "SW_BUILD_CACHE_TO" in workflow
+        assert "ignore-error=true" in workflow
+
+    assert "type=gha,scope=seasonalweather-{profile}" in github_ci
+    assert "type=registry,ref=git.seasonalnet.org/seasonalnet/seasonalweather-cache:{profile}" in forgejo_ci
+
+
+def test_release_workflows_enable_best_effort_dependency_and_build_caches() -> None:
+    github_release = (ROOT / ".github/workflows/release.yml").read_text()
+    forgejo_release = (ROOT / ".forgejo/workflows/release.yml").read_text()
+
+    for workflow in (github_release, forgejo_release):
+        assert "actions/cache@v4" in workflow
+        assert "UV_CACHE_DIR" in workflow
+        assert "uv.lock" in workflow
+        assert "SW_BUILD_CACHE_FROM" in workflow
+        assert "SW_BUILD_CACHE_TO" in workflow
+        assert "ignore-error=true" in workflow
+
+    assert "type=gha,scope=seasonalweather-{profile}" in github_release
+    assert "type=registry,ref=git.seasonalnet.org/seasonalnet/seasonalweather-cache:{profile}" in forgejo_release

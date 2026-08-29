@@ -82,7 +82,9 @@ def test_build_info_rejects_contradictory_identity() -> None:
         raise AssertionError("contradictory build identity was accepted")
 
 
-def test_bake_environment_contains_only_controlled_identity_inputs() -> None:
+def test_bake_environment_contains_only_controlled_identity_inputs(monkeypatch) -> None:
+    for key in build_interface.BUILD_CACHE_ENVIRONMENT_KEYS:
+        monkeypatch.delenv(key, raising=False)
     info = _info()
     environment = _controlled_environment(info)
 
@@ -127,6 +129,16 @@ def test_bake_environment_preserves_only_docker_transport_inputs() -> None:
     assert "SECRET_TOKEN" not in environment
 
 
+def test_bake_environment_preserves_only_github_cache_runtime_inputs(monkeypatch) -> None:
+    monkeypatch.setenv("ACTIONS_CACHE_URL", "https://cache.example")
+    monkeypatch.setenv("ACTIONS_RUNTIME_TOKEN", "runtime-token")
+    environment = _controlled_environment(_info())
+
+    assert environment["ACTIONS_CACHE_URL"] == "https://cache.example"
+    assert environment["ACTIONS_RUNTIME_TOKEN"] == "runtime-token"
+    assert "SECRET_TOKEN" not in environment
+
+
 def test_build_interface_can_push_one_target_to_an_explicit_release_reference(tmp_path, monkeypatch) -> None:
     build_info = tmp_path / "build-info.json"
     build_info.write_text(_info().to_json(), encoding="utf-8")
@@ -156,6 +168,36 @@ def test_build_interface_can_push_one_target_to_an_explicit_release_reference(tm
         "--push",
         "--set",
         "controller.tags=ghcr.io/seasonalnet/seasonalweather:v0.18.0-alpha.2-controller",
+        "controller",
+    ]
+
+
+def test_build_interface_scopes_optional_cache_references_per_profile(tmp_path, monkeypatch) -> None:
+    build_info = tmp_path / "build-info.json"
+    build_info.write_text(_info().to_json(), encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(build_interface.subprocess, "run", fake_run)
+    monkeypatch.setenv(
+        "SW_BUILD_CACHE_FROM",
+        "type=registry,ref=registry.example/seasonalweather-cache:{profile}",
+    )
+    monkeypatch.setenv(
+        "SW_BUILD_CACHE_TO", "type=registry,ref=registry.example/seasonalweather-cache:{profile},mode=max"
+    )
+
+    assert build_interface.run_image(build_info=build_info, targets=("controller",)) == 0
+
+    assert calls[0][-5:] == [
+        "--set",
+        "controller.cache-from=type=registry,ref=registry.example/seasonalweather-cache:controller",
+        "--set",
+        "controller.cache-to=type=registry,ref=registry.example/seasonalweather-cache:controller,mode=max",
         "controller",
     ]
 

@@ -31,6 +31,14 @@ DOCKER_ENVIRONMENT_KEYS = (
     "DOCKER_TLS_VERIFY",
     "BUILDX_CONFIG",
 )
+BUILD_CACHE_ENVIRONMENT_KEYS = (
+    "ACTIONS_CACHE_URL",
+    "ACTIONS_RESULTS_URL",
+    "ACTIONS_RUNTIME_TOKEN",
+    "ACTIONS_CACHE_SERVICE_V2",
+)
+BUILD_CACHE_FROM_ENV = "SW_BUILD_CACHE_FROM"
+BUILD_CACHE_TO_ENV = "SW_BUILD_CACHE_TO"
 
 
 def _load(path: Path) -> BuildInfo:
@@ -76,7 +84,14 @@ def _controlled_environment(
     }
     transport = docker_environment or {}
     environment.update({key: transport[key] for key in DOCKER_ENVIRONMENT_KEYS if key in transport})
+    environment.update({key: os.environ[key] for key in BUILD_CACHE_ENVIRONMENT_KEYS if key in os.environ})
     return environment
+
+
+def _profile_cache_reference(template: str, target: str) -> str:
+    """Expand the optional profile placeholder in a cache exporter reference."""
+
+    return template.replace("{profile}", target)
 
 
 def run_image(
@@ -100,6 +115,13 @@ def run_image(
         command.extend(("--push", "--set", f"{targets[0]}.tags={image_reference}"))
     else:
         command.append("--load")
+    cache_from = os.environ.get(BUILD_CACHE_FROM_ENV)
+    cache_to = os.environ.get(BUILD_CACHE_TO_ENV)
+    for target in targets:
+        if cache_from:
+            command.extend(("--set", f"{target}.cache-from={_profile_cache_reference(cache_from, target)}"))
+        if cache_to:
+            command.extend(("--set", f"{target}.cache-to={_profile_cache_reference(cache_to, target)}"))
     command.extend(targets)
     docker_environment = {key: os.environ[key] for key in DOCKER_ENVIRONMENT_KEYS if key in os.environ}
     try:

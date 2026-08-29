@@ -27,6 +27,10 @@ jobs:
     needs: [ci, security, semver]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    env:
+      UV_CACHE_DIR: .cache/uv
+      SW_BUILD_CACHE_FROM: type=gha,scope=seasonalweather-{profile}
+      SW_BUILD_CACHE_TO: type=gha,mode=max,ignore-error=true,scope=seasonalweather-{profile}
     permissions:
       contents: write
       packages: write
@@ -36,6 +40,27 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.ref }}
+      - name: Cache Python packages
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: .cache/uv
+          key: ${{ runner.os }}-${{ runner.arch }}-uv-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-uv-
+      - name: Expose GitHub cache runtime
+        uses: crazy-max/ghaction-github-runtime@v3
+        continue-on-error: true
+      - name: Enable GitHub BuildKit cache
+        run: |
+          if [ -z "${ACTIONS_RUNTIME_TOKEN:-}" ] || [ -z "${ACTIONS_CACHE_URL:-}${ACTIONS_RESULTS_URL:-}" ]; then
+            echo "GitHub BuildKit cache runtime is unavailable; continuing without a remote build cache."
+            exit 0
+          fi
+          {
+            echo 'SW_BUILD_CACHE_FROM=type=gha,scope=seasonalweather-{profile}'
+            echo 'SW_BUILD_CACHE_TO=type=gha,mode=max,ignore-error=true,scope=seasonalweather-{profile}'
+          } >> "$GITHUB_ENV"
       - name: Install release tooling
         run: |
           python3 -m venv .venv-release

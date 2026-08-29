@@ -24,12 +24,22 @@ jobs:
     needs: [ci, security, semver]
     if: startsWith(forge.ref, 'refs/tags/v')
     runs-on: [docker, victus-builder]
+    env:
+      UV_CACHE_DIR: .cache/uv
     steps:
       - name: Check out release tag
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: ${{ forge.ref }}
+      - name: Cache Python packages
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: .cache/uv
+          key: ${{ runner.os }}-${{ runner.arch }}-uv-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-uv-
       - name: Install release tooling
         run: |
           apt-get update
@@ -44,11 +54,15 @@ jobs:
         run: bash ./tools/ci/bootstrap_docker.sh
       - name: Log in to Forgejo Container Registry
         env:
-          FORGEJO_REGISTRY_USER: ${{ forge.actor }}
-          FORGEJO_REGISTRY_TOKEN: ${{ forge.token }}
+          FORGEJO_REGISTRY_USER: ${{ secrets.PACKAGE_REGISTRY_USER }}
+          FORGEJO_REGISTRY_TOKEN: ${{ secrets.PACKAGE_REGISTRY_TOKEN }}
         run: |
           printf '%s\n' "$FORGEJO_REGISTRY_TOKEN" \
             | docker login git.seasonalnet.org --username "$FORGEJO_REGISTRY_USER" --password-stdin
+          {
+            echo 'SW_BUILD_CACHE_FROM=type=registry,ref=git.seasonalnet.org/seasonalnet/seasonalweather-cache:{profile}'
+            echo 'SW_BUILD_CACHE_TO=type=registry,ref=git.seasonalnet.org/seasonalnet/seasonalweather-cache:{profile},mode=max,ignore-error=true'
+          } >> "$FORGEJO_ENV"
       - name: Build and publish release images
         env:
           IMAGE_REPOSITORY_BASE: git.seasonalnet.org/seasonalnet/seasonalweather
