@@ -140,6 +140,8 @@ def test_bake_environment_preserves_only_github_cache_runtime_inputs(monkeypatch
 
 
 def test_build_interface_can_push_one_target_to_an_explicit_release_reference(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("SW_BUILD_CACHE_FROM", raising=False)
+    monkeypatch.delenv("SW_BUILD_CACHE_TO", raising=False)
     build_info = tmp_path / "build-info.json"
     build_info.write_text(_info().to_json(), encoding="utf-8")
     calls: list[tuple[list[str], dict[str, object]]] = []

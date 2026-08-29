@@ -56,6 +56,8 @@ def test_ci_workflows_enable_best_effort_dependency_and_build_caches() -> None:
 
     assert "type=gha,scope=seasonalweather-{profile}" in github_ci
     assert "type=registry,ref=git.seasonalnet.org/seasonalnet/seasonalweather-cache:{profile}" in forgejo_ci
+    assert "mode=max,ignore-error=true" in github_ci
+    assert "mode=min,compression=zstd,ignore-error=true" in forgejo_ci
 
 
 def test_release_workflows_enable_best_effort_dependency_and_build_caches() -> None:
@@ -72,3 +74,5 @@ def test_release_workflows_enable_best_effort_dependency_and_build_caches() -> N
 
     assert "type=gha,scope=seasonalweather-{profile}" in github_release
     assert "type=registry,ref=git.seasonalnet.org/seasonalnet/seasonalweather-cache:{profile}" in forgejo_release
+    assert "mode=max,ignore-error=true" in github_release
+    assert "mode=min,compression=zstd,ignore-error=true" in forgejo_release

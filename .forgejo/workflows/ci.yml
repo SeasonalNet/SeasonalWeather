@@ -90,7 +90,7 @@ jobs:
           fi
           {
             echo 'SW_BUILD_CACHE_FROM=type=registry,ref=git.seasonalnet.org/seasonalnet/seasonalweather-cache:{profile}'
-            echo 'SW_BUILD_CACHE_TO=type=registry,ref=git.seasonalnet.org/seasonalnet/seasonalweather-cache:{profile},mode=max,ignore-error=true'
+            echo 'SW_BUILD_CACHE_TO=type=registry,ref=git.seasonalnet.org/seasonalnet/seasonalweather-cache:{profile},mode=min,compression=zstd,ignore-error=true'
           } >> "$FORGEJO_ENV"
       - name: Install Python tooling
         run: |

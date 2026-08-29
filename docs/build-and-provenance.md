@@ -109,8 +109,10 @@ each image profile. GitHub uses the Actions cache backend; Forgejo uses
 registry-backed cache references under
 `seasonalweather-cache`. A missing or unavailable cache does not replace the
 normal dependency installation or image build, and cache export errors are
-ignored. The cache is an acceleration mechanism only; quality, test, image
-inspection, and release publication gates still run.
+ignored. Forgejo uses compressed `mode=min` registry cache exports so the cache
+stays below the deployment's proxy upload limit; GitHub retains `mode=max` in
+its Actions cache backend. The cache is an acceleration mechanism only;
+quality, test, image inspection, and release publication gates still run.
 
 Forgejo's automatic workflow token is sufficient for creating the Forgejo
 release but is not package-scoped. The Forgejo workflow or organization
