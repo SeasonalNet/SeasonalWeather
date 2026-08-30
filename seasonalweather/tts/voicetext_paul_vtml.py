@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import html
+import json
 import os
 import re
 from dataclasses import dataclass
-from typing import Callable, Pattern
+from functools import lru_cache
+from importlib import resources
+from typing import Callable, Pattern, cast
 
 from .regex_safety import (
     MAX_CONFIGURED_REGEX_PATTERN,
@@ -16,6 +20,15 @@ from .regex_safety import (
 
 # Split text vs tags so we never “rewrite inside markup”.
 _TAG_SPLIT_RE = re.compile(r"(<[^>]+>)")
+_VTML_BLOCK_RE = re.compile(
+    r"<(?P<tag>vtml_[A-Za-z0-9_]+)\b[^>]*>.*?</(?P=tag)>",
+    re.IGNORECASE | re.DOTALL,
+)
+_AWIPS_PHONEME_RE = re.compile(
+    r'<phoneme\b[^>]*\balphabet="x-cmu"[^>]*\bph="([^"]*)"[^>]*>\s*</phoneme>',
+    re.IGNORECASE,
+)
+_AWIPS_BREAK_RE = re.compile(r'<break\b[^>]*\bstrength="([^"]+)"[^>]*/>', re.IGNORECASE)
 
 # _env_enabled() removed — vtml_lexicon is now passed as a function argument.
 
@@ -29,8 +42,10 @@ class Rule:
 
 def _sub_alias(alias: str) -> Callable[[re.Match[str]], str]:
     # Keep the original surface form (case/punct) inside the tag.
+    escaped_alias = html.escape(alias, quote=True)
+
     def _r(m: re.Match[str]) -> str:
-        return f'<vtml_sub alias="{alias}">{m.group(0)}</vtml_sub>'
+        return f'<vtml_sub alias="{escaped_alias}">{m.group(0)}</vtml_sub>'
 
     return _r
 
@@ -393,6 +408,176 @@ _RULES: list[Rule] = [
 ]
 
 
+def _awips_break_to_vtml(match: re.Match[str]) -> str:
+    strength = match.group(1).strip().lower()
+    milliseconds = {
+        "none": 0,
+        "x-weak": 75,
+        "weak": 125,
+        "medium": 250,
+        "strong": 500,
+        "x-strong": 750,
+    }.get(strength, 0)
+    return f'<vtml_pause time="{milliseconds}"/>'
+
+
+def _awips_plain_text(value: str) -> str:
+    rendered = _AWIPS_BREAK_RE.sub(_awips_break_to_vtml, value)
+    return re.sub(r"\s+", " ", rendered).strip()
+
+
+def _awips_alias_text(value: str) -> str:
+    """Return an AWIPS textual substitute without carrying break markup."""
+    return re.sub(r"\s+", " ", _AWIPS_BREAK_RE.sub(" ", value)).strip()
+
+
+def _awips_word_pattern(word: str) -> Pattern[str]:
+    pieces: list[str] = []
+    digit_index = 0
+    for char in word:
+        if char == "#":
+            pieces.append(f"(?P<awips_digit_{digit_index}>[0-9])")
+            digit_index += 1
+        else:
+            pieces.append(re.escape(char))
+    return re.compile(
+        r"(?<![A-Za-z0-9])" + "".join(pieces) + r"(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    )
+
+
+def _awips_hash_substitution(value: str, match: re.Match[str]) -> str:
+    rendered: list[str] = []
+    digit_index = 0
+    for char in value:
+        if char == "#":
+            try:
+                captured = match.group(f"awips_digit_{digit_index}")
+            except (IndexError, KeyError):
+                captured = None
+            rendered.append(captured if captured is not None else "#")
+            digit_index += 1
+        else:
+            rendered.append(char)
+    return "".join(rendered)
+
+
+def _awips_phoneme_part(
+    template: str,
+    tag: re.Match[str],
+    index: int,
+    tags: list[re.Match[str]],
+    source_words: list[str],
+    consumed: int,
+    cursor: int,
+) -> tuple[str, int]:
+    prefix = _awips_plain_text(template[cursor : tag.start()])
+    suffix = _awips_plain_text(template[tag.end() :])
+    suffix_words = len(re.sub(r"<vtml_pause time=\"[0-9]+\"/>", " ", suffix).split())
+    remaining_tags = len(tags) - index - 1
+    available = len(source_words) - consumed - suffix_words
+    if suffix_words == 0 and remaining_tags:
+        available -= remaining_tags
+    matched_words = source_words[consumed : consumed + max(0, available)]
+    phonemes = " ".join(tag.group(1).split())
+    if matched_words and phonemes:
+        rendered = f'<vtml_phoneme alphabet="x-cmu" ph="{phonemes}">{" ".join(matched_words)}</vtml_phoneme>'
+    else:
+        rendered = " ".join(matched_words)
+    part = " ".join(value for value in (prefix, rendered) if value)
+    return part, consumed + len(matched_words)
+
+
+def _awips_phoneme_replacement(template: str, source: str) -> str:
+    tags = list(_AWIPS_PHONEME_RE.finditer(template))
+    if not tags:
+        return _awips_plain_text(template)
+
+    source_words = source.split()
+    consumed = 0
+    cursor = 0
+    output: list[str] = []
+    for index, tag in enumerate(tags):
+        part, consumed = _awips_phoneme_part(
+            template,
+            tag,
+            index,
+            tags,
+            source_words,
+            consumed,
+            cursor,
+        )
+        if part:
+            output.append(part)
+        cursor = tag.end()
+
+    tail = _awips_plain_text(template[cursor:])
+    if tail:
+        output.append(tail)
+    return " ".join(part for part in output if part).strip()
+
+
+def _awips_rule_factory(substitute: str) -> Callable[[re.Match[str]], str]:
+    def _replace(match: re.Match[str]) -> str:
+        rendered = _awips_hash_substitution(substitute, match)
+        if _AWIPS_PHONEME_RE.search(rendered):
+            return _awips_phoneme_replacement(rendered, match.group(0))
+        alias = _awips_alias_text(rendered)
+        if not alias:
+            return match.group(0)
+        return _sub_alias(alias)(match)
+
+    return _replace
+
+
+def _awips_national_entries() -> list[dict[str, object]]:
+    try:
+        resource = resources.files("seasonalweather.tts").joinpath("awips_paul_national.json")
+        payload = cast(object, json.loads(resource.read_text(encoding="utf-8")))
+    except (OSError, TypeError, ValueError):
+        return []
+    if not isinstance(payload, dict):
+        return []
+    typed_payload = cast(dict[str, object], payload)
+    raw_entries = typed_payload.get("entries", [])
+    if not isinstance(raw_entries, list):
+        return []
+    return [cast(dict[str, object], item) for item in raw_entries if isinstance(item, dict)]
+
+
+def _awips_rule_for_entry(entry: dict[str, object]) -> Rule | None:
+    word = str(entry.get("word", "") or "")
+    substitute = str(entry.get("substitute", "") or "")
+    if not word or not substitute:
+        return None
+    # A hand-maintained SeasonalWeather rule is authoritative even when
+    # it matches only a word inside an AWIPS phrase (for example, the
+    # local ``fog`` boundary rule).  Do not let the additive dictionary
+    # wrap or replace that earlier result.
+    if any(rule.rx.search(word) is not None for rule in _RULES):
+        return None
+    return Rule(_awips_word_pattern(word), _awips_rule_factory(substitute))
+
+
+@lru_cache(maxsize=1)
+def _awips_national_rules() -> tuple[Rule, ...]:
+    """Load AWIPS-II's national Paul dictionary as additive defaults.
+
+    The checked-in resource is the BMH ``paul-nat`` dictionary.  SeasonalWeather
+    rules are applied first, so local phoneme and abbreviation decisions retain
+    precedence over this upstream baseline.
+    """
+    rules: list[Rule] = []
+    for entry in sorted(
+        _awips_national_entries(),
+        key=lambda item: -len(str(item.get("word", ""))),
+    ):
+        rule = _awips_rule_for_entry(entry)
+        if rule is not None:
+            rules.append(rule)
+    return tuple(rules)
+
+
 def _user_rule_flags(spec: dict) -> int:
     return re.IGNORECASE if bool(spec.get("ignore_case", False)) else 0
 
@@ -466,17 +651,29 @@ def apply_voicetext_paul_vtml(
     )
     if vtml_lexicon:
         rules.extend(_RULES)
+        rules.extend(_awips_national_rules())
 
     if not rules:
         return text
 
-    parts = _TAG_SPLIT_RE.split(text)
-    for i in range(0, len(parts), 2):  # even indexes = plain text between tags
-        s = parts[i]
-        for r in rules:
-            s, count = r.rx.subn(r.repl, s, count=MAX_CONFIGURED_REGEX_REPLACEMENTS + 1)
+    rendered = text
+    for r in rules:
+        tags: list[str] = []
+
+        def _stash_tag(match: re.Match[str], tag_list: list[str] = tags) -> str:
+            tag_list.append(match.group(0))
+            return f"\x00SW_TAG_{len(tag_list) - 1}\x00"
+
+        protected = _VTML_BLOCK_RE.sub(_stash_tag, rendered)
+        protected = _TAG_SPLIT_RE.sub(_stash_tag, protected)
+        parts = re.split(r"(\x00SW_TAG_[0-9]+\x00)", protected)
+        for i in range(0, len(parts), 2):  # even indexes = plain text between tags
+            parts[i], count = r.rx.subn(r.repl, parts[i], count=MAX_CONFIGURED_REGEX_REPLACEMENTS + 1)
             if r.user_configured and count > MAX_CONFIGURED_REGEX_REPLACEMENTS:
                 raise ValueError("VoiceText override replacement work exceeded its bound")
-        parts[i] = s
 
-    return "".join(parts)
+        rendered = "".join(parts)
+        for index, tag in enumerate(tags):
+            rendered = rendered.replace(f"\x00SW_TAG_{index}\x00", tag)
+
+    return rendered

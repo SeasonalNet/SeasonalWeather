@@ -43,3 +43,23 @@ def test_marine_units_and_direction_ranges_are_expanded() -> None:
     assert '<vtml_sub alias="southwest">SW</vtml_sub>' in rendered
     assert '<vtml_sub alias="knots">kt</vtml_sub>' in rendered
     assert '<vtml_sub alias="feet">ft.</vtml_sub>' in rendered
+
+
+def test_awips_national_paul_dictionary_fills_missing_rules() -> None:
+    rendered = apply_voicetext_paul_vtml("The warning is near Johnsonville. Wind up to 20 kt.")
+
+    assert '<vtml_phoneme alphabet="x-cmu" ph="JH AA0 N S AH0 N V IH0 L">Johnsonville</vtml_phoneme>' in rendered
+    assert '<vtml_phoneme alphabet="x-cmu" ph="W IH1 N D">Wind</vtml_phoneme>' in rendered
+
+
+def test_awips_national_paul_dictionary_does_not_override_existing_rules() -> None:
+    rendered = apply_voicetext_paul_vtml("Fog remains possible.")
+
+    assert rendered == 'Fog<vtml_pause time="0"/> remains possible.'
+
+
+def test_awips_text_substitutions_do_not_leak_awips_markup_into_aliases() -> None:
+    rendered = apply_voicetext_paul_vtml("Scattered frost is possible.")
+
+    assert '<vtml_sub alias="scattered frost">Scattered frost</vtml_sub>' in rendered
+    assert "<break" not in rendered

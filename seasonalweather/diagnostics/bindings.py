@@ -77,6 +77,7 @@ NWWS_CODES = MappingProxyType(
     {
         "malformed_message": "SWNWWS1001",
         "protocol_failure": "SWNWWS2001",
+        "routing_metadata_disagreement": "SWNWWS2002",
         "transport_failure": "SWNWWS3001",
         "tls_failure": "SWNWWS3002",
         "reconnect_degraded": "SWNWWS4001",

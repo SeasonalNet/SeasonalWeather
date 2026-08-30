@@ -63,6 +63,7 @@ include = ["seasonalweather*"]
   "catalog/source.json",
   "catalog/explanations/*.md",
 ]
+"seasonalweather.tts" = ["awips_paul_national.json"]
 
 [tool.ruff]
 target-version = "py311"

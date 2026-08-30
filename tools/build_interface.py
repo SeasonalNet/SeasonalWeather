@@ -39,6 +39,7 @@ BUILD_CACHE_ENVIRONMENT_KEYS = (
 )
 BUILD_CACHE_FROM_ENV = "SW_BUILD_CACHE_FROM"
 BUILD_CACHE_TO_ENV = "SW_BUILD_CACHE_TO"
+IMAGE_PUSH_MODE_ENV = "SW_IMAGE_PUSH_MODE"
 
 
 def _load(path: Path) -> BuildInfo:
@@ -109,10 +110,20 @@ def run_image(
         raise SystemExit("image publishing accepts exactly one image target")
     if image_reference is not None and (not image_reference or any(char.isspace() for char in image_reference)):
         raise SystemExit("image reference must be a non-empty value without whitespace")
+    push_mode = os.environ.get(IMAGE_PUSH_MODE_ENV, "buildkit").strip().lower()
+    if push_mode not in {"buildkit", "engine"}:
+        raise SystemExit(f"{IMAGE_PUSH_MODE_ENV} must be 'buildkit' or 'engine'")
+    engine_push = push and push_mode == "engine"
     info = _load(build_info)
     command = ["docker", "buildx", "bake", "--file", str(BAKE_FILE)]
     if push:
-        command.extend(("--push", "--set", f"{targets[0]}.tags={image_reference}"))
+        if engine_push:
+            # BuildKit loads the image into the runner-provided Docker image
+            # store; the Engine's registry client then performs its streaming
+            # layer upload rather than BuildKit's direct registry export.
+            command.extend(("--load", "--set", f"{targets[0]}.tags={image_reference}"))
+        else:
+            command.extend(("--push", "--set", f"{targets[0]}.tags={image_reference}"))
     else:
         command.append("--load")
     cache_from = os.environ.get(BUILD_CACHE_FROM_ENV)
@@ -124,19 +135,23 @@ def run_image(
             command.extend(("--set", f"{target}.cache-to={_profile_cache_reference(cache_to, target)}"))
     command.extend(targets)
     docker_environment = {key: os.environ[key] for key in DOCKER_ENVIRONMENT_KEYS if key in os.environ}
+    environment = _controlled_environment(
+        info,
+        docker_environment=docker_environment,
+    )
     try:
-        completed = subprocess.run(
-            command,
-            cwd=ROOT,
-            env=_controlled_environment(
-                info,
-                docker_environment=docker_environment,
-            ),
-            check=False,
-        )
+        completed = subprocess.run(command, cwd=ROOT, env=environment, check=False)
     except OSError as exc:
         raise SystemExit(f"cannot start Docker Buildx: {exc}") from exc
-    return completed.returncode
+    if completed.returncode != 0 or not engine_push:
+        return completed.returncode
+
+    assert image_reference is not None
+    try:
+        pushed = subprocess.run(["docker", "push", image_reference], cwd=ROOT, env=environment, check=False)
+    except OSError as exc:
+        raise SystemExit(f"cannot start Docker Engine push: {exc}") from exc
+    return pushed.returncode
 
 
 def compose_check() -> int:

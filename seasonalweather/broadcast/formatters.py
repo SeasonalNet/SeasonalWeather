@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 from ..alerts.cap_nws import CapAlertEvent
 from ..alerts.product import ParsedProduct
 from ..alerts.vtec import VTEC_PARSE_RE as _VTEC_PARSE_RE
-from ..same.events import label_or_code, org_broadcast_prefix
+from ..same.events import label_or_code
 from ..tts.preprocess import clean_for_tts
 from ..database.core import SeasonalDatabase
 from ..database.persistence import ObservationPressureRepository
@@ -42,7 +42,12 @@ _UGC_RE = re.compile(r"^[A-Z]{2}[CZ]\d{3}(?:-\d{3})*-\d{6}-?$")
 _WMO_RE = re.compile(r"^[A-Z]{4}\d{2}\s+[A-Z]{4}\s+\d{6}$")
 
 # --- centralized from seasonalweather/alerts/builder.py ---
-_NWS_ISSUED_RE = re.compile(r"^\d{3,4}\s*(?:AM|PM)\s+[A-Z]{2,4}\s+[A-Za-z]{3}\s+[A-Za-z]{3}\s+\d{1,2}\s+\d{4}$")
+_NWS_ISSUED_RE = re.compile(
+    r"^\d{3,4}\s*(?:AM|PM)\s+[A-Z]{2,5}"
+    r"(?:\s*(?:\(\s*\d{3,4}\s*(?:AM|PM)\s+[A-Z]{2,5}\s*\)|,\s*OR\s+\d{3,4}\s*(?:AM|PM)\s+[A-Z]{2,5}|/\s*\d{3,4}\s*(?:AM|PM)\s+[A-Z]{2,5}))?\s+"
+    r"(?:[A-Za-zÀ-ÿ]{2,12}\s+){1,6}\d{1,2}(?:\s+[A-Za-zÀ-ÿ]{2,12}){0,4}\s+\d{4}$",
+    re.IGNORECASE,
+)
 
 # --- centralized from seasonalweather/alerts/builder.py ---
 _PRODUCT_MASTHEAD_RE = re.compile(
@@ -545,14 +550,26 @@ _TZ_NAME_MAP = {
 
 # --- centralized from seasonalweather/broadcast/product_text.py ---
 _NWS_HEADER_ISSUED_RE = re.compile(
-    r"^(?P<hhmm>\d{3,4})\s*(?P<ampm>AM|PM)\s*(?P<tz>[A-Z]{2,4})\s+"
-    r"(?P<dow>[A-Za-z]{3})\s+(?P<mon>[A-Za-z]{3})\s+(?P<day>\d{1,2})\s+(?P<year>\d{4})\s*$"
+    r"^(?P<hhmm>\d{3,4})\s*(?P<ampm>AM|PM)\s*(?P<tz>[A-Z]{2,5})"
+    r"(?:\s*(?:\(\s*\d{3,4}\s*(?:AM|PM)\s+[A-Z]{2,5}\s*\)|,\s*OR\s+\d{3,4}\s*(?:AM|PM)\s+[A-Z]{2,5}|/\s*\d{3,4}\s*(?:AM|PM)\s+[A-Z]{2,5}))?\s+"
+    r"(?:(?P<dow>[A-Za-zÀ-ÿ]{3,12})\s+)?"
+    r"(?:(?P<mon>[A-Za-zÀ-ÿ]{3,12})\s+(?P<day>\d{1,2})|(?P<day_alt>\d{1,2})\s+(?:de\s+)?(?P<mon_alt>[A-Za-zÀ-ÿ]{3,12}))"
+    r"(?:\s+de)?\s+(?P<year>\d{4})\s*$",
+    re.IGNORECASE,
 )
 
 # --- centralized from seasonalweather/broadcast/product_text.py ---
 _SPS_INTRO_LEAD_RE = re.compile(
     r"(?is)^(?:This is a statement from the National Weather Service\.|The National Weather Service has issued the following message\.)\s*"
 )
+
+
+def _issued_date_fields(match: re.Match[str]) -> tuple[str, str]:
+    """Return the month token and day from either supported MND date order."""
+    month = match.group("mon") or match.group("mon_alt") or ""
+    day = match.group("day") or match.group("day_alt") or ""
+    return month, day
+
 
 # --- centralized from seasonalweather/broadcast/product_text.py ---
 def expand_tz_token(token: str) -> str:
@@ -628,9 +645,11 @@ def nws_header_issued_phrase(text: str) -> str | None:
         hhmm = m.group("hhmm")
         ampm = m.group("ampm").upper()
         tz = expand_tz_token(m.group("tz").upper())
-        dow = dow_map.get(m.group("dow").strip().upper(), m.group("dow").strip())
-        mon = mon_map.get(m.group("mon").strip().upper(), m.group("mon").strip())
-        day = str(int(m.group("day")))
+        dow_raw = (m.group("dow") or "").strip()
+        dow = dow_map.get(dow_raw.upper(), dow_raw)
+        mon_raw, day_raw = _issued_date_fields(m)
+        mon = mon_map.get(mon_raw.strip().upper(), mon_raw.strip())
+        day = str(int(day_raw))
         year = m.group("year")
 
         if len(hhmm) == 3:
@@ -3199,49 +3218,35 @@ def build_ern_relay_script(
     event_label = label_or_code(code) if code else "EAS Alert"
     article = _article(event_label)
     sender = str(getattr(ev, "sender", None) or "").strip()
-    org = str(getattr(ev, "org", None) or "").strip().upper()
+    participant = (
+        f"The Emergency Relay Network Participant {sender}"
+        if sender
+        else "The Emergency Relay Network Participant with an unidentified sender"
+    )
 
-    if code in _TEST_EVENT_CODES:
-        intro = (
-            f"The Emergency Relay Network reports {article} {event_label}. "
-            "This is only a test."
-        )
-    else:
-        intro = (
-            f"The Emergency Relay Network reports {article} {event_label}. "
-            "This relay will remain in the active alert rotation until it expires, "
-            "or until authoritative CAP, NWWS, or IPAWS alert text supersedes it."
-        )
-
-    lines: list[str] = [intro]
-
-    if org:
-        lines.append(f"{org_broadcast_prefix(org)} {article} {event_label}.")
-
-    area = str(area_text or "").strip()
-    if area:
-        lines.append(_sentence(f"The message applies to the following locations: {area}"))
-    else:
-        same_text = _join_human([str(x).strip() for x in (same_locations or []) if str(x).strip()])
-        if same_text:
-            lines.append(_sentence(f"The message applies to the following SAME locations: {same_text}"))
+    sentence = f"{participant} reports {article} {event_label}"
 
     start_utc = _same_jday_to_utc(getattr(ev, "jjjhhmm", None), now_utc=now_utc)
     duration_min = _parse_duration_minutes(getattr(ev, "tttt", None))
-    if start_utc is not None and duration_min is not None:
-        end_utc = start_utc + dt.timedelta(minutes=duration_min)
-        lines.append(
-            f"The message is valid from: {_fmt_when(start_utc, tz=tz)}. "
-            f"And the message is valid until: {_fmt_when(end_utc, tz=tz)}."
-        )
-    elif start_utc is not None:
-        lines.append(f"The message is valid from: {_fmt_when(start_utc, tz=tz)}.")
+    if start_utc is not None:
+        start_text = _fmt_when(start_utc, tz=tz)
+        if duration_min is not None:
+            end_text = _fmt_when(start_utc + dt.timedelta(minutes=duration_min), tz=tz)
+            sentence += f", valid from {start_text}, until {end_text}"
+        else:
+            sentence += f", valid from {start_text}"
 
-    if sender:
-        lines.append(f"The message was received from: {sender}.")
+    area = str(area_text or "").strip()
+    if not area:
+        area = _join_human([str(x).strip() for x in (same_locations or []) if str(x).strip()])
+    if area:
+        sentence += f", for the following areas: {area.rstrip().rstrip('.')}."
+    else:
+        sentence += "."
 
+    lines = [sentence]
     if code in _TEST_EVENT_CODES:
-        lines.append("End of test message.")
+        lines.extend(("This is only a test.", "End of test message."))
     return "\n".join(line.strip() for line in lines if line and line.strip())
 
 # --- centralized from seasonalweather/broadcast/ipaws_text.py ---
@@ -3400,8 +3405,11 @@ log = logging.getLogger("seasonalweather.broadcast.pns")
 
 # --- centralized from seasonalweather/broadcast/pns.py ---
 _NWS_HEADER_ISSUED_RE = re.compile(
-    r"^(?P<hhmm>\d{3,4})\s*(?P<ampm>AM|PM)\s*(?P<tz>[A-Z]{2,4})\s+"
-    r"(?P<dow>[A-Za-z]{3})\s+(?P<mon>[A-Za-z]{3})\s+(?P<day>\d{1,2})\s+(?P<year>\d{4})\s*$",
+    r"^(?P<hhmm>\d{3,4})\s*(?P<ampm>AM|PM)\s*(?P<tz>[A-Z]{2,5})"
+    r"(?:\s*(?:\(\s*\d{3,4}\s*(?:AM|PM)\s+[A-Z]{2,5}\s*\)|,\s*OR\s+\d{3,4}\s*(?:AM|PM)\s+[A-Z]{2,5}|/\s*\d{3,4}\s*(?:AM|PM)\s+[A-Z]{2,5}))?\s+"
+    r"(?:(?P<dow>[A-Za-zÀ-ÿ]{3,12})\s+)?"
+    r"(?:(?P<mon>[A-Za-zÀ-ÿ]{3,12})\s+(?P<day>\d{1,2})|(?P<day_alt>\d{1,2})\s+(?:de\s+)?(?P<mon_alt>[A-Za-zÀ-ÿ]{3,12}))"
+    r"(?:\s+de)?\s+(?P<year>\d{4})\s*$",
     re.IGNORECASE,
 )
 
@@ -3426,6 +3434,14 @@ _TZ_OFFSETS: dict[str, dt.tzinfo] = {
     "MDT": dt.timezone(dt.timedelta(hours=-6), "MDT"),
     "PST": dt.timezone(dt.timedelta(hours=-8), "PST"),
     "PDT": dt.timezone(dt.timedelta(hours=-7), "PDT"),
+    "AKST": dt.timezone(dt.timedelta(hours=-9), "AKST"),
+    "AKDT": dt.timezone(dt.timedelta(hours=-8), "AKDT"),
+    "HST": dt.timezone(dt.timedelta(hours=-10), "HST"),
+    "HDT": dt.timezone(dt.timedelta(hours=-9), "HDT"),
+    "AST": dt.timezone(dt.timedelta(hours=-4), "AST"),
+    "ADT": dt.timezone(dt.timedelta(hours=-3), "ADT"),
+    "CHST": dt.timezone(dt.timedelta(hours=10), "CHST"),
+    "CHDT": dt.timezone(dt.timedelta(hours=10), "CHDT"),
 }
 
 # --- centralized from seasonalweather/broadcast/pns.py ---
@@ -3442,6 +3458,18 @@ _MONTHS = {
     "OCT": 10,
     "NOV": 11,
     "DEC": 12,
+    "ENERO": 1,
+    "FEBRERO": 2,
+    "MARZO": 3,
+    "ABRIL": 4,
+    "MAYO": 5,
+    "JUNIO": 6,
+    "JULIO": 7,
+    "AGOSTO": 8,
+    "SEPTIEMBRE": 9,
+    "OCTUBRE": 10,
+    "NOVIEMBRE": 11,
+    "DICIEMBRE": 12,
 }
 
 # --- centralized from seasonalweather/broadcast/pns.py ---
@@ -3608,30 +3636,38 @@ def _parse_dt(value: Any) -> dt.datetime | None:
     return out.astimezone(dt.timezone.utc)
 
 # --- centralized from seasonalweather/broadcast/pns.py ---
+def _parse_nws_issued_match(match: re.Match[str]) -> dt.datetime | None:
+    hhmm = match.group("hhmm")
+    hour = int(hhmm[:-2])
+    minute = int(hhmm[-2:])
+    ampm = match.group("ampm").upper()
+    if ampm == "AM":
+        hour = 0 if hour == 12 else hour
+    else:
+        hour = 12 if hour == 12 else hour + 12
+    mon_raw, day_raw = _issued_date_fields(match)
+    month = _MONTHS.get(mon_raw.upper())
+    tzinfo = _TZ_OFFSETS.get(match.group("tz").upper())
+    if not month or tzinfo is None or not day_raw:
+        return None
+    try:
+        return dt.datetime(
+            int(match.group("year")), month, int(day_raw), hour, minute, tzinfo=tzinfo
+        ).astimezone(dt.timezone.utc)
+    except Exception:
+        return None
+
+
+# --- centralized from seasonalweather/broadcast/pns.py ---
 def parse_nws_header_issued_dt(text: str, fallback: Any = None) -> dt.datetime | None:
     for raw in (text or "").splitlines()[:80]:
         s = raw.strip()
         m = _NWS_HEADER_ISSUED_RE.match(s)
         if not m:
             continue
-        hhmm = m.group("hhmm")
-        hour = int(hhmm[:-2])
-        minute = int(hhmm[-2:])
-        ampm = m.group("ampm").upper()
-        if ampm == "AM":
-            hour = 0 if hour == 12 else hour
-        else:
-            hour = 12 if hour == 12 else hour + 12
-        month = _MONTHS.get(m.group("mon").upper())
-        tzinfo = _TZ_OFFSETS.get(m.group("tz").upper())
-        if not month or tzinfo is None:
-            continue
-        try:
-            return dt.datetime(
-                int(m.group("year")), month, int(m.group("day")), hour, minute, tzinfo=tzinfo
-            ).astimezone(dt.timezone.utc)
-        except Exception:
-            continue
+        parsed = _parse_nws_issued_match(m)
+        if parsed is not None:
+            return parsed
     return _parse_dt(fallback)
 
 # --- centralized from seasonalweather/broadcast/pns.py ---

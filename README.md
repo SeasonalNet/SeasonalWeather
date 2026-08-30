@@ -9,8 +9,9 @@ through Liquidsoap and Icecast.
 
 It is hobbyist-developed, and under [SeasonalNet](https://www.seasonalnet.org).
 
-It is not a NOAA, NWS, FEMA, EAS, or NWR service and should not be used as a
-life-safety alert source. For offcial alerts, you should use your regions resources, such as NOAA Weather Radio, [weather.gov](https://weather.gov) and local authorities.
+> [!IMPORTANT]
+> It is not a NOAA, NWS, FEMA, EAS, or NWR service and should not be used as a
+> life-safety alert source. For reliable information, you should instead use your regions resources, such as NOAA Weather Radio, [weather.gov](https://weather.gov) and local authorities.
 
 ## Overview
 
@@ -37,7 +38,9 @@ The supported deployment model is Docker Compose.
 
 ## Scope
 
-SeasonalWeather is capable of a lot, it has the ability to generate valid SAME tones, along with the 1050Hz Warning Alarm Tone for alerts. In addition, it is capable of producing text structured similarly to NOAA Weather Radio broadcasts.
+> [!IMPORTANT]
+> SeasonalWeather is capable of a lot, it has the ability to generate valid SAME tones, along with the
+> 1050Hz Warning Alarm Tone for alerts. In addition, it is capable of producing text structured similarly to NOAA Weather Radio broadcasts.
 
 Those are powerful capabilities and should be used responsibly.
 
@@ -179,10 +182,11 @@ docker compose up -d
 docker compose logs -f controller
 ```
 
-Do not use `docker compose down -v` for routine maintenance; named volumes
-contain operational state and audio artifacts. The production migration and
-rollback procedure is in
-[`docs/p3-08-production-migration.md`](docs/p3-08-production-migration.md).
+> [!CAUTION]
+> Do not use `docker compose down -v` for routine maintenance; named volumes
+> contain operational state and audio artifacts. The production migration and
+> rollback procedure is in
+> [`docs/p3-08-production-migration.md`](docs/p3-08-production-migration.md).
 
 ## Configuration and operations
 

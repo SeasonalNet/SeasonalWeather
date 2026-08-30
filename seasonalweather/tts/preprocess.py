@@ -63,6 +63,13 @@ _NWS_TZ_ABBR_RE = re.compile(
     r"\b(EDT|EST|CDT|CST|MDT|MST|PDT|PST|AKDT|AKST|HST|UTC|GMT)\b",
     re.IGNORECASE,
 )
+_NWS_DUAL_TZ_RE = re.compile(
+    r"\b(?P<first>EDT|EST|CDT|CST|MDT|MST|PDT|PST|AKDT|AKST|HST|UTC|GMT)"
+    r"\s*(?:\(\s*|/\s*)"
+    r"(?P<second_clock>\d{3,4}\s*(?:AM|PM)\s+)?"
+    r"(?P<second>EDT|EST|CDT|CST|MDT|MST|PDT|PST|AKDT|AKST|HST|UTC|GMT)\s*\)?",
+    re.IGNORECASE,
+)
 _NWS_AMPM_ABBR_RE = re.compile(r"\b(AM|PM)\b", re.IGNORECASE)
 _NWS_STATE_ABBRS = {
     "AL",
@@ -173,6 +180,18 @@ def normalize_nws_spoken_times(text: str) -> str:
     return _NWS_COMPACT_CLOCK_RE.sub(_repl, text)
 
 
+def normalize_nws_dual_time_zones(text: str) -> str:
+    """Turn NWS ``EDT (CDT)`` or ``EDT / CDT`` into spoken-safe prose."""
+    if not text:
+        return ""
+
+    def _repl(match: re.Match[str]) -> str:
+        second_clock = match.group("second_clock") or ""
+        return f"{match.group('first').upper()}, OR {second_clock}{match.group('second').upper()}"
+
+    return _NWS_DUAL_TZ_RE.sub(_repl, text)
+
+
 def _compile_text_override_rx(spec: dict) -> re.Pattern[str]:
     match = str(spec.get("match", "") or "")
     if not match:
@@ -210,7 +229,13 @@ _SKIP_LINE_RE = re.compile(r"^\s*(?:\$\$|&&|NNNN|0{3,})\s*$")
 # WMO-style header line (ex: FXUS61 KLWX 201925)
 _WMO_HEADER_RE = re.compile(r"^[A-Z]{3,6}\d{2}\s+[A-Z]{4}\s+\d{6}(?:\s+[A-Z]{3})?$")
 # Human-readable issued line (ex: 1118 AM EDT Mon Mar 16 2026)
-_NWS_ISSUED_LINE_RE = re.compile(r"^\d{3,4}\s*(?:AM|PM)\s+[A-Z]{2,4}\s+[A-Za-z]{3}\s+[A-Za-z]{3}\s+\d{1,2}\s+\d{4}$")
+_NWS_ISSUED_LINE_RE = re.compile(
+    r"^\d{3,4}\s*(?:AM|PM)\s+[A-Z]{2,5}"
+    r"(?:\s*(?:\(\s*|,\s*OR\s+|/\s*)\d{3,4}\s*(?:AM|PM)\s+[A-Z]{2,5}\s*\)?)?\s+"
+    r"(?:[A-Za-zÀ-ÿ]{2,12}\s+){1,6}\d{1,2}"
+    r"(?:\s+[A-Za-zÀ-ÿ]{2,12}){0,4}\s+\d{4}$",
+    re.IGNORECASE,
+)
 _PRODUCT_MASTHEAD_RE = re.compile(
     r"^(?:URGENT\s*-\s*)?(?:WINTER WEATHER MESSAGE|COASTAL HAZARD MESSAGE|SPECIAL WEATHER STATEMENT|"
     r"FLOOD WARNING|FLOOD WATCH|FLOOD ADVISORY|SEVERE WEATHER STATEMENT|SEVERE THUNDERSTORM WARNING|"
@@ -335,6 +360,7 @@ def clean_for_tts(text: str) -> str:
     t = t.replace("\u2022", " ")  # bullet
     t = t.replace("\u2013", "-")  # en-dash
     t = t.replace("\u2014", "-")  # em-dash
+    t = normalize_nws_dual_time_zones(t)
 
     # Markdown links: [label](url) -> label
     t = _MD_LINK_RE.sub(r"\1", t)

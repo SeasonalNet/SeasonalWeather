@@ -121,7 +121,8 @@ than an engine-specific process implementation.
 ## Preprocessing and identity
 
 `seasonalweather.tts.preprocess` is the pure common owner of cleaning, NWS
-spoken-time normalization, URL verbalization, and ordered generic overrides.
+spoken-time and dual-time-zone normalization, URL verbalization, and ordered
+generic overrides.
 Legacy exports from `tts.py` delegate to it for compatibility. VoiceText VTML
 is local-handler-only. The preprocessing version is
 `tts-preprocess-v1`.
@@ -138,6 +139,12 @@ families (`I/i/İ/ı`, `S/s/ſ`, and `K/k/K`) are included in overlap analysis
 and character-class range expansion is width-bounded before materialization.
 Configuration validation rejects unsafe rules with typed source paths; runtime
 checking remains a defensive fence.
+
+VoiceText Paul also receives the checked-in AWIPS-II BMH national `paul-nat`
+dictionary as an additive baseline. Existing SeasonalWeather VTML phoneme and
+abbreviation rules, followed by operator overrides, remain authoritative; the
+AWIPS entries only fill gaps. The resource is packaged with the TTS module and
+does not require AWIPS-II at runtime.
 
 The controller normalizes the exact text and overrides, then derives the
 content identity from the normalized bytes and preprocessing version. A

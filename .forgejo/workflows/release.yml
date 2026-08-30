@@ -61,6 +61,7 @@ jobs:
         env:
           IMAGE_REPOSITORY_BASE: git.seasonalnet.org/seasonalnet/seasonalweather
           IMAGE_TAG: ${{ forge.ref_name }}
+          SW_IMAGE_PUSH_MODE: engine
         run: |
           . .venv-release/bin/activate
           source_date_epoch="$(git show -s --format=%ct HEAD)"

@@ -174,6 +174,48 @@ def test_build_interface_can_push_one_target_to_an_explicit_release_reference(tm
     ]
 
 
+def test_build_interface_engine_push_loads_then_uses_docker_push(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("SW_BUILD_CACHE_FROM", raising=False)
+    monkeypatch.delenv("SW_BUILD_CACHE_TO", raising=False)
+    monkeypatch.setenv("SW_IMAGE_PUSH_MODE", "engine")
+    build_info = tmp_path / "build-info.json"
+    build_info.write_text(_info().to_json(), encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(build_interface.subprocess, "run", fake_run)
+
+    image_reference = "git.seasonalnet.org/seasonalnet/seasonalweather-worker:v0.18.0-alpha.3-voicetext-paul"
+    assert (
+        build_interface.run_image(
+            build_info=build_info,
+            targets=("voicetext-paul",),
+            push=True,
+            image_reference=image_reference,
+        )
+        == 0
+    )
+
+    assert calls == [
+        [
+            "docker",
+            "buildx",
+            "bake",
+            "--file",
+            str(build_interface.BAKE_FILE),
+            "--load",
+            "--set",
+            f"voicetext-paul.tags={image_reference}",
+            "voicetext-paul",
+        ],
+        ["docker", "push", image_reference],
+    ]
+
+
 def test_build_interface_scopes_optional_cache_references_per_profile(tmp_path, monkeypatch) -> None:
     build_info = tmp_path / "build-info.json"
     build_info.write_text(_info().to_json(), encoding="utf-8")

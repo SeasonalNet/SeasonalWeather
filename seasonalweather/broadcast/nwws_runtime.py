@@ -2,24 +2,60 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+from typing import cast
 
 from ..alerts.active import ActiveAlert, _vtec_track_id
 from ..alerts.product import ParsedProduct, parse_product_text
 from ..alerts.vtec import same_codes_for_vtec
 from ..alerts.vtec import toneout_policy as _vtec_toneout_policy
+from ..diagnostics.bindings import NWWS_CODES
 from ..nwws.source import NwwsProductEnvelope
 from .audio_origination import safe_event_code as _safe_event_code
 from .cap_policy import best_expiry_from_vtec, vtec_matches_configured_toneout_code
-from .formatters import NwwsScriptRenderResult, parse_nws_header_issued_dt, pns_text_same_issuance
-from .formatters import FormatterSubsystem
+from .formatters import FormatterSubsystem, NwwsScriptRenderResult, parse_nws_header_issued_dt, pns_text_same_issuance
+from .station_feed_runtime import note_nwws as _station_feed_note_nwws
 from .station_feed_runtime import nwws_area_from_text as _sf_nwws_area_from_text
 from .station_feed_runtime import nwws_best_issued_dt as _sf_nwws_best_issued_dt
 from .station_feed_runtime import nwws_event_label as _sf_nwws_event_label
 from .station_feed_runtime import nwws_extract_issuer as _sf_nwws_extract_issuer
 from .station_feed_runtime import nwws_make_headline as _sf_nwws_make_headline
-from .station_feed_runtime import note_nwws as _station_feed_note_nwws
 
 log = logging.getLogger("seasonalweather")
+
+_UGC_VTEC_EXPIRY_TOLERANCE = dt.timedelta(minutes=1)
+
+
+def _diagnose_ugc_vtec_expiry_disagreement(
+    runtime: object,
+    parsed: ParsedProduct,
+    ugc_expires_utc: dt.datetime | None,
+    vtec_expires_utc: dt.datetime | None,
+) -> None:
+    """Record inconsistent dual routing metadata without changing routing."""
+    if ugc_expires_utc is None or vtec_expires_utc is None:
+        # VTEC-less products are valid and must not be classified as a conflict.
+        return
+    if abs(ugc_expires_utc - vtec_expires_utc) <= _UGC_VTEC_EXPIRY_TOLERANCE:
+        return
+
+    sink = getattr(runtime, "nwws_diagnostic_sink", None)
+    emit = getattr(sink, "emit", None)
+    if not callable(emit):
+        return
+    try:
+        _ = emit(
+            NWWS_CODES["routing_metadata_disagreement"],
+            message=(
+                "UGC/VTEC expiry disagreement "
+                f"wfo={parsed.wfo} awips={parsed.awips_id or ''} "
+                f"ugc={ugc_expires_utc.isoformat()} vtec={vtec_expires_utc.isoformat()}"
+            ),
+            exception=None,
+        )
+    except Exception:
+        # Diagnostic emission is deliberately best effort and cannot become a
+        # second routing authority or interrupt the product path.
+        log.debug("NWWS UGC/VTEC diagnostic emission failed", exc_info=True)
 
 
 def _first_vtec_action(actions: set[str], priority: tuple[str, ...]) -> str:
@@ -267,7 +303,14 @@ class NwwsRuntime:
                 len(in_area_same),
             )
 
-        vtec_preview = self._extract_vtec(official_text)
+        vtec_preview: list[str] = cast(list[str], self._extract_vtec(official_text))
+        vtec_expires_preview = best_expiry_from_vtec(vtec_preview)
+        _diagnose_ugc_vtec_expiry_disagreement(
+            self,
+            parsed,
+            ugc_expires_utc,
+            vtec_expires_preview,
+        )
         _pre_policy = _vtec_toneout_policy(vtec_preview)
         _pre_is_wcn_watch = (parsed.product_type or "").strip().upper() == "WCN" and (
             _pre_policy.same_code or ""
@@ -310,7 +353,7 @@ class NwwsRuntime:
 
         vtec = vtec_preview
         tracks = self._vtec_tracks(vtec)
-        exp_utc = best_expiry_from_vtec(vtec)
+        exp_utc = vtec_expires_preview
 
         # VTEC toneout policy — vtec.py is authoritative for FULL vs VOICE.
         # This replaces the inline action-only check that ignored significance

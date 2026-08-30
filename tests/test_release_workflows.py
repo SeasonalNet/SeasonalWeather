@@ -72,3 +72,11 @@ def test_release_workflows_enable_best_effort_dependency_and_provider_build_cach
     assert "SW_BUILD_CACHE_FROM" not in forgejo_release
     assert "SW_BUILD_CACHE_TO" not in forgejo_release
     assert "seasonalweather-cache" not in forgejo_release
+
+
+def test_forgejo_release_uses_engine_streaming_push_path() -> None:
+    forgejo_release = (ROOT / ".forgejo/workflows/release.yml").read_text()
+    github_release = (ROOT / ".github/workflows/release.yml").read_text()
+
+    assert "SW_IMAGE_PUSH_MODE: engine" in forgejo_release
+    assert "SW_IMAGE_PUSH_MODE: engine" not in github_release

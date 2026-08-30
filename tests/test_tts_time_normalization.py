@@ -1,4 +1,4 @@
-from seasonalweather.tts.tts import clean_for_tts, normalize_nws_spoken_times
+from seasonalweather.tts.tts import clean_for_tts, normalize_nws_dual_time_zones, normalize_nws_spoken_times
 
 
 def test_normalize_nws_spoken_times_adds_colons_to_compact_local_times() -> None:
@@ -21,6 +21,17 @@ def test_normalize_nws_spoken_times_leaves_utc_and_vtec_timestamps_alone() -> No
     text = "/O.CON.KLWX.SV.W.0041.000000T0000Z-260513T2300Z/ TIME...MOT...LOC 2251Z"
 
     assert normalize_nws_spoken_times(text) == text
+
+
+def test_normalize_nws_dual_time_zones_makes_awips_forms_speakable() -> None:
+    assert normalize_nws_dual_time_zones("651 PM EDT (551 PM CDT)") == "651 PM EDT, OR 551 PM CDT"
+    assert normalize_nws_dual_time_zones("651 PM EDT / 551 PM CDT") == "651 PM EDT, OR 551 PM CDT"
+
+
+def test_clean_for_tts_drops_mixed_case_and_dual_zone_issued_headers() -> None:
+    text = "556 PM edt (456 PM cdt) Thu Aug 27 2026\nThe warning is active."
+
+    assert clean_for_tts(text) == "The warning is active."
 
 
 def test_clean_for_tts_normalizes_alert_times_before_synthesis() -> None:

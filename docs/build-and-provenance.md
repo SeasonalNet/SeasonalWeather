@@ -100,6 +100,17 @@ own container registry before invoking this target. The GitHub workflow uses
 GHCR and the Forgejo workflow uses the instance container registry; neither
 workflow uses mutable `latest` references.
 
+The Forgejo release workflow sets `SW_IMAGE_PUSH_MODE=engine`. Each release
+image is first loaded into the runner-provided Docker image store with
+BuildKit, then pushed by the Docker Engine client. This preserves the same
+Forgejo registry hostname while allowing the Engine's registry client to use
+streaming layer uploads when the layer is large. The default `buildkit` mode
+remains available for local use and GitHub, which continues to use BuildKit's
+direct registry exporter. The engine mode is intended to avoid oversized
+monolithic registry requests; the actual request framing remains dependent on
+the Docker Engine and registry client versions and should be confirmed from
+registry/proxy logs.
+
 CI and release workflows use best-effort caches. UV downloads are cached under
 `~/.cache/uv` using the lockfile and project metadata as the key; the cache is
 kept outside the repository so static analysis does not scan dependency files.

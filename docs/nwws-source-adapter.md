@@ -23,6 +23,13 @@ suppress duplicates. The controller remains authoritative for product parsing,
 allowlisting, targeting, duplicate policy, alert lifecycle, TTS, and
 publication.
 
+When a routed product contains both a parseable UGC expiry and a parseable
+VTEC expiry, SeasonalWeather compares the two as a bounded metadata check. A
+material difference emits `SWNWWS2002` as a warning while leaving the normal
+routing decision unchanged and trusting the VTEC end time for VTEC lifecycle
+expiry. A product without VTEC is not a disagreement: UGC-only products remain
+valid and continue through their normal UGC path.
+
 For `nwws-oi.weather.gov:5222`, the slixmpp adapter explicitly requires the
 XMPP STARTTLS feature, disables direct-TLS and plaintext fallback, and uses a
 hostname-verifying `CERT_REQUIRED` context with TLS 1.2 or newer. SASL feature
