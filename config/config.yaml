@@ -678,6 +678,15 @@ database:
   path: "/var/lib/seasonalweather/state/seasonalweather.sqlite3"  # also stores exchange clients, tokens, and auth audit
   busy_timeout_ms: 5000
   journal_mode: "WAL"
+  postgres:
+    # PostgreSQL is an optional archive only; it is never required for
+    # routine broadcasting. The endpoint remains disabled by default under
+    # network.postgresql.enabled.
+    mode: "optional"
+    role: "archive"
+    schema: "public"
+    migration_table: "seasonalweather_schema_metadata"
+    clock_skew_seconds: 5.0
   housekeeping:
     enabled: true
     interval_seconds: 900        # 15m periodic DB cleanup / reconciliation

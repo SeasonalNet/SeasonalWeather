@@ -1504,7 +1504,7 @@
     {
       "code": "SWDB3001",
       "title": "Database operation failed",
-      "summary": "A bounded SQLite or optional PostgreSQL operation failed while preserving the local authority boundary.",
+      "summary": "A bounded SQLite operation or optional PostgreSQL operation/startup qualification failed while preserving the local authority boundary.",
       "namespace": "SWDB",
       "condition_class": 3,
       "class_justification": "The primary condition is an unavailable or failed persistence dependency.",
@@ -1517,7 +1517,7 @@
       "status": "active",
       "explanation_path": "explanations/SWDB3001.md",
       "related_codes": ["SWDB8001"],
-      "documentation_references": ["docs/diagnostic-namespaces.md", "docs/durable-job-repository.md"],
+      "documentation_references": ["docs/diagnostic-namespaces.md", "docs/durable-job-repository.md", "docs/p4-01-postgresql-preflight.md"],
       "supported_phases": ["runtime", "recovery"]
     },
     {

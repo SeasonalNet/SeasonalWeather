@@ -103,6 +103,13 @@ class SeasonalWeatherServiceRuntime:
         if o.lifecycle_records is not None:
             o.lifecycle_records.stage(LifecycleStage.STORAGE_READY, ready=False)
 
+        # PostgreSQL is an optional archive dependency. Qualify it before the
+        # controller reports ready, but never let its outage block the local
+        # SQLite-backed broadcast path.
+        postgresql_preflight = getattr(o, "postgresql_preflight", None)
+        if postgresql_preflight is not None:
+            await postgresql_preflight.run()
+
         await o._wait_for_liquidsoap()
         if o.lifecycle_records is not None:
             o.lifecycle_records.stage(LifecycleStage.BROADCAST_PATH_READY, ready=False)

@@ -72,4 +72,4 @@ jobs:
       - name: Run the Phase 2 exit gate
         run: |
           . .venv-ci/bin/activate
-          make phase2-gate
+          make phase2-gate PYTEST_XDIST_ARGS="-n 4 --dist=loadfile"

@@ -68,7 +68,14 @@ SWWP sessions. Readiness gates only on explicitly required capability names;
 a missing registry with required capabilities is explicitly `unavailable`.
 When durable jobs are enabled and required, a controller with no active live
 worker session reports SWWP as unavailable and never falls back to controller
-execution. PostgreSQL and Redis remain `not_applicable`.
+execution. PostgreSQL is `disabled` until its endpoint is explicitly enabled
+under `network.postgresql.enabled`. When enabled, startup performs a bounded
+archive preflight covering connectivity, TLS/authentication, server and
+database identity, ownership and privileges, migration/extension state,
+transactional read/write behavior, clock divergence, and the required spatial
+reference. A failed optional preflight reports PostgreSQL as unavailable but
+does not make readiness fail: SQLite and local broadcast state remain the
+continuity authority. Redis remains `not_applicable` until introduced.
 
 Reports never include configured paths, raw exceptions, credentials, tokens,
 authorization headers, source payloads, or client details. Component and

@@ -22,6 +22,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import math
+import re
 import tempfile
 from dataclasses import dataclass, field
 from enum import Enum
@@ -149,6 +150,17 @@ class OptionalServiceNetworkConfig:
     database: str = ""
     tls: bool = True
     connect_timeout_seconds: float = 5.0
+
+
+@dataclass(frozen=True)
+class PostgresArchiveConfig:
+    """Controller policy for the optional PostgreSQL archive role."""
+
+    mode: str = "optional"
+    role: str = "archive"
+    schema: str = "public"
+    migration_table: str = "seasonalweather_schema_metadata"
+    clock_skew_seconds: float = 5.0
 
 
 @dataclass(frozen=True)
@@ -960,6 +972,7 @@ class DatabaseConfig:
     path: str
     busy_timeout_ms: int
     journal_mode: str
+    postgres: PostgresArchiveConfig
     housekeeping: DatabaseHousekeepingConfig
 
 
@@ -1158,6 +1171,40 @@ def _network_timeout(value: Any, name: str, default: float) -> float:
     return result
 
 
+def _postgres_identifier(value: Any, name: str, default: str) -> str:
+    result = str(value if value is not None else default).strip().lower()
+    if re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", result) is None:
+        raise ValueError(f"{name} must be a lowercase PostgreSQL identifier")
+    return result
+
+
+def _load_postgres_archive_config(db_raw: dict[str, Any]) -> PostgresArchiveConfig:
+    postgres_raw = db_raw.get("postgres", {}) or {}
+    mode = str(postgres_raw.get("mode", "optional") or "").strip().lower()
+    role = str(postgres_raw.get("role", "archive") or "").strip().lower()
+    if mode != "optional":
+        raise ValueError("database.postgres.mode must be optional")
+    if role != "archive":
+        raise ValueError("database.postgres.role must be archive")
+    try:
+        clock_skew_seconds = float(postgres_raw.get("clock_skew_seconds", 5.0))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("database.postgres.clock_skew_seconds must be a finite positive number") from exc
+    if not math.isfinite(clock_skew_seconds) or not 0 < clock_skew_seconds <= 300:
+        raise ValueError("database.postgres.clock_skew_seconds must be between 0 and 300")
+    return PostgresArchiveConfig(
+        mode=mode,
+        role=role,
+        schema=_postgres_identifier(postgres_raw.get("schema"), "database.postgres.schema", "public"),
+        migration_table=_postgres_identifier(
+            postgres_raw.get("migration_table"),
+            "database.postgres.migration_table",
+            "seasonalweather_schema_metadata",
+        ),
+        clock_skew_seconds=clock_skew_seconds,
+    )
+
+
 def _load_optional_service_network_config(
     network_raw: dict[str, Any], name: str, default_port: int
 ) -> OptionalServiceNetworkConfig:
@@ -1229,6 +1276,9 @@ def _load_network_config(raw: dict[str, Any]) -> NetworkConfig:
     api_raw = network_raw.get("api", {}) or {}
     liquidsoap_raw = network_raw.get("liquidsoap", {}) or {}
     swwp_raw = network_raw.get("swwp", {}) or {}
+    postgresql = _load_optional_service_network_config(network_raw, "postgresql", 5432)
+    if postgresql.enabled and not postgresql.database:
+        raise ValueError("network.postgresql.database is required when enabled")
 
     return NetworkConfig(
         api=ApiNetworkConfig(
@@ -1245,7 +1295,7 @@ def _load_network_config(raw: dict[str, Any]) -> NetworkConfig:
             ),
         ),
         swwp=_load_swwp_network_config(swwp_raw),
-        postgresql=_load_optional_service_network_config(network_raw, "postgresql", 5432),
+        postgresql=postgresql,
         redis=_load_optional_service_network_config(network_raw, "redis", 6379),
     )
 
@@ -2616,6 +2666,7 @@ def _build_app_config(
     # database
     # ------------------------------------------------------------------
     db_raw = raw.get("database", {})
+    db_raw = db_raw or {}
     db_path = str(db_raw.get("path", "")).strip() or str(Path(paths.operational_state_dir) / "seasonalweather.sqlite3")
     db_hk_raw = db_raw.get("housekeeping", {})
     database = DatabaseConfig(
@@ -2623,6 +2674,7 @@ def _build_app_config(
         path=db_path,
         busy_timeout_ms=int(db_raw.get("busy_timeout_ms", 5000)),
         journal_mode=str(db_raw.get("journal_mode", "WAL") or "WAL").strip().upper(),
+        postgres=_load_postgres_archive_config(db_raw),
         housekeeping=DatabaseHousekeepingConfig(
             enabled=bool(db_hk_raw.get("enabled", True)),
             interval_seconds=int(db_hk_raw.get("interval_seconds", 900)),

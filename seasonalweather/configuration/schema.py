@@ -883,6 +883,16 @@ SCHEMA_V1 = _o(
                 "path": _s(default=""),
                 "busy_timeout_ms": _i(default=5000),
                 "journal_mode": _s(default="WAL"),
+                "postgres": _o(
+                    {
+                        "mode": _s(default="optional", enum=frozenset({"optional"})),
+                        "role": _s(default="archive", enum=frozenset({"archive"})),
+                        "schema": _s(default="public"),
+                        "migration_table": _s(default="seasonalweather_schema_metadata"),
+                        "clock_skew_seconds": _n(default=5.0),
+                    },
+                    default={},
+                ),
                 "housekeeping": _o(
                     {
                         "enabled": _b(default=True),

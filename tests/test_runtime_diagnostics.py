@@ -785,7 +785,16 @@ def test_process_marker_rejects_unsafe_state_root_and_lock(tmp_path: Path) -> No
         b"{not-json",
         b"x" * 4097,
         json.dumps(
-            controller_marker(instance_id="controller_00000001", now=NOW).to_dict() | {"marker_schema_version": 2}
+            {
+                "marker_schema_version": 2,
+                "role": "controller",
+                "instance_id": "controller_00000001",
+                "process_id": 1,
+                "started_at": "2026-07-29T12:00:00.000000Z",
+                "application_version": "test",
+                "configuration_generation": None,
+                "lifecycle_stage": "starting",
+            }
         ).encode(),
     ),
 )

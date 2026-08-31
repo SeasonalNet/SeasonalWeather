@@ -39,6 +39,7 @@ from .configuration_reload.safe_point import (
 from .configuration_reload.safe_point import (
     ActivityRegistry,
 )
+from .database.postgresql import PostgresPreflight
 from .lifecycle import (
     Lifecycle,
     LifecycleState,
@@ -223,6 +224,10 @@ class Orchestrator:
         # restart-surviving cache.  Durable state must not silently fall back
         # to files when the database is enabled.
         self.database = bootstrap_database_from_config(cfg) if getattr(cfg.database, "enabled", True) else None
+        self.postgresql_preflight = PostgresPreflight(
+            configuration=cfg.database.postgres,
+            network=cfg.network.postgresql,
+        )
 
         self.segment_registry = DEFAULT_SEGMENT_REGISTRY.resolve(cfg.cycle)
         self.cycle_builder = CycleBuilder(

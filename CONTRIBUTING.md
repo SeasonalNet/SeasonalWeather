@@ -84,7 +84,9 @@ change, run `make quality` and the applicable tests. Report exact commands and
 results, including anything skipped or blocked.
 
 Forgejo CI installs the locked controller and development dependency groups and runs the same `make quality`
-target. Gitleaks remains a separate required security workflow because it scans
+target. The complete test phase runs with four pinned pytest-xdist workers and
+`loadfile` distribution; use `make test PYTEST_XDIST_ARGS=` for a serial
+diagnostic run. Gitleaks remains a separate required security workflow because it scans
 repository content for secrets rather than analyzing Python behavior.
 
 ## Quality tool selection

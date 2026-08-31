@@ -476,6 +476,8 @@ async def _run_api_server_impl(
         orch.cap_diagnostic_sink = build_foundation_sink("cap.")
         orch.ern_diagnostic_sink = build_foundation_sink("ern.")
         orch.database_diagnostic_sink = build_foundation_sink("database.")
+        if hasattr(orch, "postgresql_preflight"):
+            orch.postgresql_preflight.set_diagnostic_sink(orch.database_diagnostic_sink)
         set_station_feed_diagnostic_sink(orch.database_diagnostic_sink)
         if hasattr(orch, "alert_tracker"):
             orch.alert_tracker._diagnostic_sink = orch.database_diagnostic_sink

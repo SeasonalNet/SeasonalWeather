@@ -329,6 +329,32 @@ async def _swwp_health_probe(
     )
 
 
+async def _postgresql_health_probe(runtime: Any) -> HealthComponent:
+    preflight = getattr(runtime, "postgresql_preflight", None)
+    if preflight is None:
+        configured = getattr(getattr(getattr(runtime, "cfg", None), "network", None), "postgresql", None)
+        if configured is None:
+            return _component("postgresql", ComponentState.NOT_APPLICABLE, False, "not_introduced")
+        if not bool(getattr(configured, "enabled", False)):
+            return _component("postgresql", ComponentState.DISABLED, False, "disabled_by_configuration")
+        return _component("postgresql", ComponentState.UNAVAILABLE, False, "preflight_not_run")
+
+    snapshot = preflight.snapshot()
+    state_value = str(snapshot.get("state", "unavailable"))
+    state = {
+        "disabled": ComponentState.DISABLED,
+        "available": ComponentState.HEALTHY,
+        "unavailable": ComponentState.UNAVAILABLE,
+    }.get(state_value, ComponentState.UNKNOWN)
+    reason = str(snapshot.get("reason", "preflight_failed"))[:64]
+    details = {
+        key: snapshot[key]
+        for key in ("checks", "failed_checks", "elapsed_milliseconds", "server_version")
+        if key in snapshot
+    }
+    return _component("postgresql", state, False, reason, details=details)
+
+
 def _swwp_is_required(swwp_manager: Any, jobs_enabled: bool, jobs_required: bool) -> bool:
     return swwp_manager is not None and jobs_enabled and jobs_required
 
@@ -643,11 +669,7 @@ def build_runtime_health_service(
 
     probes.extend(
         (
-            _constant_probe(
-                "postgresql",
-                ComponentState.NOT_APPLICABLE,
-                reason="not_implemented",
-            ),
+            ComponentProbe("postgresql", False, partial(_postgresql_health_probe, runtime)),
             _constant_probe(
                 "redis",
                 ComponentState.NOT_APPLICABLE,

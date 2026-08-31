@@ -1,7 +1,10 @@
 # Quality guardrails and CI parity
 
 `make quality` is the governed quality interface and `make check` adds
-compilation and the complete test suite. The quality chain validates governance,
+compilation and the complete test suite. The test target uses four pytest-xdist
+workers with `loadfile` distribution by default; use
+`make test PYTEST_XDIST_ARGS=` when a serial run is needed for diagnosis. The
+quality chain validates governance,
 the immutable diagnostic catalog, formatting, lint, mypy, basedpyright,
 architecture ownership, dependencies, dead code, security, complexity, image
 boundaries, and container security. Existing finding ceilings are ratchets:

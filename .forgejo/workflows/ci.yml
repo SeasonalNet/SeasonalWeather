@@ -57,7 +57,7 @@ jobs:
       - name: Run the repository check interface
         run: |
           . .venv-ci/bin/activate
-          make check
+          make check PYTEST_XDIST_ARGS="-n 4 --dist=loadfile"
 
   images:
     needs: python

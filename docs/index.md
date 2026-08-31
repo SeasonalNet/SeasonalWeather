@@ -15,6 +15,7 @@ points to the detailed contracts.
 - [Staging operation](p3-07-staging.md) — isolated staging project and
   failure/soak boundaries.
 - [Health and readiness](health-readiness.md)
+- [Optional PostgreSQL preflight](p4-01-postgresql-preflight.md)
 - [Lifecycle and shutdown](lifecycle-shutdown.md)
 - [Runtime diagnostics](runtime-diagnostics.md)
 - [Runtime wrappers](runtime-wrappers.md)

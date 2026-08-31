@@ -4,6 +4,7 @@ PYTHON ?= $(if $(wildcard .venv/bin/python),./.venv/bin/python,python3)
 BUILD_INFO ?= build/build-info.json
 BUILD_PROFILE ?= source
 TARGET_PLATFORM ?= unknown
+PYTEST_XDIST_ARGS ?= -n 4 --dist=loadfile
 
 .PHONY: format-check lint typecheck basedpyright architecture-check dependency-check suppressions-check
 .PHONY: dead-code-check security-check complexity-check image-boundaries-check container-security-check
@@ -65,7 +66,7 @@ diagnostics-export:
 quality: exceptions-check diagnostics-check format-check lint typecheck basedpyright architecture-check dependency-check suppressions-check dead-code-check security-check complexity-check image-boundaries-check container-security-check
 
 test:
-	$(PYTHON) -m pytest
+	$(PYTHON) -m pytest $(PYTEST_XDIST_ARGS)
 
 compile:
 	PYTHONPYCACHEPREFIX="$(CURDIR)/build/pycache" $(PYTHON) -m compileall -q seasonalweather tools tests
