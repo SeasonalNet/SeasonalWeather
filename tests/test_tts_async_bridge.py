@@ -103,7 +103,7 @@ async def _test_async_cancellation_reaches_worker_and_preserves_cancelled_error(
         operation = asyncio.create_task(
             synthesize_async(tts, "cancel", tmp_path / "cancel.wav", purpose="routine", executor=executor)
         )
-        await asyncio.sleep(0.02)
+        assert await asyncio.to_thread(tts.started.wait, 1.0)
         operation.cancel()
         with pytest.raises(asyncio.CancelledError):
             await operation
@@ -319,10 +319,13 @@ def test_slow_finalizer_cannot_publish_after_deadline(tmp_path: Path) -> None:
 
 
 def test_explicit_cancellation_during_finalization_cannot_publish_later(tmp_path: Path) -> None:
+    finalizer_started = threading.Event()
+
     def complete(staged_path, token, fence):
         del token, fence
         import time
 
+        finalizer_started.set()
         time.sleep(0.1)
         published = staged_path.parent / "cancelled-too-late.wav"
         published.write_bytes(b"cancelled")
@@ -350,7 +353,7 @@ def test_explicit_cancellation_during_finalization_cannot_publish_later(tmp_path
             )
         )
         try:
-            await asyncio.sleep(0.02)
+            assert await asyncio.to_thread(finalizer_started.wait, 1.0)
             operation.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await asyncio.wait_for(operation, 1)

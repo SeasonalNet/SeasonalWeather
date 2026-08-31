@@ -65,11 +65,13 @@ class _ScriptedExecutor:
         self.delay = delay
         self.active = 0
         self.maximum_active = 0
+        self.started = asyncio.Event()
 
     async def observe(self, probe, monotonic):
         del monotonic
         self.active += 1
         self.maximum_active = max(self.maximum_active, self.active)
+        self.started.set()
         try:
             if probe.identifier in self.blocked:
                 await asyncio.Event().wait()
@@ -239,7 +241,7 @@ def test_preflight_cancellation_propagates_to_injected_executor() -> None:
     async def scenario() -> None:
         executor = _ScriptedExecutor(blocked=frozenset({"blocked"}))
         task = asyncio.create_task(run_preflight((_probe("blocked", required=False, timeout=1.0),), executor=executor))
-        await asyncio.sleep(0.03)
+        await asyncio.wait_for(executor.started.wait(), timeout=1.0)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task

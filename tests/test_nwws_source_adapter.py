@@ -68,8 +68,10 @@ class FakeSession:
         self.disconnected = False
         self.disconnect_calls = 0
         self.connected = asyncio.Event()
+        self.connect_started = asyncio.Event()
 
     async def connect(self) -> None:
+        self.connect_started.set()
         if self.behavior == "connect-blocked":
             await asyncio.Event().wait()
         if self.behavior == "transport":
@@ -616,15 +618,18 @@ def test_transport_failure_reconnects_without_accumulating_tasks() -> None:
     async def exercise() -> None:
         diagnostics = DiagnosticCapture()
         sessions: list[FakeSession] = []
+        second_attempt = asyncio.Event()
 
         def factory(callbacks):
             session = FakeSession(callbacks, behavior="transport")
             sessions.append(session)
+            if len(sessions) >= 2:
+                second_attempt.set()
             return session
 
         source = _source(factory, diagnostics=diagnostics)
         task = asyncio.create_task(source.start(RecordingSink()))
-        await asyncio.sleep(0.08)
+        await asyncio.wait_for(second_attempt.wait(), timeout=1.0)
         assert source.health().connection_attempts >= 2
         assert diagnostics.items
         assert diagnostics.items[0][0] == "SWNWWS3001"
@@ -638,15 +643,18 @@ def test_transport_failure_reconnects_without_accumulating_tasks() -> None:
 def test_cancellation_during_connect_reaps_owned_delivery_and_transport() -> None:
     async def exercise() -> None:
         sessions: list[FakeSession] = []
+        session_created = asyncio.Event()
 
         def factory(callbacks):
             session = FakeSession(callbacks, behavior="connect-blocked")
             sessions.append(session)
+            session_created.set()
             return session
 
         source = _source(factory)
         task = asyncio.create_task(source.start(RecordingSink()))
-        await asyncio.sleep(0.01)
+        await asyncio.wait_for(session_created.wait(), timeout=1.0)
+        await asyncio.wait_for(sessions[0].connect_started.wait(), timeout=1.0)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
@@ -659,15 +667,18 @@ def test_cancellation_during_connect_reaps_owned_delivery_and_transport() -> Non
 def test_stop_during_connect_cancels_source_task_within_the_shutdown_bound() -> None:
     async def exercise() -> None:
         sessions: list[FakeSession] = []
+        session_created = asyncio.Event()
 
         def factory(callbacks):
             session = FakeSession(callbacks, behavior="connect-blocked")
             sessions.append(session)
+            session_created.set()
             return session
 
         source = _source(factory)
         task = asyncio.create_task(source.start(RecordingSink()))
-        await asyncio.sleep(0.01)
+        await asyncio.wait_for(session_created.wait(), timeout=1.0)
+        await asyncio.wait_for(sessions[0].connect_started.wait(), timeout=1.0)
         await asyncio.wait_for(source.stop(), timeout=1.0)
         await asyncio.wait_for(task, timeout=1.0)
         assert sessions[0].disconnect_calls >= 1
