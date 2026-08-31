@@ -86,6 +86,8 @@ class PostgresPreflightResult:
 class PostgresConnection(Protocol):
     def execute(self, operation: str, parameters: Sequence[object] | None = None) -> Any: ...
 
+    def commit(self) -> None: ...
+
     def rollback(self) -> None: ...
 
     def close(self) -> None: ...
@@ -118,6 +120,12 @@ class _PsycopgConnector:
         # credentials (.pgpass, service configuration, or PG* environment).
         # No password or DSN is admitted into SeasonalWeather configuration.
         return cast(PostgresConnection, psycopg.connect(**kwargs))
+
+
+def default_postgres_connector() -> PostgresConnector:
+    """Return the lazily imported psycopg-backed connector."""
+
+    return _PsycopgConnector()
 
 
 def _row(connection: PostgresConnection, operation: str, parameters: Sequence[object] | None = None) -> tuple[Any, ...]:
@@ -426,4 +434,5 @@ __all__ = [
     "PostgresPreflight",
     "PostgresPreflightResult",
     "PostgresPreflightState",
+    "default_postgres_connector",
 ]

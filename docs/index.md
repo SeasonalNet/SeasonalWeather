@@ -16,6 +16,7 @@ points to the detailed contracts.
   failure/soak boundaries.
 - [Health and readiness](health-readiness.md)
 - [Optional PostgreSQL preflight](p4-01-postgresql-preflight.md)
+- [PostgreSQL migration framework and schema governance](p4-02-postgresql-migrations.md)
 - [Lifecycle and shutdown](lifecycle-shutdown.md)
 - [Runtime diagnostics](runtime-diagnostics.md)
 - [Runtime wrappers](runtime-wrappers.md)
