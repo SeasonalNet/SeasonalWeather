@@ -22,7 +22,9 @@ The check uses source-line identity rather than line numbers, so ordinary code
 movement does not create false additions. CI fetches full history and selects
 the pull-request base or push predecessor explicitly. A deliberate suppression
 change is therefore visible in the review and cannot pass silently through the
-normal repository check interface.
+normal repository check interface. If a force-pushed event names a predecessor
+that is no longer available, CI falls back to `HEAD^` rather than failing before
+the quality checks begin.
 
 `quality/exceptions.toml` remains the separate governed inventory for
 architecture exceptions. Every exception still requires an owner, rationale,

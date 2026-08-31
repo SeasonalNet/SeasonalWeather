@@ -77,6 +77,14 @@ def test_release_workflows_enable_best_effort_dependency_and_provider_build_cach
     assert "seasonalweather-cache" not in forgejo_release
 
 
+def test_ci_suppression_base_falls_back_after_rewritten_push() -> None:
+    for provider in (".forgejo", ".github"):
+        ci = (ROOT / provider / "workflows" / "ci.yml").read_text()
+        assert 'if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then' in ci
+        assert 'base="HEAD^"' in ci
+        assert "after a rewritten push" in ci
+
+
 def test_github_release_publishes_images_to_ghcr() -> None:
     forgejo_release = (ROOT / ".forgejo/workflows/release.yml").read_text()
     github_release = (ROOT / ".github/workflows/release.yml").read_text()

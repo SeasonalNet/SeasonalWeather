@@ -53,7 +53,11 @@ jobs:
           else
             base="HEAD^"
           fi
-          git cat-file -e "${base}^{commit}"
+          if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            echo "Comparison base ${base} is unavailable (likely after a rewritten push); using HEAD^ instead."
+            base="HEAD^"
+            git cat-file -e "${base}^{commit}"
+          fi
           echo "QUALITY_SUPPRESSIONS_BASE=$base" >> "$GITHUB_ENV"
       - name: Install Python tooling
         run: |
