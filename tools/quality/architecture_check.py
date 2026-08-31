@@ -680,6 +680,26 @@ def scan(root: Path, config: dict[str, Any], exceptions: list[dict[str, Any]] | 
                         )
                     )
 
+        if relative in config.get("segment_candidate_roots", []):
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Subscript):
+                    continue
+                if any(
+                    isinstance(child, ast.Attribute)
+                    and child.attr == "text"
+                    and isinstance(child.value, ast.Name)
+                    and child.value.id == "self"
+                    for child in ast.walk(node.value)
+                ):
+                    findings.append(
+                        Finding(
+                            relative,
+                            node.lineno,
+                            "SWARCH058",
+                            "segment candidate text must be preserved, not silently sliced",
+                        )
+                    )
+
         if _under(relative, config.get("segment_service_roots", [])):
             for imported, line in imports:
                 if _matches_prefix(imported, config.get("segment_service_forbidden_imports", [])):

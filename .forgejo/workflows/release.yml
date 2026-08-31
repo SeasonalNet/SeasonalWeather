@@ -48,26 +48,6 @@ jobs:
           uv sync --frozen --active --group controller --group worker-runtime --group dev
           make release-artifacts SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
           test -n "$(find dist/release -maxdepth 1 -type f -print -quit)"
-      - name: Prepare runner-provided Docker
-        run: bash ./tools/ci/bootstrap_docker.sh
-      - name: Log in to Forgejo Container Registry
-        env:
-          FORGEJO_REGISTRY_USER: ${{ secrets.PACKAGE_REGISTRY_USER }}
-          FORGEJO_REGISTRY_TOKEN: ${{ secrets.PACKAGE_REGISTRY_TOKEN }}
-        run: |
-          printf '%s\n' "$FORGEJO_REGISTRY_TOKEN" \
-            | docker login git.seasonalnet.org --username "$FORGEJO_REGISTRY_USER" --password-stdin
-      - name: Build and publish release images
-        env:
-          IMAGE_REPOSITORY_BASE: git.seasonalnet.org/seasonalnet/seasonalweather
-          IMAGE_TAG: ${{ forge.ref_name }}
-          SW_IMAGE_PUSH_MODE: engine
-        run: |
-          . .venv-release/bin/activate
-          source_date_epoch="$(git show -s --format=%ct HEAD)"
-          make PYTHON=.venv-release/bin/python TARGET_PLATFORM=linux/amd64 \
-              IMAGE_REPOSITORY_BASE="$IMAGE_REPOSITORY_BASE" IMAGE_TAG="$IMAGE_TAG" \
-              SOURCE_DATE_EPOCH="$source_date_epoch" release-images
       - name: Publish Forgejo release
         uses: https://code.forgejo.org/actions/forgejo-release@v2.13.4
         with:

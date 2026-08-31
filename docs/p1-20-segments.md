@@ -9,7 +9,10 @@ whole-cycle generation for a single target. ID and status keep their existing
 refresher-owned builders. Live time remains conductor-owned, and outro is
 build-only/non-refreshable.
 
-Builders return a typed candidate with bounded text and runtime provenance.
+Builders return a typed candidate with normalized text and runtime provenance.
+A configured product budget may end on a complete sentence, but the typed
+candidate boundary never silently slices spoken text. The TTS admission bound
+remains the final shared synthesis safety limit.
 The controller-owned SQLite operational store persists the candidate metadata,
 content hash, source identity/reference, synthesis and airing evidence, and
 bounded failure state. Source references are stripped of credentials, query

@@ -271,6 +271,13 @@ def test_segment_registry_architecture_rules_have_independent_matching_negative_
     assert by_rule["SWARCH045"] == ["seasonalweather/broadcast/segment_registry.py"]
 
 
+def test_segment_candidate_boundary_rejects_silent_text_slicing() -> None:
+    findings = [finding for finding in scan(FIXTURES / "invalid", CONFIG) if finding.rule == "SWARCH058"]
+    assert [(finding.path, finding.line) for finding in findings] == [
+        ("seasonalweather/broadcast/segment_builders.py", 3),
+    ]
+
+
 def test_p1_20_boundaries_have_positive_and_independent_negative_fixtures():
     assert scan(FIXTURES / "valid", CONFIG) == []
     findings = scan(FIXTURES / "invalid", CONFIG)

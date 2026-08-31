@@ -96,20 +96,10 @@ profile-specific build record and pushes an explicit release reference. It
 requires `IMAGE_REPOSITORY_BASE` and `IMAGE_TAG`, and writes the resulting
 profile-to-image mapping to `IMAGE_REFERENCES_FILE` (by default
 `dist/release/IMAGE-REFERENCES.txt`). Release workflows authenticate to their
-own container registry before invoking this target. The GitHub workflow uses
-GHCR and the Forgejo workflow uses the instance container registry; neither
-workflow uses mutable `latest` references.
-
-The Forgejo release workflow sets `SW_IMAGE_PUSH_MODE=engine`. Each release
-image is first loaded into the runner-provided Docker image store with
-BuildKit, then pushed by the Docker Engine client. This preserves the same
-Forgejo registry hostname while allowing the Engine's registry client to use
-streaming layer uploads when the layer is large. The default `buildkit` mode
-remains available for local use and GitHub, which continues to use BuildKit's
-direct registry exporter. The engine mode is intended to avoid oversized
-monolithic registry requests; the actual request framing remains dependent on
-the Docker Engine and registry client versions and should be confirmed from
-registry/proxy logs.
+`dist/release/IMAGE-REFERENCES.txt`). The GitHub release workflow invokes this
+target against GHCR. The Forgejo release workflow does not invoke it; it
+publishes only the source, wheel, and checksum assets. Neither workflow uses
+mutable `latest` references.
 
 CI and release workflows use best-effort caches. UV downloads are cached under
 `~/.cache/uv` using the lockfile and project metadata as the key; the cache is
@@ -128,13 +118,9 @@ dependency installation or image build. The cache is an acceleration mechanism
 only; quality, test, image inspection, and release publication gates still run.
 
 Forgejo's automatic workflow token is sufficient for creating the Forgejo
-release but is not package-scoped. The Forgejo workflow or organization
-Actions secrets must define `PACKAGE_REGISTRY_USER` and
-`PACKAGE_REGISTRY_TOKEN`, where the latter is a user token with `write:package`
-access and the user can write to the package owner. Release publication
-requires these credentials. The ordinary CI image job does not require
-package-registry credentials because it uses only the runner-local BuildKit
-cache.
+release assets. No package-registry credentials are required by the Forgejo
+release workflow. GitHub is the image build and publication authority, using
+the workflow's GHCR package permission.
 
 The runtime loads the embedded record when present and uses a bounded source
 fallback for unbuilt checkouts. The same identity feeds `seasonalweather

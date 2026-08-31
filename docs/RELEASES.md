@@ -59,11 +59,12 @@ runtime compatibility check consumes a software version.
 
 Pushing an annotated `v*` tag starts the Release workflow after CI, Security,
 and SemVer guardrails have all passed. It builds the source distribution and
-wheel, plus `SHA256SUMS`, in `dist/release/`. It also builds and pushes all
-declared controller and worker image profiles to the provider's container
-registry. `IMAGE-REFERENCES.txt` records the exact image references included
-by that release. The release is published only after the archives and images
-are complete. No release is published for an untagged commit.
+wheel, plus `SHA256SUMS`, in `dist/release/`. Both providers publish those
+release assets. The GitHub workflow additionally builds and pushes all declared
+controller and worker image profiles to GHCR, and writes
+`IMAGE-REFERENCES.txt` with the exact image references included by that
+release. The release is published only after its required assets are complete.
+No release is published for an untagged commit.
 
 Container image tags are profile-qualified and immutable. For a release such
 as `v0.18.0-alpha.2`, the controller and development images use the
@@ -72,17 +73,15 @@ as `v0.18.0-alpha.2`, the controller and development images use the
 deployment should use these exact release references rather than a mutable
 `latest` tag.
 
-The current provider locations are `ghcr.io/seasonalnet/seasonalweather` for
-GitHub and `git.seasonalnet.org/seasonalnet/seasonalweather` for Forgejo.
-Worker references use the corresponding `seasonalweather-worker` repository.
-The release workflow writes the complete profile mapping to
-`dist/release/IMAGE-REFERENCES.txt` so operators do not need to reconstruct
-the names manually.
+GHCR is the canonical release image registry:
+`ghcr.io/seasonalnet/seasonalweather` for controller and development images,
+and `ghcr.io/seasonalnet/seasonalweather-worker` for worker profiles. The
+Compose deployment should use the exact profile-qualified references recorded
+in `dist/release/IMAGE-REFERENCES.txt`; it should not reconstruct them from a
+provider-specific registry hostname.
 
-The Forgejo workflow uses the repository's automatic `forge.token` for release
-creation, but container uploads require a separate user token with the
-`write:package` scope. Configure that token and its owner as the
-`PACKAGE_REGISTRY_TOKEN` and `PACKAGE_REGISTRY_USER` Actions secrets. A
-repository-restricted token cannot carry package scope; use a suitably
-restricted user token whose owner has write access to the `SeasonalNet`
-organization.
+The Forgejo workflow intentionally does not authenticate to a container
+registry or build images. Its automatic `forge.token` is used only to publish
+the source, wheel, and checksum assets. This keeps Forgejo release publication
+available without sending large image layers through the proxied Forgejo
+registry path; GitHub remains the image build and publication authority.

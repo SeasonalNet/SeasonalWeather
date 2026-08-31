@@ -469,6 +469,10 @@ segment_builder_forbidden_calls = [
   "Path.rename",
   "SegmentStore",
 ]
+# Candidate text must be preserved at the typed segment boundary; silently
+# slicing it can create partial spoken products.  Configured product budgets
+# remain an explicit concern of their individual builders.
+segment_candidate_roots = ["seasonalweather/broadcast/segment_builders.py"]
 segment_service_roots = ["seasonalweather/broadcast/segment_service.py"]
 segment_service_forbidden_imports = [
   "seasonalweather.database",

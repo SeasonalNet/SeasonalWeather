@@ -18,7 +18,6 @@ from urllib.parse import urlsplit, urlunsplit
 if TYPE_CHECKING:
     from .cycle import CycleContext, CycleSegment
 
-_MAX_TEXT = 12_000
 _MAX_FIELD = 256
 _HASH_RE = re.compile(r"^[a-f0-9]{64}$")
 _URL_RE = re.compile(r"(?i)\bhttps?://[^\s<>]+")
@@ -213,10 +212,10 @@ class SegmentCandidate:
     def __post_init__(self) -> None:
         if not self.key.strip() or not self.title.strip():
             raise ValueError("segment candidate identity must be non-empty")
-        bounded_text = self.text.strip()[:_MAX_TEXT]
-        if not bounded_text:
+        normalized_text = self.text.strip()
+        if not normalized_text:
             raise ValueError("segment candidate text must be non-empty")
-        object.__setattr__(self, "text", bounded_text)
+        object.__setattr__(self, "text", normalized_text)
 
     @classmethod
     def from_cycle_segment(

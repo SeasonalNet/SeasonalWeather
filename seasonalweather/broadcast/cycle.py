@@ -455,6 +455,13 @@ def _scrub_nws_product_text(text: str) -> str:
     return "\n".join(cleaned).strip()
 
 
+def _last_complete_sentence(text: str) -> str:
+    end = 0
+    for match in re.finditer(r"[.!?](?=\s|$)", text):
+        end = match.end()
+    return text[:end].rstrip() if end else ""
+
+
 def _trim_chars(text: str, max_chars: Optional[int]) -> str:
     s = (text or "").strip()
     if not s:
@@ -464,9 +471,13 @@ def _trim_chars(text: str, max_chars: Optional[int]) -> str:
     if len(s) <= max_chars:
         return s
 
-    cut = s[:max_chars].rsplit(" ", 1)[0].rstrip()
+    bounded = s[:max_chars]
+    sentence_cut = _last_complete_sentence(bounded)
+    if sentence_cut and len(sentence_cut) >= int(max_chars * 0.6):
+        return sentence_cut + "…"
+    cut = bounded.rsplit(" ", 1)[0].rstrip()
     if len(cut) < int(max_chars * 0.6):
-        cut = s[:max_chars].rstrip()
+        cut = bounded.rstrip()
 
     return cut + "…"
 
