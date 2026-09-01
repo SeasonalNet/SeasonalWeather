@@ -13,7 +13,7 @@ LOCK="${ENGINE_DIR}/.voicetext_paul.flock"
 PREFIX_BASE="${VOICETEXT_PAUL_PREFIX_BASE:-${STATE_BASE}/wineprefixes}"
 PREFIX_NAME="${VOICETEXT_PAUL_PREFIX_NAME:-voicetext_paul_voicetext}"
 PREFIX="${VOICETEXT_PAUL_WINEPREFIX:-${PREFIX_BASE}/${PREFIX_NAME}}"
-TMPD="${VOICETEXT_PAUL_TMPDIR:-${STATE_BASE}/tmp}"
+TMPD="${VOICETEXT_PAUL_TMPDIR:-/tmp/voicetext}"
 
 export WINEPREFIX="${PREFIX}"
 # Keep this default aligned with voicetext_paul_synth.

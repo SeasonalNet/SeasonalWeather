@@ -1,7 +1,7 @@
 version = 3
 status = "active"
 owner = "SeasonalWeather maintainers"
-rationale = "P2-02 and P2-03 define separate controller and worker image ownership with negative dependency and package-boundary checks; the controller additionally owns native SAME tooling."
+rationale = "P2-02 and P2-03 define separate controller and worker image ownership with negative dependency and package-boundary checks; the controller additionally owns native SAME tooling and its shared ffmpeg media decoder."
 scope = "P2-02 controller image and P2-03 worker image profiles, including controller-owned native SAME tooling; deployment hardening remains deferred to later packets."
 review_date = "2026-10-23"
 removal_condition = "Replace these rules only when the controller image ownership or profile boundary is deliberately revised."
@@ -22,6 +22,7 @@ required_dockerfile_tokens = [
   "COPY pyproject.toml uv.lock README.md ./",
   "uv sync --frozen --no-dev --group controller",
   "seasonalweather diagnostics export --output /usr/share/seasonalweather/diagnostics",
+  "apt-get install --yes --no-install-recommends ffmpeg",
   "COPY --from=same-tools /out/usr/local/bin/samegen /usr/local/bin/samegen",
   "COPY --from=same-tools /out/usr/local/bin/samedec /usr/local/bin/samedec",
   "/usr/share/seasonalweather/build-info.json",
@@ -34,7 +35,6 @@ required_dockerfile_tokens = [
 ]
 forbidden_dockerfile_tokens = [
   "piper-tts",
-  "ffmpeg",
   "sox",
   "espeak",
   "legacy-tts",
@@ -50,7 +50,6 @@ required_controller_packages = [
 ]
 forbidden_controller_packages = [
   "piper-tts",
-  "ffmpeg",
   "samedec",
   "samegen",
   "espeak",
@@ -59,7 +58,7 @@ required_context_ignore_tokens = [".git", ".venv", "*.env"]
 controller_tts_prune_paths = ["tts/local.py", "tts/voicetext_paul_vtml.py"]
 
 worker_definition = "Dockerfile.worker"
-worker_profiles = ["routine-worker", "piper", "legacy-tts", "voicetext-paul", "spfy", "maintenance", "development"]
+worker_profiles = ["routine-worker", "piper", "espeak", "festival", "dectalk", "legacy-tts", "voicetext-paul", "spfy", "maintenance", "development"]
 worker_requirements = ["pyproject.toml"]
 worker_dependency_groups = ["worker-runtime", "piper"]
 required_worker_dockerfile_tokens = [

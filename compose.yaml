@@ -132,6 +132,63 @@ services:
       start_period: 30s
       retries: 3
 
+  espeak-worker:
+    profiles:
+      - espeak
+    image: ${SEASONALWEATHER_ESPEAK_WORKER_IMAGE:-seasonalweather-worker:espeak}
+    <<: *seasonal-security
+    user: "10001:10001"
+    entrypoint:
+      - python
+      - -m
+      - seasonalweather
+      - worker
+    command:
+      - --controller-url
+      - ws://controller:9080/v1/workers/connect
+      - --profile
+      - espeak
+      - --worker-id
+      - ${SEASONALWEATHER_ESPEAK_WORKER_ID:-espeak-worker}
+    environment:
+      SEASONALWEATHER_CONTROLLER_URL: ws://controller:9080/v1/workers/connect
+      SEASONALWEATHER_WORKER_ID: ${SEASONALWEATHER_ESPEAK_WORKER_ID:-espeak-worker}
+      SEASONALWEATHER_WORKER_PROFILE: espeak
+      SEASONALWEATHER_WORKER_HEALTH_FILE: /tmp/seasonalweather-espeak-worker-health.json
+    volumes:
+      - type: volume
+        source: seasonalweather-artifacts
+        target: /var/lib/seasonalweather/artifacts
+        read_only: true
+      - type: volume
+        source: seasonalweather-artifact-staging
+        target: /var/lib/seasonalweather/artifacts/worker-artifacts/staging
+        volume:
+          nocopy: true
+    secrets:
+      - source: SEASONAL_WORKER_TOKEN
+        target: SEASONAL_WORKER_TOKEN
+        uid: "10001"
+        gid: "10001"
+        mode: "0400"
+    depends_on:
+      controller:
+        condition: service_started
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -m
+        - seasonalweather
+        - health
+        - worker
+        - --mode
+        - liveness
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
   piper-worker:
     profiles:
       - piper
@@ -155,6 +212,125 @@ services:
       SEASONALWEATHER_WORKER_ID: ${SEASONALWEATHER_PIPER_WORKER_ID:-piper-worker}
       SEASONALWEATHER_WORKER_PROFILE: piper
       SEASONALWEATHER_WORKER_HEALTH_FILE: /tmp/seasonalweather-piper-worker-health.json
+      PIPER_MODEL_DIR: /opt/piper/models
+    volumes:
+      - type: volume
+        source: seasonalweather-artifacts
+        target: /var/lib/seasonalweather/artifacts
+        read_only: true
+      - type: volume
+        source: seasonalweather-artifact-staging
+        target: /var/lib/seasonalweather/artifacts/worker-artifacts/staging
+        volume:
+          nocopy: true
+      - type: bind
+        source: ${SEASONALWEATHER_PIPER_MODEL_DIR:-/var/lib/seasonalweather/piper-models}
+        target: /opt/piper/models
+        read_only: true
+    secrets:
+      - source: SEASONAL_WORKER_TOKEN
+        target: SEASONAL_WORKER_TOKEN
+        uid: "10001"
+        gid: "10001"
+        mode: "0400"
+    depends_on:
+      controller:
+        condition: service_started
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -m
+        - seasonalweather
+        - health
+        - worker
+        - --mode
+        - liveness
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  festival-worker:
+    profiles:
+      - festival
+    image: ${SEASONALWEATHER_FESTIVAL_WORKER_IMAGE:-seasonalweather-worker:festival}
+    <<: *seasonal-security
+    user: "10001:10001"
+    entrypoint:
+      - python
+      - -m
+      - seasonalweather
+      - worker
+    command:
+      - --controller-url
+      - ws://controller:9080/v1/workers/connect
+      - --profile
+      - festival
+      - --worker-id
+      - ${SEASONALWEATHER_FESTIVAL_WORKER_ID:-festival-worker}
+    environment:
+      SEASONALWEATHER_CONTROLLER_URL: ws://controller:9080/v1/workers/connect
+      SEASONALWEATHER_WORKER_ID: ${SEASONALWEATHER_FESTIVAL_WORKER_ID:-festival-worker}
+      SEASONALWEATHER_WORKER_PROFILE: festival
+      SEASONALWEATHER_WORKER_HEALTH_FILE: /tmp/seasonalweather-festival-worker-health.json
+    volumes:
+      - type: volume
+        source: seasonalweather-artifacts
+        target: /var/lib/seasonalweather/artifacts
+        read_only: true
+      - type: volume
+        source: seasonalweather-artifact-staging
+        target: /var/lib/seasonalweather/artifacts/worker-artifacts/staging
+        volume:
+          nocopy: true
+    secrets:
+      - source: SEASONAL_WORKER_TOKEN
+        target: SEASONAL_WORKER_TOKEN
+        uid: "10001"
+        gid: "10001"
+        mode: "0400"
+    depends_on:
+      controller:
+        condition: service_started
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -m
+        - seasonalweather
+        - health
+        - worker
+        - --mode
+        - liveness
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  dectalk-worker:
+    profiles:
+      - dectalk
+    image: ${SEASONALWEATHER_DECTALK_WORKER_IMAGE:-seasonalweather-worker:dectalk}
+    <<: *seasonal-security
+    user: "10001:10001"
+    entrypoint:
+      - python
+      - -m
+      - seasonalweather
+      - worker
+    command:
+      - --controller-url
+      - ws://controller:9080/v1/workers/connect
+      - --profile
+      - dectalk
+      - --worker-id
+      - ${SEASONALWEATHER_DECTALK_WORKER_ID:-dectalk-worker}
+    environment:
+      SEASONALWEATHER_CONTROLLER_URL: ws://controller:9080/v1/workers/connect
+      SEASONALWEATHER_WORKER_ID: ${SEASONALWEATHER_DECTALK_WORKER_ID:-dectalk-worker}
+      SEASONALWEATHER_WORKER_PROFILE: dectalk
+      SEASONALWEATHER_WORKER_HEALTH_FILE: /tmp/seasonalweather-dectalk-worker-health.json
     volumes:
       - type: volume
         source: seasonalweather-artifacts
@@ -268,6 +444,7 @@ services:
       SEASONALWEATHER_WORKER_HEALTH_FILE: /tmp/seasonalweather-voicetext-paul-worker-health.json
       DISPLAY: :99
       VOICETEXT_PAUL_TMPDIR: /tmp/voicetext
+      VOICETEXT_PAUL_LOCK_PATH: /tmp/voicetext/voicetext.lock
     volumes:
       - type: volume
         source: seasonalweather-artifacts

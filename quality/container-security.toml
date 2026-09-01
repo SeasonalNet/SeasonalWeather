@@ -6,7 +6,7 @@ scope = "Controller and worker image profiles; Compose topology and lifecycle re
 review_date = "2026-10-23"
 removal_condition = "Replace this contract only when the image profiles or their deployment security authority are deliberately revised."
 
-profiles = ["controller", "routine-worker", "piper", "legacy-tts", "voicetext-paul", "spfy", "maintenance", "development"]
+profiles = ["controller", "routine-worker", "piper", "espeak", "festival", "dectalk", "legacy-tts", "voicetext-paul", "spfy", "maintenance", "development"]
 service_user = "seasonalweather"
 service_uid = 10001
 service_gid = 10001

@@ -6,6 +6,7 @@ import os
 import stat
 from collections import deque
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 from seasonalweather.jobs.policies import ExecutorClass, JobType, QueueClass
@@ -32,6 +33,25 @@ from seasonalweather.worker.profiles import (
 from seasonalweather.worker.runtime import WorkerRuntime
 
 
+def test_worker_synthesis_descriptor_does_not_export_controller_state_path() -> None:
+    from seasonalweather.jobs.worker_client import WorkerSynthesisConfiguration
+
+    configuration = SimpleNamespace(
+        tts=SimpleNamespace(
+            local=SimpleNamespace(engine="piper"),
+            voice="en_US-lessac-medium",
+            rate_wpm=165,
+            volume=1.0,
+            text_overrides=(),
+            voicetext_paul=None,
+        ),
+        audio=SimpleNamespace(sample_rate=48_000),
+        paths=SimpleNamespace(operational_state_dir="/controller-only/state"),
+    )
+
+    assert WorkerSynthesisConfiguration.from_configuration(configuration).data_base == ""
+
+
 def test_profile_manifest_fails_closed_when_dependencies_are_unavailable() -> None:
     manifest = capability_manifest(WorkerProfile.PIPER, dependency_probe=lambda _: False)
 
@@ -40,6 +60,19 @@ def test_profile_manifest_fails_closed_when_dependencies_are_unavailable() -> No
     assert tts.accepting_new_jobs is False
     assert tts.reported_available == 0
     assert tts.operational_state.value == "unavailable"
+
+
+def test_piper_dependency_probe_requires_a_paired_model(monkeypatch, tmp_path: Path) -> None:
+    from seasonalweather.worker import profiles
+
+    monkeypatch.setattr(profiles.shutil, "which", lambda _: "/fake/executable")
+    monkeypatch.setenv("PIPER_MODEL_DIR", str(tmp_path))
+    assert profiles._dependency_available(profiles.profile_spec(WorkerProfile.PIPER)) is False
+
+    model = tmp_path / "en_US-lessac-medium.onnx"
+    model.write_bytes(b"model")
+    (tmp_path / "en_US-lessac-medium.onnx.json").write_text("{}", encoding="utf-8")
+    assert profiles._dependency_available(profiles.profile_spec(WorkerProfile.PIPER)) is True
 
 
 def test_reference_handlers_do_not_publish_executable_capabilities() -> None:

@@ -25,7 +25,7 @@ BIN="${VOICETEXT_PAUL_BIN_DIR:-${ENGINE_ROOT}/binary}"
 PREFIX_BASE="${VOICETEXT_PAUL_PREFIX_BASE:-${STATE_BASE}/wineprefixes}"
 PREFIX_NAME="${VOICETEXT_PAUL_PREFIX_NAME:-voicetext_paul_voicetext}"
 PREFIX="${VOICETEXT_PAUL_WINEPREFIX:-${PREFIX_BASE}/${PREFIX_NAME}}"
-TMPD="${VOICETEXT_PAUL_TMPDIR:-${STATE_BASE}/tmp}"
+TMPD="${VOICETEXT_PAUL_TMPDIR:-/tmp/voicetext}"
 
 export WINEPREFIX="${PREFIX}"
 # VoiceText Paul is a 32-bit Windows runtime. Default to a pure 32-bit prefix so

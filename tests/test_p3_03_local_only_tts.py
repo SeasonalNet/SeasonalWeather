@@ -55,12 +55,24 @@ def test_local_tts_profiles_are_explicit_and_remote_backends_are_absent() -> Non
     compose = _compose()
     services = _mapping(compose["services"])
 
+    assert _strings(_service(compose, "espeak-worker")["profiles"]) == ["espeak"]
     assert _strings(_service(compose, "piper-worker")["profiles"]) == ["piper"]
+    assert _strings(_service(compose, "festival-worker")["profiles"]) == ["festival"]
+    assert _strings(_service(compose, "dectalk-worker")["profiles"]) == ["dectalk"]
     assert _strings(_service(compose, "legacy-tts-worker")["profiles"]) == ["legacy-tts"]
     assert _strings(_service(compose, "voicetext-paul-worker")["profiles"]) == ["voicetext-paul"]
     assert _strings(_service(compose, "spfy-worker")["profiles"]) == ["spfy"]
+    assert _service(compose, "espeak-worker")["image"] == (
+        "${SEASONALWEATHER_ESPEAK_WORKER_IMAGE:-seasonalweather-worker:espeak}"
+    )
     assert _service(compose, "piper-worker")["image"] == (
         "${SEASONALWEATHER_PIPER_WORKER_IMAGE:-seasonalweather-worker:piper}"
+    )
+    assert _service(compose, "festival-worker")["image"] == (
+        "${SEASONALWEATHER_FESTIVAL_WORKER_IMAGE:-seasonalweather-worker:festival}"
+    )
+    assert _service(compose, "dectalk-worker")["image"] == (
+        "${SEASONALWEATHER_DECTALK_WORKER_IMAGE:-seasonalweather-worker:dectalk}"
     )
     assert _service(compose, "legacy-tts-worker")["image"] == (
         "${SEASONALWEATHER_LEGACY_TTS_WORKER_IMAGE:-seasonalweather-worker:legacy-tts}"
@@ -76,7 +88,10 @@ def test_local_tts_profiles_are_explicit_and_remote_backends_are_absent() -> Non
 
 def test_local_tts_profiles_use_the_worker_boundary_and_shared_staging() -> None:
     for name, profile in (
+        ("espeak-worker", "espeak"),
         ("piper-worker", "piper"),
+        ("festival-worker", "festival"),
+        ("dectalk-worker", "dectalk"),
         ("legacy-tts-worker", "legacy-tts"),
         ("voicetext-paul-worker", "voicetext-paul"),
         ("spfy-worker", "spfy"),
@@ -123,6 +138,7 @@ def test_specialized_workers_mount_only_engine_runtime_state() -> None:
 
     assert voicetext_environment["DISPLAY"] == ":99"
     assert voicetext_environment["VOICETEXT_PAUL_TMPDIR"] == "/tmp/voicetext"
+    assert voicetext_environment["VOICETEXT_PAUL_LOCK_PATH"] == "/tmp/voicetext/voicetext.lock"
     voicetext_mounts = _mounts(voicetext)
     assert voicetext_mounts["/var/lib/seasonalweather/voices/voicetext_paul"]["source"] == (
         "seasonalweather-voicetext-paul-voices"
@@ -133,11 +149,21 @@ def test_specialized_workers_mount_only_engine_runtime_state() -> None:
     assert spfy_environment["SPFY_VOICE_DIR"] == "/opt/spfy"
     assert spfy_environment["SPFY_NO_UPDATE_CHECK"] == "1"
 
+    piper_environment = _mapping(_service(compose, "piper-worker")["environment"])
+    assert piper_environment["PIPER_MODEL_DIR"] == "/opt/piper/models"
+    piper_mounts = _mounts(_service(compose, "piper-worker"))
+    assert piper_mounts["/opt/piper/models"]["source"] == (
+        "${SEASONALWEATHER_PIPER_MODEL_DIR:-/var/lib/seasonalweather/piper-models}"
+    )
+
 
 def test_local_profiles_advertise_only_local_tts_and_alert_work() -> None:
     for profile in (
         WorkerProfile.ROUTINE,
+        WorkerProfile.ESPEAK,
         WorkerProfile.PIPER,
+        WorkerProfile.FESTIVAL,
+        WorkerProfile.DECTALK,
         WorkerProfile.LEGACY_TTS,
         WorkerProfile.VOICETEXT_PAUL,
         WorkerProfile.SPFY,

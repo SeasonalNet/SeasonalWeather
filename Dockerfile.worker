@@ -28,6 +28,8 @@ ARG SW_DIAGNOSTIC_SCHEMA_VERSION
 ARG SW_DIAGNOSTIC_CATALOG_VERSION
 ARG SW_CAPABILITY_MANIFEST_VERSION
 ARG TARGETARCH
+ARG DECTALK_SOURCE_URL="https://github.com/dectalk/dectalk/archive/refs/tags/2023-10-30.tar.gz"
+ARG DECTALK_SOURCE_SHA256="511c845e453917eea3a353cdbe8e0401360d8992dcfadfe2e9b4b83fde168f7e"
 ARG VOICETEXT_ARCHIVE_URL="https://cdn.dondaplayer.com/WeatherRadioSuite-LIB.zip"
 ARG VOICETEXT_ARCHIVE_SHA256="441ac30ea4bf899f81896f374b330860c5e9022601ca2b3e3c8cbf89e33fa8f5"
 ARG SPEECHIFY_RELEASE_URL="https://github.com/wagwan-piffting-blud/Speechify/releases/download/2026.08.23/spfy-linux-x86_64-2026.08.23.tar.gz"
@@ -36,7 +38,7 @@ ARG SPEECHIFY_COMMIT="7f28fb751a02b2981358d690f9df3651628c8151"
 ARG SPEECHIFY_RAW_BASE_URL="https://raw.githubusercontent.com/wagwan-piffting-blud/Speechify"
 
 RUN case "${SW_IMAGE_PROFILE}" in \
-        routine-worker|piper|legacy-tts|voicetext-paul|spfy|maintenance|development) ;; \
+        routine-worker|espeak|piper|festival|dectalk|legacy-tts|voicetext-paul|spfy|maintenance|development) ;; \
         *) echo "unsupported worker image profile: ${SW_IMAGE_PROFILE}" >&2; exit 1 ;; \
     esac
 
@@ -76,14 +78,31 @@ COPY --from=uv /uv /uvx /usr/local/bin/
 COPY pyproject.toml uv.lock README.md ./
 RUN case "${SW_IMAGE_PROFILE}" in \
         piper) uv sync --frozen --no-dev --group worker-runtime --group piper --no-install-project ;; \
-        routine-worker|legacy-tts|voicetext-paul|spfy|maintenance|development) uv sync --frozen --no-dev --group worker-runtime --no-install-project ;; \
+        routine-worker|espeak|festival|dectalk|legacy-tts|voicetext-paul|spfy|maintenance|development) uv sync --frozen --no-dev --group worker-runtime --no-install-project ;; \
         *) echo "unsupported worker image profile: ${SW_IMAGE_PROFILE}" >&2; exit 1 ;; \
     esac
 
 COPY docker/spfy/voice-manifest.txt /tmp/spfy-voice-manifest.txt
 RUN set -eux; \
-    mkdir -p /var/lib/seasonalweather/voices/voicetext_paul/WeatherRadioSuite-LIB /opt/spfy; \
+    mkdir -p /var/lib/seasonalweather/voices/voicetext_paul/WeatherRadioSuite-LIB /opt/spfy /opt/dectalk/dectalk/dist; \
     case "${SW_IMAGE_PROFILE}" in \
+      dectalk) \
+        apt-get update; \
+        apt-get install --yes --no-install-recommends autoconf automake build-essential ca-certificates curl git \
+          libasound2-dev libgtk2.0-dev libpulse-dev unzip; \
+        mkdir -p /tmp/dectalk-src; \
+        curl --fail --location --retry 5 --retry-all-errors \
+          --connect-timeout 30 --max-time 1800 \
+          --output /tmp/dectalk.tar.gz "${DECTALK_SOURCE_URL}"; \
+        echo "${DECTALK_SOURCE_SHA256}  /tmp/dectalk.tar.gz" | sha256sum --check --strict -; \
+        tar -xzf /tmp/dectalk.tar.gz -C /tmp/dectalk-src --strip-components=1; \
+        cd /tmp/dectalk-src/src; \
+        ./configure; make -j"$(nproc)"; \
+        test -x ../dist/say; \
+        cp -a ../dist/. /opt/dectalk/dectalk/dist/; \
+        rm -rf /tmp/dectalk.tar.gz /tmp/dectalk-src; \
+        apt-get purge --yes curl; \
+        rm -rf /var/lib/apt/lists/* ;; \
       voicetext-paul) \
         apt-get update; \
         apt-get install --yes --no-install-recommends ca-certificates curl unzip; \
@@ -146,7 +165,6 @@ package_root = Path(sysconfig.get_paths()["purelib"]) / "seasonalweather"
 for name in (
     "alerts",
     "api",
-    "artifacts",
     "broadcast",
     "commands",
     "configuration_reload",
@@ -214,13 +232,15 @@ FROM ${PYTHON_BASE} AS worker
 
 ARG SW_IMAGE_PROFILE
 ARG TARGETARCH
+ARG DECTALK_SOURCE_URL="https://github.com/dectalk/dectalk/archive/refs/tags/2023-10-30.tar.gz"
+ARG DECTALK_SOURCE_SHA256="511c845e453917eea3a353cdbe8e0401360d8992dcfadfe2e9b4b83fde168f7e"
 ARG VOICETEXT_ARCHIVE_URL="https://cdn.dondaplayer.com/WeatherRadioSuite-LIB.zip"
 ARG VOICETEXT_ARCHIVE_SHA256="441ac30ea4bf899f81896f374b330860c5e9022601ca2b3e3c8cbf89e33fa8f5"
 ARG SPEECHIFY_RELEASE_URL="https://github.com/wagwan-piffting-blud/Speechify/releases/download/2026.08.23/spfy-linux-x86_64-2026.08.23.tar.gz"
 ARG SPEECHIFY_RELEASE_SHA256="3e57df579281a6a0c0e7c1a6233a269617bba2e761b08047918069883f84ed49"
 ARG SPEECHIFY_COMMIT="7f28fb751a02b2981358d690f9df3651628c8151"
 RUN case "${SW_IMAGE_PROFILE}" in \
-        routine-worker|piper|legacy-tts|voicetext-paul|spfy|maintenance|development) ;; \
+        routine-worker|espeak|piper|festival|dectalk|legacy-tts|voicetext-paul|spfy|maintenance|development) ;; \
         *) exit 1 ;; \
     esac
 
@@ -234,6 +254,8 @@ LABEL io.seasonalweather.security.profile="worker" \
 
 LABEL io.seasonalweather.voicetext.archive-url="${VOICETEXT_ARCHIVE_URL}" \
       io.seasonalweather.voicetext.archive-sha256="${VOICETEXT_ARCHIVE_SHA256}" \
+      io.seasonalweather.dectalk.source-url="${DECTALK_SOURCE_URL}" \
+      io.seasonalweather.dectalk.source-sha256="${DECTALK_SOURCE_SHA256}" \
       io.seasonalweather.speechify.release-url="${SPEECHIFY_RELEASE_URL}" \
       io.seasonalweather.speechify.release-sha256="${SPEECHIFY_RELEASE_SHA256}" \
       io.seasonalweather.speechify.source-commit="${SPEECHIFY_COMMIT}"
@@ -244,20 +266,21 @@ ENV PATH="/opt/venv/bin:${PATH}" \
 
 RUN set -eux; \
     case "${SW_IMAGE_PROFILE}" in \
-      routine-worker) packages="ffmpeg espeak-ng" ;; \
-      legacy-tts) packages="festival" ;; \
+      routine-worker|espeak) packages="ffmpeg espeak-ng" ;; \
+      piper) packages="ffmpeg espeak-ng" ;; \
+      festival|legacy-tts) packages="ffmpeg festival festvox-kallpc16k" ;; \
+      dectalk) packages="ffmpeg libasound2 libpulse0" ;; \
       voicetext-paul) \
         case "${TARGETARCH:-amd64}" in amd64) ;; *) echo "VoiceText Paul worker supports only linux/amd64" >&2; exit 1 ;; esac; \
         dpkg --add-architecture i386; \
         apt-get update; \
-        apt-get install --yes --no-install-recommends bash ca-certificates sudo wine wine32:i386 x11-utils xvfb; \
+        apt-get install --yes --no-install-recommends bash ca-certificates ffmpeg wine wine32:i386 x11-utils xvfb; \
         rm -rf /var/lib/apt/lists/*; \
-        groupadd --system --gid 10002 voicetext; \
-        useradd --system --uid 10002 --gid 10002 --home-dir /home/voicetext --create-home --shell /usr/sbin/nologin voicetext; \
-        install -d -o voicetext -g voicetext /var/lib/seasonalweather/voices/voicetext_paul /var/lib/seasonalweather/wineprefixes /tmp/voicetext; \
-        chown -R voicetext:voicetext /var/lib/seasonalweather/voices/voicetext_paul /var/lib/seasonalweather/wineprefixes /tmp/voicetext ;; \
+        install -d /var/lib/seasonalweather/voices/voicetext_paul /var/lib/seasonalweather/wineprefixes /tmp/voicetext ;; \
       spfy) \
-        case "${TARGETARCH:-amd64}" in amd64) ;; *) echo "spfy worker supports only linux/amd64" >&2; exit 1 ;; esac ;; \
+        case "${TARGETARCH:-amd64}" in amd64) ;; *) echo "spfy worker supports only linux/amd64" >&2; exit 1 ;; esac; \
+        packages="ffmpeg" ;; \
+      development) packages="ffmpeg espeak-ng" ;; \
       *) packages="" ;; \
     esac; \
     if [ -n "${packages:-}" ]; then apt-get update && apt-get install --yes --no-install-recommends ${packages} && rm -rf /var/lib/apt/lists/*; fi
@@ -265,25 +288,27 @@ RUN set -eux; \
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /usr/share/seasonalweather /usr/share/seasonalweather
 COPY --from=builder /opt/spfy /opt/spfy
+COPY --from=builder /opt/dectalk /opt/dectalk
 COPY --from=builder /var/lib/seasonalweather/voices/voicetext_paul /var/lib/seasonalweather/voices/voicetext_paul
+COPY scripts/wrappers/dectalk-env scripts/wrappers/dectalk-text2wav /usr/local/bin/
 COPY scripts/wrappers/voicetext_paul_synth scripts/wrappers/voicetext_paul_wineserver_kill /usr/local/bin/
 COPY scripts/worker/voicetext-paul-entrypoint /usr/local/bin/voicetext-paul-entrypoint
 
 RUN groupadd --gid 10001 seasonalweather \
     && useradd --uid 10001 --gid 10001 --home-dir /nonexistent --no-create-home \
         --shell /usr/sbin/nologin seasonalweather \
-    && install -d -o 10001 -g 10001 /var/lib/seasonalweather/artifacts /var/lib/seasonalweather/artifacts/audio
+    && install -d -o 10001 -g 10001 /var/lib/seasonalweather/artifacts /var/lib/seasonalweather/artifacts/audio \
+    && install -d -o 10001 -g 10001 /opt/piper/models
 
 RUN case "${SW_IMAGE_PROFILE}" in \
+      dectalk) \
+        chmod 0755 /usr/local/bin/dectalk-env /usr/local/bin/dectalk-text2wav; \
+        test -x /opt/dectalk/dectalk/dist/say ;; \
       voicetext-paul) \
         chmod 0755 /usr/local/bin/voicetext_paul_synth /usr/local/bin/voicetext_paul_wineserver_kill /usr/local/bin/voicetext-paul-entrypoint; \
-        chown -R voicetext:voicetext /var/lib/seasonalweather/voices/voicetext_paul; \
-        printf '%s\n' \
-          'seasonalweather ALL=(voicetext) NOPASSWD: /usr/local/bin/voicetext_paul_synth' \
-          'seasonalweather ALL=(voicetext) NOPASSWD: /usr/local/bin/voicetext_paul_wineserver_kill' \
-          > /etc/sudoers.d/seasonalweather-voicetext-paul; \
-        chmod 0440 /etc/sudoers.d/seasonalweather-voicetext-paul ;; \
-      *) rm -f /usr/local/bin/voicetext_paul_synth /usr/local/bin/voicetext_paul_wineserver_kill /usr/local/bin/voicetext-paul-entrypoint ;; \
+        chown -R 10001:10001 /var/lib/seasonalweather/voices/voicetext_paul /var/lib/seasonalweather/wineprefixes /tmp/voicetext ;; \
+      *) rm -f /usr/local/bin/dectalk-env /usr/local/bin/dectalk-text2wav \
+        /usr/local/bin/voicetext_paul_synth /usr/local/bin/voicetext_paul_wineserver_kill /usr/local/bin/voicetext-paul-entrypoint ;; \
     esac
 
 WORKDIR /opt/seasonalweather

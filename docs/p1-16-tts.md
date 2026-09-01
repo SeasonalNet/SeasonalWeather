@@ -98,16 +98,18 @@ accepted `espeak` and `espeak_ng` aliases.
 Every handler builds its own argv; command construction is confined to the
 local TTS owner. Every availability check validates the handler executable and
 its required wrapper/resources. DECtalk checks both `dectalk-env` and the
-actual executable `say`. VoiceText checks sudo, wrapper, engine executable,
+actual executable `say`. VoiceText checks its wrapper and engine executable,
 and the reset utility when retry/reset behavior requires it.
 
 VoiceText Paul retains its process lock, `kill_before`, `reset_every`,
 wineserver reset after failed synthesis, bounded configured retry, retry sleep
-under the same absolute deadline, wrapper/sudo/resource checks, and VTML
+under the same absolute deadline, wrapper/resource checks, and VTML
 preparation. A primary `ProcessFailure` is re-raised when cleanup/reset also
 fails; bounded secondary reset evidence is attached to the primary error.
 Focused tests use fake executables/resources only and never invoke Wine.
-Piper preserves the accepted `-r <sample_rate_hz>` argv meaning. DECtalk keeps
+Piper resolves a configured voice ID to a paired `.onnx` model and `.onnx.json`
+sidecar in `PIPER_MODEL_DIR`; the current Piper CLI does not receive a
+sample-rate flag. DECtalk keeps
 numeric speaker normalization, the 75..600 rate clamp, and existing volume
 semantics. `TTS.synth_to_wav()` remains the compatibility "WAV or fail"
 operation: typed non-output dispositions raise a bounded exception that does

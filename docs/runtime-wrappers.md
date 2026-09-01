@@ -45,7 +45,8 @@ Relevant environment variables:
 
 Bootstrap installs these when `SEASONAL_VOICETEXT_PAUL=1` is set.
 
-The synth wrapper is invoked by SeasonalWeather via `sudo -n -u <run_as>` and is expected to:
+The synth wrapper is invoked directly by the owning SeasonalWeather process and
+is expected to:
 
 - read input text from stdin
 - write `output.wav` in the VoiceText Paul engine binary directory
@@ -68,6 +69,7 @@ Relevant environment variables:
 - `VOICETEXT_PAUL_PREFIX_NAME`
 - `VOICETEXT_PAUL_WINEPREFIX`
 - `VOICETEXT_PAUL_TMPDIR`
+- `VOICETEXT_PAUL_LOCK_PATH`
 - `VOICETEXT_PAUL_WINEDEBUG`
 - `VOICETEXT_PAUL_WINEESYNC`
 - `VOICETEXT_PAUL_WINEFSYNC`

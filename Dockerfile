@@ -168,6 +168,10 @@ ENV PATH="/opt/venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /usr/share/seasonalweather /usr/share/seasonalweather
 COPY --from=same-tools /out/usr/local/bin/samegen /usr/local/bin/samegen

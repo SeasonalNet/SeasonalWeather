@@ -74,4 +74,4 @@ elif grep -qiE '(^|[[:space:]])--rate([[:space:]]|$)' <<<"${HELP}"; then
   RATE_ARGS=(--rate "${RATE}")
 fi
 
-/usr/local/bin/dectalk-env "${SAY_BIN}" "${VOICE_ARGS[@]}" "${RATE_ARGS[@]}" "${OUTFLAG}" "${OUT}" "${TEXT}"
+/usr/local/bin/dectalk-env "${SAY_BIN}" "${VOICE_ARGS[@]}" "${RATE_ARGS[@]}" "${OUTFLAG}" "${OUT}" -a "${TEXT}"

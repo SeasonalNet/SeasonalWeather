@@ -56,7 +56,18 @@ def test_controller_dockerfile_removes_local_tts_implementation() -> None:
 def test_worker_dockerfile_owns_only_worker_profiles() -> None:
     dockerfile = (ROOT / "Dockerfile.worker").read_text(encoding="utf-8").lower()
 
-    for profile in ("routine-worker", "piper", "legacy-tts", "voicetext-paul", "spfy", "maintenance", "development"):
+    for profile in (
+        "routine-worker",
+        "piper",
+        "espeak",
+        "festival",
+        "dectalk",
+        "legacy-tts",
+        "voicetext-paul",
+        "spfy",
+        "maintenance",
+        "development",
+    ):
         assert profile in dockerfile
     assert 'entrypoint ["python", "-m", "seasonalweather", "worker"]' in dockerfile
     assert "expose" not in dockerfile
@@ -75,8 +86,19 @@ def test_specialized_worker_profiles_carry_their_runtime_engines() -> None:
     assert "wine32:i386" in dockerfile
     assert "xvfb" in dockerfile.lower()
     assert "docker/spfy/voice-manifest.txt" in dockerfile
+    assert "DECTALK_SOURCE_SHA256" in dockerfile
+    assert "/opt/dectalk/dectalk/dist/say" in dockerfile
+    assert "scripts/wrappers/dectalk-text2wav" in dockerfile
     assert "apt-get purge --yes curl tar" not in dockerfile
     assert "apt-get purge --yes curl;" in dockerfile
+
+
+def test_worker_image_retains_shared_artifact_runtime() -> None:
+    dockerfile = (ROOT / "Dockerfile.worker").read_text(encoding="utf-8")
+    prune_start = dockerfile.index("package_root =")
+    prune_end = dockerfile.index("RUN mkdir -p /usr/share/seasonalweather/diagnostics", prune_start)
+    assert '"artifacts"' not in dockerfile[prune_start:prune_end]
+    assert "from ..artifacts" in (ROOT / "seasonalweather/worker/handlers.py").read_text(encoding="utf-8")
 
 
 def test_worker_dependency_locks_exclude_controller_runtime() -> None:

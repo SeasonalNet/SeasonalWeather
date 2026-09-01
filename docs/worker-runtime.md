@@ -22,7 +22,10 @@ as the worker service's dedicated secret.
 | Profile | Queue | Advertised work |
 | --- | --- | --- |
 | `routine-worker` | `routine` | segment, standard TTS, audio conversion, cycle, and alert artifacts |
+| `espeak` | `routine` | espeak-ng TTS and alert artifacts |
 | `piper` | `routine` | Piper TTS and alert artifacts |
+| `festival` | `routine` | Festival TTS and alert artifacts |
+| `dectalk` | `routine` | DECtalk TTS and alert artifacts |
 | `legacy-tts` | `routine` | legacy local TTS and alert artifacts |
 | `voicetext-paul` | `routine` | VoiceText Paul TTS and alert artifacts |
 | `spfy` | `routine` | `spfy` TTS and alert artifacts |
