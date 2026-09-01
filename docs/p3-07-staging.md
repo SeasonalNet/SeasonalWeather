@@ -47,7 +47,8 @@ SEASONALWEATHER_STAGING_SECRET_DIR=/absolute/path/to/staging-secrets \
 ```
 
 Available operations are `config`, `up`, `down`, `restart`, `recreate`, `ps`,
-`logs`, `rollback`, and `soak`. Add `--profile piper`, `--profile legacy-tts`,
+`logs`, `rollback`, and `soak`. Add `--profile espeak`, `--profile piper`,
+`--profile festival`, `--profile dectalk`, `--profile legacy-tts`,
 `--profile voicetext-paul`, `--profile spfy`, or `--profile maintenance` to
 operate the corresponding optional worker; repeat `--profile` to select more
 than one. `down` never removes named volumes. `recreate` therefore exercises

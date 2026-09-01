@@ -108,7 +108,7 @@ def _tts_probes(tts: object) -> tuple[PreflightProbe, ...]:
         "festival": ("text2wave",),
         "piper": ("piper",),
         "dectalk": ("dectalk-env", "/opt/dectalk/dectalk/dist/say"),
-        "voicetext_paul": ("sudo",),
+        "voicetext_paul": ("voicetext_paul_synth",),
         "spfy": ("/opt/spfy/bin/spfy_synth",),
     }
     selected = commands.get(backend) if isinstance(backend, str) else None

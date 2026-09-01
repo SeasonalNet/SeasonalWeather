@@ -5,6 +5,8 @@ variable "SW_PROJECT" { default = "seasonalweather" }
 variable "SW_VERSION" { default = "0.18.0" }
 variable "RUST_IMAGE" { default = "rust:1.85-bookworm" }
 variable "SAMEDEC_VERSION" { default = "0.4.2" }
+variable "DECTALK_SOURCE_URL" { default = "https://github.com/dectalk/dectalk/archive/refs/tags/2023-10-30.tar.gz" }
+variable "DECTALK_SOURCE_SHA256" { default = "511c845e453917eea3a353cdbe8e0401360d8992dcfadfe2e9b4b83fde168f7e" }
 variable "SW_BUILD_ID" { default = "unbuilt" }
 variable "SW_BUILD_IDENTITY" { default = "seasonalweather-0.18.0" }
 variable "SW_GIT_COMMIT" { default = "unknown" }
@@ -35,6 +37,8 @@ target "common" {
   args = {
     RUST_IMAGE = RUST_IMAGE
     SAMEDEC_VERSION = SAMEDEC_VERSION
+    DECTALK_SOURCE_URL = DECTALK_SOURCE_URL
+    DECTALK_SOURCE_SHA256 = DECTALK_SOURCE_SHA256
     SW_PROJECT = SW_PROJECT
     SW_VERSION = SW_VERSION
     SW_BUILD_ID = SW_BUILD_ID
@@ -101,6 +105,30 @@ target "piper" {
   args = { SW_IMAGE_PROFILE = "piper" }
   labels = { "io.seasonalweather.build.profile" = "piper" }
   tags = ["seasonalweather-worker:piper"]
+}
+
+target "espeak" {
+  inherits = ["common"]
+  dockerfile = "Dockerfile.worker"
+  args = { SW_IMAGE_PROFILE = "espeak" }
+  labels = { "io.seasonalweather.build.profile" = "espeak" }
+  tags = ["seasonalweather-worker:espeak"]
+}
+
+target "festival" {
+  inherits = ["common"]
+  dockerfile = "Dockerfile.worker"
+  args = { SW_IMAGE_PROFILE = "festival" }
+  labels = { "io.seasonalweather.build.profile" = "festival" }
+  tags = ["seasonalweather-worker:festival"]
+}
+
+target "dectalk" {
+  inherits = ["common"]
+  dockerfile = "Dockerfile.worker"
+  args = { SW_IMAGE_PROFILE = "dectalk" }
+  labels = { "io.seasonalweather.build.profile" = "dectalk" }
+  tags = ["seasonalweather-worker:dectalk"]
 }
 
 target "legacy-tts" {

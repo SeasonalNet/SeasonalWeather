@@ -27,6 +27,9 @@ CONTROLLER_BUILD_PROFILES = frozenset({"controller", "source"})
 WORKER_BUILD_PROFILES = frozenset(
     {
         "development",
+        "dectalk",
+        "espeak",
+        "festival",
         "legacy-tts",
         "maintenance",
         "piper",

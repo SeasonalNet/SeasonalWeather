@@ -73,6 +73,9 @@ profiles are enabled explicitly:
 
 ```bash
 docker compose --profile piper up -d
+docker compose --profile espeak up -d
+docker compose --profile festival up -d
+docker compose --profile dectalk up -d
 docker compose --profile legacy-tts up -d
 docker compose --profile voicetext-paul up -d
 docker compose --profile spfy up -d

@@ -274,6 +274,13 @@ def test_local_handlers_construct_bounded_commands_with_fake_executables(
         say.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         say.chmod(0o700)
         monkeypatch.setattr(DecTalkHandler, "say_path", say)
+    model_dir: Path | None = None
+    if handler_type is PiperHandler:
+        model_dir = tmp_path / "piper-models"
+        model_dir.mkdir()
+        (model_dir / f"{voice}.onnx").write_bytes(b"fake-model")
+        (model_dir / f"{voice}.onnx.json").write_text("{}", encoding="utf-8")
+        monkeypatch.setenv("PIPER_MODEL_DIR", str(model_dir))
 
     commands: list[list[str]] = []
     handler = handler_type()
@@ -299,7 +306,8 @@ def test_local_handlers_construct_bounded_commands_with_fake_executables(
     if handler_type is EspeakHandler:
         assert commands[0][1:] == ["-v", voice, "-s", "165", "-w", str(result.output_path), "-f", "-"]
     elif handler_type is PiperHandler:
-        assert commands[0][1:] == ["-m", voice, "-f", str(result.output_path), "-r", "48000"]
+        assert model_dir is not None
+        assert commands[0][1:] == ["-m", str(model_dir / f"{voice}.onnx"), "-f", str(result.output_path)]
     elif handler_type is FestivalHandler:
         assert commands[0][1] == "-eval" and "Duration_Stretch" in commands[0][2]
     else:

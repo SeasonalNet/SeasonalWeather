@@ -169,13 +169,29 @@ class PiperHandler(_SubprocessHandler):
     ) -> LocalHandlerResult:
         output = output_dir / "engine.wav"
         executable = resolve_trusted_executable("piper")
+        model = _piper_model_path(options.voice)
         self._run(
-            [executable, "-m", options.voice, "-f", str(output), "-r", str(options.sample_rate_hz)],
+            [executable, "-m", str(model), "-f", str(output)],
             input_bytes=(text + "\n").encode("utf-8"),
             deadline=deadline,
             cancellation=cancellation,
         )
         return LocalHandlerResult(output, self.engine_id)
+
+
+def _piper_model_path(voice: str) -> Path | str:
+    """Resolve a Piper voice ID against the deployment's model directory."""
+
+    model_dir = os.getenv("PIPER_MODEL_DIR", "").strip()
+    if not model_dir:
+        return voice
+    if not voice or Path(voice).name != voice or voice in {".", ".."}:
+        raise ProcessFailure("invalid_input", "Piper voice must be a model filename")
+    filename = voice if voice.endswith(".onnx") else f"{voice}.onnx"
+    model = Path(model_dir) / filename
+    if not model.is_file() or not model.with_name(f"{model.name}.json").is_file():
+        raise ProcessFailure("executable_unavailable", "Piper voice model or sidecar is unavailable")
+    return model
 
 
 class FestivalHandler(_SubprocessHandler):
@@ -362,14 +378,14 @@ def _synthesize_voicetext_paul(
     wrapper = handler.wrapper_path
     if not exe.is_file() or not wrapper.is_file():
         raise ProcessFailure("executable_unavailable", "VoiceText Paul engine is unavailable")
-    sudo = resolve_trusted_executable("sudo")
     source = engine_dir / "output.wav"
     reset_tool = handler.reset_path
-    command = [sudo, "-n", "-u", vtp.run_as, str(wrapper)]
-    with _process_lock(state_base / ".voicetext_paul_tts.lock", deadline=deadline, cancellation=cancellation):
+    command = [str(wrapper)]
+    lock_path = Path(os.getenv("VOICETEXT_PAUL_LOCK_PATH", str(state_base / ".voicetext_paul_tts.lock")))
+    with _process_lock(lock_path, deadline=deadline, cancellation=cancellation):
         call_number = handler._invocations.next()
         if vtp.kill_before or (vtp.reset_every > 0 and call_number % vtp.reset_every == 0):
-            _reset_voicetext(sudo, vtp.run_as, reset_tool, engine_dir, deadline, cancellation)
+            _reset_voicetext(reset_tool, engine_dir, deadline, cancellation)
         return _run_voicetext_attempts(
             handler,
             prepared,
@@ -385,8 +401,6 @@ def _synthesize_voicetext_paul(
 
 
 def _reset_voicetext(
-    sudo: str,
-    run_as: str,
     reset_tool: Path,
     engine_dir: Path,
     deadline: float,
@@ -396,7 +410,7 @@ def _reset_voicetext(
         raise ProcessFailure("executable_unavailable", "VoiceText reset utility is unavailable")
     _fence(deadline, cancellation, "VoiceText wineserver reset")
     run_bounded(
-        [sudo, "-n", "-u", run_as, str(reset_tool)],
+        [str(reset_tool)],
         input_bytes=None,
         deadline=deadline,
         cancellation=cancellation,
@@ -439,7 +453,7 @@ def _run_voicetext_attempts(
             source.unlink(missing_ok=True)
             try:
                 if reset_tool.is_file():
-                    _reset_voicetext(command[0], vtp.run_as, reset_tool, engine_dir, deadline, cancellation)
+                    _reset_voicetext(reset_tool, engine_dir, deadline, cancellation)
                 elif attempt < vtp.retries:
                     raise ProcessFailure("executable_unavailable", "VoiceText reset utility is unavailable")
             except ProcessFailure as reset_error:
@@ -581,10 +595,21 @@ class LocalEngineRegistry:
             for resource in cls.required_resources(canonical)
         )
         specialized = {
+            "piper": cls._piper_resources_available,
             "voicetext_paul": cls._voicetext_resources_available,
             "spfy": cls._spfy_resources_available,
         }.get(canonical)
         return resources_ok if specialized is None else specialized(options, resources_ok)
+
+    @staticmethod
+    def _piper_resources_available(options: LocalEngineOptions, resources_ok: bool) -> bool:
+        if not resources_ok:
+            return False
+        try:
+            _piper_model_path(options.voice)
+        except ProcessFailure:
+            return False
+        return True
 
     @staticmethod
     def _spfy_resources_available(options: LocalEngineOptions, resources_ok: bool) -> bool:
@@ -628,7 +653,7 @@ class LocalEngineRegistry:
         if canonical == "dectalk":
             return ("dectalk-env", "/opt/dectalk/dectalk/dist/say")
         if canonical == "voicetext_paul":
-            return ("sudo", "voicetext_paul_synth")
+            return ("voicetext_paul_synth",)
         if canonical == "spfy":
             return ("/opt/spfy/bin/spfy_synth",)
         return {

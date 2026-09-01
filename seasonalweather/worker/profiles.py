@@ -14,6 +14,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 
 from ..build_metadata import current_build_info
 from ..capabilities.manifest import MANIFEST_SCHEMA_VERSION
@@ -32,7 +33,10 @@ from ..swwp.messages import (
 
 class WorkerProfile(StrEnum):
     ROUTINE = "routine-worker"
+    ESPEAK = "espeak"
     PIPER = "piper"
+    FESTIVAL = "festival"
+    DECTALK = "dectalk"
     LEGACY_TTS = "legacy-tts"
     VOICETEXT_PAUL = "voicetext-paul"
     SPFY = "spfy"
@@ -80,15 +84,39 @@ _PROFILES = {
         job_types=(JobType.TTS_SYNTHESIZE, JobType.ALERT_ARTIFACT_GENERATE),
         capabilities=("tts.synthesis.v1", "audio.alert_artifact.v1"),
         tts_profile="piper",
-        required_executables=("piper",),
+        required_executables=("piper", "ffmpeg"),
+    ),
+    WorkerProfile.ESPEAK: WorkerProfileSpec(
+        profile=WorkerProfile.ESPEAK,
+        queues=(QueueClass.ROUTINE,),
+        job_types=(JobType.TTS_SYNTHESIZE, JobType.ALERT_ARTIFACT_GENERATE),
+        capabilities=("tts.synthesis.v1", "audio.alert_artifact.v1"),
+        tts_profile="espeak-ng",
+        required_executables=("espeak-ng", "ffmpeg"),
+    ),
+    WorkerProfile.FESTIVAL: WorkerProfileSpec(
+        profile=WorkerProfile.FESTIVAL,
+        queues=(QueueClass.ROUTINE,),
+        job_types=(JobType.TTS_SYNTHESIZE, JobType.ALERT_ARTIFACT_GENERATE),
+        capabilities=("tts.synthesis.v1", "audio.alert_artifact.v1"),
+        tts_profile="festival",
+        required_executables=("text2wave", "ffmpeg"),
+    ),
+    WorkerProfile.DECTALK: WorkerProfileSpec(
+        profile=WorkerProfile.DECTALK,
+        queues=(QueueClass.ROUTINE,),
+        job_types=(JobType.TTS_SYNTHESIZE, JobType.ALERT_ARTIFACT_GENERATE),
+        capabilities=("tts.synthesis.v1", "audio.alert_artifact.v1"),
+        tts_profile="dectalk",
+        required_executables=("dectalk-env", "/opt/dectalk/dectalk/dist/say", "ffmpeg"),
     ),
     WorkerProfile.LEGACY_TTS: WorkerProfileSpec(
         profile=WorkerProfile.LEGACY_TTS,
         queues=(QueueClass.ROUTINE,),
         job_types=(JobType.TTS_SYNTHESIZE, JobType.ALERT_ARTIFACT_GENERATE),
         capabilities=("tts.synthesis.v1", "audio.alert_artifact.v1"),
-        tts_profile="legacy-tts",
-        required_executables=("text2wave",),
+        tts_profile="festival",
+        required_executables=("text2wave", "ffmpeg"),
     ),
     WorkerProfile.VOICETEXT_PAUL: WorkerProfileSpec(
         profile=WorkerProfile.VOICETEXT_PAUL,
@@ -96,7 +124,7 @@ _PROFILES = {
         job_types=(JobType.TTS_SYNTHESIZE, JobType.ALERT_ARTIFACT_GENERATE),
         capabilities=("tts.synthesis.v1", "audio.alert_artifact.v1"),
         tts_profile="voicetext-paul",
-        required_executables=("sudo", "voicetext_paul_synth"),
+        required_executables=("voicetext_paul_synth", "wine", "Xvfb", "ffmpeg"),
     ),
     WorkerProfile.SPFY: WorkerProfileSpec(
         profile=WorkerProfile.SPFY,
@@ -104,7 +132,7 @@ _PROFILES = {
         job_types=(JobType.TTS_SYNTHESIZE, JobType.ALERT_ARTIFACT_GENERATE),
         capabilities=("tts.synthesis.v1", "audio.alert_artifact.v1"),
         tts_profile="spfy",
-        required_executables=("/opt/spfy/bin/spfy_synth",),
+        required_executables=("/opt/spfy/bin/spfy_synth", "ffmpeg"),
     ),
     WorkerProfile.MAINTENANCE: WorkerProfileSpec(
         profile=WorkerProfile.MAINTENANCE,
@@ -135,7 +163,16 @@ def _id(prefix: str) -> str:
 
 
 def _dependency_available(spec: WorkerProfileSpec) -> bool:
-    return all(shutil.which(executable) for executable in spec.required_executables)
+    if not all(shutil.which(executable) for executable in spec.required_executables):
+        return False
+    if spec.profile is WorkerProfile.PIPER:
+        model_dir = os.environ.get("PIPER_MODEL_DIR", "").strip()
+        if model_dir:
+            root = Path(model_dir)
+            return root.is_dir() and any(
+                model.is_file() and model.with_name(f"{model.name}.json").is_file() for model in root.glob("*.onnx")
+            )
+    return True
 
 
 def _capability_parameters(name: str, spec: WorkerProfileSpec) -> dict[str, ParameterValue]:

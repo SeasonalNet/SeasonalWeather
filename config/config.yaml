@@ -562,7 +562,7 @@ tts:
     voice: "9"
     rate_wpm: 165
     voicetext_paul:
-      run_as: "voicetext"        # sudo target user for the synth binary
+      run_as: "voicetext"        # compatibility field; worker runs the wrapper as UID 10001
       retries: 1
       retry_sleep_ms: 150
       reset_every: 0             # reset process every N calls (0 = never)

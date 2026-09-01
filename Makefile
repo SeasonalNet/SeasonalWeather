@@ -100,7 +100,7 @@ image:
 
 images:
 	@set -e; \
-	for profile in controller routine-worker piper legacy-tts voicetext-paul spfy maintenance development; do \
+	for profile in controller routine-worker espeak piper festival dectalk legacy-tts voicetext-paul spfy maintenance development; do \
 		$(MAKE) BUILD_PROFILE="$$profile" build-info; \
 		$(PYTHON) -m tools.build_interface image --build-info "$(BUILD_INFO)" --target "$$profile"; \
 	done
@@ -133,7 +133,7 @@ release-images:
 	@set -eu; \
 	base="$${IMAGE_REPOSITORY_BASE%/}"; \
 	: > "$(IMAGE_REFERENCES_FILE)"; \
-	for profile in controller routine-worker piper legacy-tts voicetext-paul spfy maintenance development; do \
+	for profile in controller routine-worker espeak piper festival dectalk legacy-tts voicetext-paul spfy maintenance development; do \
 		$(MAKE) PYTHON="$(PYTHON)" BUILD_INFO="$(BUILD_INFO)" BUILD_PROFILE="$$profile" \
 			TARGET_PLATFORM="$(TARGET_PLATFORM)" SOURCE_DATE_EPOCH="$(SOURCE_DATE_EPOCH)" build-info; \
 		case "$$profile" in \

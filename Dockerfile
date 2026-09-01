@@ -173,6 +173,10 @@ COPY --from=builder /usr/share/seasonalweather /usr/share/seasonalweather
 COPY --from=same-tools /out/usr/local/bin/samegen /usr/local/bin/samegen
 COPY --from=same-tools /out/usr/local/bin/samedec /usr/local/bin/samedec
 
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd --gid 10001 seasonalweather \
     && useradd --uid 10001 --gid 10001 --home-dir /nonexistent --no-create-home \
         --shell /usr/sbin/nologin seasonalweather \

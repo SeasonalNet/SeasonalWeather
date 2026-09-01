@@ -23,8 +23,8 @@ declarative `docker-bake.hcl` matrix through the thin
 profile-specific build record before the target is built. P2-02 owns the
 non-root controller Dockerfile and its controller-only dependency group;
 P2-03 owns `Dockerfile.worker`, the worker dependency groups, the worker
-entrypoint, and the routine-worker, Piper, legacy-TTS, VoiceText Paul, spfy,
-maintenance, and development profiles. The controller Dockerfile rejects non-controller
+entrypoint, and the routine-worker, espeak, Piper, Festival, DECtalk,
+legacy-TTS, VoiceText Paul, spfy, maintenance, and development profiles. The controller Dockerfile rejects non-controller
 profiles, while worker definitions reject controller-only profiles and
 dependencies.
 `compose-check` validates the checked-in `compose.yaml` when Docker Compose is

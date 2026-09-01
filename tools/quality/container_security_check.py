@@ -47,7 +47,10 @@ def _check_contract(config: dict[str, Any]) -> list[str]:
     expected = {
         "controller",
         "routine-worker",
+        "espeak",
         "piper",
+        "festival",
+        "dectalk",
         "legacy-tts",
         "voicetext-paul",
         "spfy",

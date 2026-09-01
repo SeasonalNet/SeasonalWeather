@@ -87,7 +87,9 @@ class WorkerSynthesisConfiguration:
                 if vtp is not None
                 else None
             ),
-            data_base=str(getattr(configuration.paths, "operational_state_dir", "") or ""),
+            # The controller's state path is not mounted in workers. Local
+            # engines resolve their own image/volume-local runtime roots.
+            data_base="",
         )
 
 
