@@ -155,6 +155,33 @@ RUN rm -f /tmp/spfy-voice-manifest.txt
 COPY seasonalweather ./seasonalweather
 RUN uv pip install --python /opt/venv/bin/python --no-deps .
 
+# Every worker must be able to use the pinned SWWP WebSocket runtime before
+# controller-only modules are pruned from the installed package.
+RUN python -I - <<'PY'
+import asyncio
+
+from websockets.asyncio.client import connect
+from websockets.asyncio.server import serve
+
+
+async def echo(connection):
+    async for message in connection:
+        await connection.send(message)
+
+
+async def smoke() -> None:
+    async with serve(echo, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        async with connect(f"ws://127.0.0.1:{port}") as client:
+            await client.send("seasonalweather-worker-websocket-smoke")
+            reply = await asyncio.wait_for(client.recv(), timeout=5)
+            if reply != "seasonalweather-worker-websocket-smoke":
+                raise RuntimeError(f"unexpected WebSocket reply: {reply!r}")
+
+
+asyncio.run(smoke())
+PY
+
 # Worker images do not carry controller-only authorities or source adapters.
 RUN python -I - <<'PY'
 import shutil
