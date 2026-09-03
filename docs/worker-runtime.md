@@ -64,6 +64,23 @@ NWWS, or artifact-publication authorities. The default reference handlers fail
 closed when a deployment has not supplied its controller-owned input/artifact
 resolver; they never fabricate a successful result from an opaque reference.
 
+Worker image builds import the installed, pruned package in Python isolated
+mode and construct the local synthesis path before the image can succeed.
+The final non-root image checks its embedded build record against the exact
+worker profile, including the VoiceText Paul and Speechify profiles.
+Shared artifact and validation value types remain available, but importing
+them does not load controller persistence/publication services or remote TTS
+transports. Controller-only artifact, scheduler, SWWP-server, authentication,
+and runtime-diagnostic service modules are removed from worker images.
+
+Workers use the container's ephemeral `/tmp` for `HOME`, avoiding attempts by
+native libraries to create settings under the deliberately absent account
+home. VoiceText uses its own mode-0700 home beneath that tmpfs. The eSpeak
+handler feeds text through the packaged CLI's `--stdin` interface.
+The image also sets `PIPER_MODEL_DIR=/opt/piper/models`, so a directly launched
+Piper worker reports unavailable until its model/sidecar pair is mounted,
+just as it does under Compose.
+
 P2-08 owns the controller WebSocket endpoint, live controller/worker cutover,
 and removal of the controller's transitional embedded TTS executor. P3-06
 completes the local path: the controller writes only bounded opaque input

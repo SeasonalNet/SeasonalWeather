@@ -156,18 +156,24 @@ COPY seasonalweather ./seasonalweather
 RUN uv pip install --python /opt/venv/bin/python --no-deps .
 
 # Worker images do not carry controller-only authorities or source adapters.
-RUN python - <<'PY'
+RUN python -I - <<'PY'
 import shutil
 import sysconfig
 from pathlib import Path
 
 package_root = Path(sysconfig.get_paths()["purelib"]) / "seasonalweather"
 for name in (
+    "application",
     "alerts",
     "api",
+    "auth",
     "broadcast",
+    "cli",
     "commands",
     "configuration_reload",
+    "configuration/compiler.py",
+    "configuration/loader.py",
+    "configuration/inspection.py",
     "database",
     "job_store",
     "nwws",
@@ -176,15 +182,84 @@ for name in (
     "control.py",
     "discord_log.py",
     "health_service.py",
+    "health_state.py",
+    "job_admission.py",
     "lifecycle.py",
     "liquidsoap_telnet.py",
     "main.py",
+    "runtime_diagnostics",
+    "artifacts/audio_assets.py",
+    "artifacts/composition.py",
+    "artifacts/fencing.py",
+    "artifacts/integration.py",
+    "artifacts/promotion.py",
+    "artifacts/service.py",
+    "artifacts/staging.py",
+    "artifacts/transport.py",
+    "capabilities/service.py",
+    "capabilities/registry.py",
+    "capabilities/qualification.py",
+    "capabilities/probes.py",
+    "capabilities/hysteresis.py",
+    "jobs/worker_client.py",
+    "swwp/adapter.py",
+    "swwp/controller.py",
+    "tts/adapters/remote.py",
+    "tts/adapters/transport.py",
+    "tts/admission.py",
+    "tts/async_bridge.py",
+    "tts/remote_client.py",
 ):
     target = package_root / name
     if target.is_dir():
         shutil.rmtree(target)
     else:
         target.unlink(missing_ok=True)
+PY
+
+# Import the real worker startup and local-synthesis composition after pruning.
+# This catches eager imports of controller-only authorities at image-build time.
+RUN python -I - <<'PY'
+import os
+import sys
+
+from seasonalweather.tts.tts import TTS
+from seasonalweather.tts.local import LocalEngineRegistry
+from seasonalweather.tts.voicetext_paul_vtml import apply_voicetext_paul_vtml
+from seasonalweather.worker.cli import main as worker_main
+
+del worker_main
+profile = os.environ["SW_IMAGE_PROFILE"]
+if profile != "maintenance":
+    synthesis = TTS(
+        backend="local",
+        local_engine="espeak-ng",
+        voice="en",
+        rate_wpm=180,
+        volume=1.0,
+        sample_rate=48_000,
+    )
+    synthesis._service()
+    for engine in ("espeak-ng", "piper", "festival", "dectalk", "voicetext_paul", "spfy"):
+        LocalEngineRegistry.handler(engine)
+    apply_voicetext_paul_vtml("Worker packaging check.")
+
+forbidden = (
+    "seasonalweather.api",
+    "seasonalweather.artifacts.service",
+    "seasonalweather.capabilities.service",
+    "seasonalweather.capabilities.registry",
+    "seasonalweather.config",
+    "seasonalweather.database",
+    "seasonalweather.job_store",
+    "seasonalweather.swwp.adapter",
+    "seasonalweather.swwp.controller",
+    "seasonalweather.tts.adapters.remote",
+    "seasonalweather.tts.admission",
+)
+loaded = sorted(name for name in sys.modules if name in forbidden or name.startswith(tuple(f"{item}." for item in forbidden)))
+if loaded:
+    raise SystemExit(f"worker imported controller-only modules: {loaded}")
 PY
 
 RUN mkdir -p /usr/share/seasonalweather/diagnostics \
@@ -261,6 +336,7 @@ LABEL io.seasonalweather.voicetext.archive-url="${VOICETEXT_ARCHIVE_URL}" \
       io.seasonalweather.speechify.source-commit="${SPEECHIFY_COMMIT}"
 
 ENV PATH="/opt/venv/bin:${PATH}" \
+    HOME="/tmp" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
@@ -298,6 +374,7 @@ RUN groupadd --gid 10001 seasonalweather \
     && useradd --uid 10001 --gid 10001 --home-dir /nonexistent --no-create-home \
         --shell /usr/sbin/nologin seasonalweather \
     && install -d -o 10001 -g 10001 /var/lib/seasonalweather/artifacts /var/lib/seasonalweather/artifacts/audio \
+        /var/lib/seasonalweather/artifacts/worker-artifacts/staging \
     && install -d -o 10001 -g 10001 /opt/piper/models
 
 RUN case "${SW_IMAGE_PROFILE}" in \
@@ -312,7 +389,21 @@ RUN case "${SW_IMAGE_PROFILE}" in \
     esac
 
 WORKDIR /opt/seasonalweather
+ENV PIPER_MODEL_DIR="/opt/piper/models"
 USER seasonalweather
+
+RUN python -I -m seasonalweather worker --help >/dev/null
+RUN python -I - <<'PY'
+import os
+from seasonalweather.build_metadata import current_build_info
+from seasonalweather.build_metadata.compatibility import ensure_runtime_compatibility
+
+ensure_runtime_compatibility(
+    current_build_info(),
+    role="worker",
+    expected_profile=os.environ["SW_IMAGE_PROFILE"],
+)
+PY
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=3 \
     CMD ["python", "-m", "seasonalweather", "health", "worker", "--mode", "liveness"]

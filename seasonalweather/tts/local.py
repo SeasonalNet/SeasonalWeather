@@ -146,7 +146,7 @@ class EspeakHandler(_SubprocessHandler):
         output = output_dir / "engine.wav"
         executable = resolve_trusted_executable("espeak-ng")
         self._run(
-            [executable, "-v", options.voice, "-s", str(options.rate_wpm), "-w", str(output), "-f", "-"],
+            [executable, "-v", options.voice, "-s", str(options.rate_wpm), "-w", str(output), "--stdin"],
             input_bytes=(text + "\n").encode("utf-8"),
             deadline=deadline,
             cancellation=cancellation,

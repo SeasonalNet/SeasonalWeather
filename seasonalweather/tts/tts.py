@@ -176,21 +176,16 @@ class TTS:
         )
 
     def _service(self) -> SynthesisService:
-        from .adapters import (
-            OpenAICompatibleAdapter,
-            OpenAICompatibleConfig,
-            SeasonalTtsdAdapter,
-            SeasonalTtsdConfig,
-        )
         from .adapters.base import ProviderAdapter
-        from .admission import LocalQualification, LocalQualificationDisposition, transitional_local_qualification
-        from .models import BackendId, SynthesisRequest
+        from .models import BackendId, LocalQualification, LocalQualificationDisposition, SynthesisRequest
         from .service import SynthesisService
 
         def qualify(request: SynthesisRequest, capability: str) -> object:
             if self.capability_check is not None:
                 return self.capability_check(request, capability)
             if self.allow_transitional_qualification:
+                from .admission import transitional_local_qualification
+
                 return transitional_local_qualification(request, capability)
             return LocalQualification(
                 disposition=LocalQualificationDisposition.UNKNOWN,
@@ -208,16 +203,25 @@ class TTS:
                     setattr(qualify, name, operation)
 
         if self._synthesis_service is None:
-            providers = cast(
-                dict[BackendId, ProviderAdapter],
-                self._provider_adapters(
-                    BackendId,
+            providers: dict[BackendId, ProviderAdapter] = {}
+            if self.seasonal_ttsd_config is not None or self.openai_compatible_config is not None:
+                from .adapters import (
                     OpenAICompatibleAdapter,
                     OpenAICompatibleConfig,
                     SeasonalTtsdAdapter,
                     SeasonalTtsdConfig,
-                ),
-            )
+                )
+
+                providers = cast(
+                    dict[BackendId, ProviderAdapter],
+                    self._provider_adapters(
+                        BackendId,
+                        OpenAICompatibleAdapter,
+                        OpenAICompatibleConfig,
+                        SeasonalTtsdAdapter,
+                        SeasonalTtsdConfig,
+                    ),
+                )
             self._synthesis_service = SynthesisService(
                 activity_context=self.activity_context,
                 current_generation=self.current_generation,
