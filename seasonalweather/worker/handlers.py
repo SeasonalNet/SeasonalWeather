@@ -179,7 +179,7 @@ class LocalTtsHandler:
             text_overrides=list(descriptor.get("text_overrides") or ()),
             vtp_cfg=SimpleNamespace(**(vtp if isinstance(vtp, dict) else {})),
             tts_data_base=str(descriptor.get("data_base", "")),
-            allow_transitional_qualification=True,
+            capability_check=_assigned_local_capability,
         )
         try:
             tts.synth_to_wav(descriptor["text"], output_path, purpose="alert" if alert else "routine")
@@ -218,6 +218,24 @@ class LocalTtsHandler:
             provenance=f"local-worker:{descriptor.get('engine', 'unknown')}",
         )
         return result.model_dump(mode="json")
+
+
+def _assigned_local_capability(request: object, capability: str) -> object:
+    """Permit execution of this assigned local job, never controller admission."""
+    from ..tts.local import LocalEngineRegistry
+    from ..tts.models import BackendId, LocalQualification, LocalQualificationDisposition, SynthesisRequest
+
+    matches = (
+        isinstance(request, SynthesisRequest)
+        and request.backend is BackendId.LOCAL
+        and capability == LocalEngineRegistry.capability_for(request.local.engine)
+    )
+    return LocalQualification(
+        disposition=LocalQualificationDisposition.SATISFIED if matches else LocalQualificationDisposition.INCOMPATIBLE,
+        capability=capability,
+        evidence=("controller_assigned_worker_job",),
+        effective_capacity=1 if matches else 0,
+    )
 
 
 HandlerFactory = Callable[[JobType], WorkerHandler]

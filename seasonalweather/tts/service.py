@@ -26,7 +26,6 @@ from ..artifacts.models import MediaMetadata
 from ..diagnostics.bindings import FOUNDATION_CODES
 from .adapters.base import ProviderAdapter
 from .adapters.models import ProviderAudio
-from .admission import LocalQualification, LocalQualificationDisposition, validate_synthesis_request
 from .cancellation import deadline_expired, explicit_cancellation
 from .models import (
     AcceptedArtifactReference,
@@ -36,6 +35,8 @@ from .models import (
     FinalizationCallbackError,
     FinalizationContext,
     LastKnownGoodCandidate,
+    LocalQualification,
+    LocalQualificationDisposition,
     SynthesisDisposition,
     SynthesisFailure,
     SynthesisRequest,
@@ -43,6 +44,7 @@ from .models import (
 )
 from .policy import SynthesisPurposePolicy, policy_for
 from .preprocess import PREPROCESSING_VERSION, preprocess_text
+from .request_validation import validate_synthesis_request
 from .subprocess import ProcessFailure, resolve_trusted_executable, run_bounded
 
 if TYPE_CHECKING:

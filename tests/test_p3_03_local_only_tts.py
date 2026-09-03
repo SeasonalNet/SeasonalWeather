@@ -137,9 +137,15 @@ def test_specialized_workers_mount_only_engine_runtime_state() -> None:
     spfy_environment = _mapping(spfy["environment"])
 
     assert voicetext_environment["DISPLAY"] == ":99"
+    assert voicetext_environment["HOME"] == "/tmp/voicetext/home"
     assert voicetext_environment["VOICETEXT_PAUL_TMPDIR"] == "/tmp/voicetext"
     assert voicetext_environment["VOICETEXT_PAUL_LOCK_PATH"] == "/tmp/voicetext/voicetext.lock"
     voicetext_mounts = _mounts(voicetext)
+    assert _strings(voicetext["tmpfs"]) == [
+        "/tmp:rw,nosuid,nodev,noexec",
+        "/run:rw,nosuid,nodev,noexec",
+        "/tmp/.X11-unix:rw,nosuid,nodev,noexec,mode=1777,uid=0,gid=0",
+    ]
     assert voicetext_mounts["/var/lib/seasonalweather/voices/voicetext_paul"]["source"] == (
         "seasonalweather-voicetext-paul-voices"
     )

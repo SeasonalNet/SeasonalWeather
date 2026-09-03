@@ -40,6 +40,12 @@ No worker receives operational state, the job database, or controller logs.
 The service-level read-only image contract remains in force; the explicit
 staging mount is the only worker write exception.
 
+Both application images pre-create the staging mountpoint as UID/GID 10001.
+The staging volume uses normal Docker copy-up so a new empty volume inherits
+that ownership; `nocopy` would leave a fresh volume root-owned and unwritable
+by the non-root worker. Existing volumes retain their existing ownership and
+are not recursively changed during startup.
+
 ## Artifact flow
 
 The initial transport is `shared-volume`. A worker writes its completed file

@@ -304,7 +304,7 @@ def test_local_handlers_construct_bounded_commands_with_fake_executables(
     assert result.output_path.is_file()
     assert commands and commands[0][0] == str(executable)
     if handler_type is EspeakHandler:
-        assert commands[0][1:] == ["-v", voice, "-s", "165", "-w", str(result.output_path), "-f", "-"]
+        assert commands[0][1:] == ["-v", voice, "-s", "165", "-w", str(result.output_path), "--stdin"]
     elif handler_type is PiperHandler:
         assert model_dir is not None
         assert commands[0][1:] == ["-m", str(model_dir / f"{voice}.onnx"), "-f", str(result.output_path)]

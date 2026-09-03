@@ -182,6 +182,7 @@ RUN groupadd --gid 10001 seasonalweather \
         --shell /usr/sbin/nologin seasonalweather \
     && install -d -o 10001 -g 10001 /var/lib/seasonalweather/state /var/lib/seasonalweather/jobs \
         /var/lib/seasonalweather/artifacts /var/lib/seasonalweather/artifacts/audio \
+        /var/lib/seasonalweather/artifacts/worker-artifacts/staging \
         /var/lib/seasonalweather /var/log/seasonalweather /run/seasonalweather \
     && find /usr/share/seasonalweather -type d -exec chmod a+rx {} + \
     && find /usr/share/seasonalweather -type f -exec chmod a+r {} +

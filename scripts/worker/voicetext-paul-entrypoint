@@ -6,7 +6,13 @@ display_number="${display#:}"
 display_number="${display_number%%.*}"
 socket="/tmp/.X11-unix/X${display_number}"
 
-mkdir -p /tmp/.X11-unix /tmp/voicetext
+if [[ ! -d /tmp/.X11-unix ]] || [[ "$(stat -c %u:%a /tmp/.X11-unix)" != "0:1777" ]] || [[ ! -w /tmp/.X11-unix ]]; then
+  echo "/tmp/.X11-unix must be root-owned with mode 1777" >&2
+  exit 1
+fi
+export HOME=/tmp/voicetext/home
+mkdir -p /tmp/voicetext/home
+chmod 0700 /tmp/voicetext/home
 Xvfb "${display}" -screen 0 1024x768x24 -nolisten tcp -noreset -ac &
 xvfb_pid=$!
 

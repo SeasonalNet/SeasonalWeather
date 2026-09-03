@@ -24,6 +24,23 @@ MAX_OVERRIDE_LENGTH = 512
 _IDENTITY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/-]{2,127}$")
 
 
+class LocalQualificationDisposition(StrEnum):
+    SATISFIED = "satisfied"
+    DEGRADED = "degraded"
+    UNAVAILABLE = "unavailable"
+    INCOMPATIBLE = "incompatible"
+    UNKNOWN = "stale_or_unknown"
+    NO_CAPACITY = "no_capacity"
+
+
+@dataclass(frozen=True)
+class LocalQualification:
+    disposition: LocalQualificationDisposition
+    capability: str
+    evidence: tuple[str, ...] = ()
+    effective_capacity: int = 1
+
+
 class SynthesisPurpose(StrEnum):
     ALERT = "alert"
     ROUTINE = "routine"

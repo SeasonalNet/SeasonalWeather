@@ -35,6 +35,8 @@ WORKER_BUILD_PROFILES = frozenset(
         "piper",
         "routine-worker",
         "source",
+        "spfy",
+        "voicetext-paul",
     }
 )
 

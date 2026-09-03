@@ -81,3 +81,14 @@ def test_compose_declares_named_persistent_storage_for_required_data() -> None:
         "seasonalweather-artifact-staging",
         "seasonalweather-logs",
     }.issubset(volumes)
+
+
+def test_fresh_staging_volume_inherits_nonroot_image_directory_ownership() -> None:
+    for service in _compose()["services"].values():
+        staging = _mounts(service).get(STAGING_ROOT)
+        if staging is not None:
+            assert not staging.get("volume", {}).get("nocopy", False)
+    for filename in ("Dockerfile", "Dockerfile.worker"):
+        dockerfile = (ROOT / filename).read_text(encoding="utf-8")
+        directory_setup = dockerfile.split("install -d -o 10001 -g 10001", 1)[1]
+        assert STAGING_ROOT in directory_setup.split("\n\n", 1)[0]

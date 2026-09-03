@@ -40,8 +40,6 @@ services:
       - type: volume
         source: seasonalweather-artifact-staging
         target: /var/lib/seasonalweather/artifacts/worker-artifacts/staging
-        volume:
-          nocopy: true
       - seasonalweather-logs:/var/log/seasonalweather
     secrets:
       - source: ICECAST_SOURCE_PASSWORD
@@ -106,8 +104,6 @@ services:
       - type: volume
         source: seasonalweather-artifact-staging
         target: /var/lib/seasonalweather/artifacts/worker-artifacts/staging
-        volume:
-          nocopy: true
     secrets:
       - source: SEASONAL_WORKER_TOKEN
         target: SEASONAL_WORKER_TOKEN
@@ -163,8 +159,6 @@ services:
       - type: volume
         source: seasonalweather-artifact-staging
         target: /var/lib/seasonalweather/artifacts/worker-artifacts/staging
-        volume:
-          nocopy: true
     secrets:
       - source: SEASONAL_WORKER_TOKEN
         target: SEASONAL_WORKER_TOKEN
@@ -221,8 +215,6 @@ services:
       - type: volume
         source: seasonalweather-artifact-staging
         target: /var/lib/seasonalweather/artifacts/worker-artifacts/staging
-        volume:
-          nocopy: true
       - type: bind
         source: ${SEASONALWEATHER_PIPER_MODEL_DIR:-/var/lib/seasonalweather/piper-models}
         target: /opt/piper/models
@@ -282,8 +274,6 @@ services:
       - type: volume
         source: seasonalweather-artifact-staging
         target: /var/lib/seasonalweather/artifacts/worker-artifacts/staging
-        volume:
-          nocopy: true
     secrets:
       - source: SEASONAL_WORKER_TOKEN
         target: SEASONAL_WORKER_TOKEN
@@ -339,8 +329,6 @@ services:
       - type: volume
         source: seasonalweather-artifact-staging
         target: /var/lib/seasonalweather/artifacts/worker-artifacts/staging
-        volume:
-          nocopy: true
     secrets:
       - source: SEASONAL_WORKER_TOKEN
         target: SEASONAL_WORKER_TOKEN
@@ -396,8 +384,6 @@ services:
       - type: volume
         source: seasonalweather-artifact-staging
         target: /var/lib/seasonalweather/artifacts/worker-artifacts/staging
-        volume:
-          nocopy: true
     secrets:
       - source: SEASONAL_WORKER_TOKEN
         target: SEASONAL_WORKER_TOKEN
@@ -443,8 +429,13 @@ services:
       SEASONALWEATHER_WORKER_PROFILE: voicetext-paul
       SEASONALWEATHER_WORKER_HEALTH_FILE: /tmp/seasonalweather-voicetext-paul-worker-health.json
       DISPLAY: :99
+      HOME: /tmp/voicetext/home
       VOICETEXT_PAUL_TMPDIR: /tmp/voicetext
       VOICETEXT_PAUL_LOCK_PATH: /tmp/voicetext/voicetext.lock
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec
+      - /run:rw,nosuid,nodev,noexec
+      - /tmp/.X11-unix:rw,nosuid,nodev,noexec,mode=1777,uid=0,gid=0
     volumes:
       - type: volume
         source: seasonalweather-artifacts
@@ -453,8 +444,6 @@ services:
       - type: volume
         source: seasonalweather-artifact-staging
         target: /var/lib/seasonalweather/artifacts/worker-artifacts/staging
-        volume:
-          nocopy: true
       - type: volume
         source: seasonalweather-voicetext-paul-voices
         target: /var/lib/seasonalweather/voices/voicetext_paul
@@ -518,8 +507,6 @@ services:
       - type: volume
         source: seasonalweather-artifact-staging
         target: /var/lib/seasonalweather/artifacts/worker-artifacts/staging
-        volume:
-          nocopy: true
     secrets:
       - source: SEASONAL_WORKER_TOKEN
         target: SEASONAL_WORKER_TOKEN
@@ -575,8 +562,6 @@ services:
       - type: volume
         source: seasonalweather-artifact-staging
         target: /var/lib/seasonalweather/artifacts/worker-artifacts/staging
-        volume:
-          nocopy: true
     secrets:
       - source: SEASONAL_WORKER_TOKEN
         target: SEASONAL_WORKER_TOKEN
