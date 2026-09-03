@@ -173,6 +173,37 @@ COPY --from=builder /usr/share/seasonalweather /usr/share/seasonalweather
 COPY --from=same-tools /out/usr/local/bin/samegen /usr/local/bin/samegen
 COPY --from=same-tools /out/usr/local/bin/samedec /usr/local/bin/samedec
 
+# Exercise the controller's actual WebSocket runtime before the image can be
+# exported. Uvicorn's adapter and the pinned client/server package must both
+# work without an external network or controller process.
+RUN python -I - <<'PY'
+import asyncio
+
+from uvicorn.protocols.websockets.websockets_impl import WebSocketProtocol
+from websockets.asyncio.client import connect
+from websockets.asyncio.server import serve
+
+assert WebSocketProtocol
+
+
+async def echo(connection):
+    async for message in connection:
+        await connection.send(message)
+
+
+async def smoke() -> None:
+    async with serve(echo, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        async with connect(f"ws://127.0.0.1:{port}") as client:
+            await client.send("seasonalweather-controller-websocket-smoke")
+            reply = await asyncio.wait_for(client.recv(), timeout=5)
+            if reply != "seasonalweather-controller-websocket-smoke":
+                raise RuntimeError(f"unexpected WebSocket reply: {reply!r}")
+
+
+asyncio.run(smoke())
+PY
+
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*

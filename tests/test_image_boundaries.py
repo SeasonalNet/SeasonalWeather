@@ -135,3 +135,23 @@ def test_controller_diagnostic_export_contains_the_complete_catalog(tmp_path: Pa
     assert {path.name for path in (destination / "explanations").glob("*.md")} == {
         Path(item.explanation_path).name for item in catalog.definitions
     }
+
+
+def test_controller_and_worker_builds_smoke_test_websockets() -> None:
+    controller = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    worker = (ROOT / "Dockerfile.worker").read_text(encoding="utf-8")
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    controller_dependencies = project["dependency-groups"]["controller"]
+    worker_dependencies = project["dependency-groups"]["worker-runtime"]
+
+    assert "WebSocketProtocol" in controller
+    assert "from websockets.asyncio.client import connect" in controller
+    assert "from websockets.asyncio.server import serve" in controller
+    assert "controller-websocket-smoke" in controller
+    assert "from websockets.asyncio.client import connect" in worker
+    assert "from websockets.asyncio.server import serve" in worker
+    assert "worker-websocket-smoke" in worker
+    assert "asyncio.run(smoke())" in controller
+    assert "asyncio.run(smoke())" in worker
+    assert "uvicorn[standard]==0.51.0" in controller_dependencies
+    assert "websockets==15.0.1" in worker_dependencies

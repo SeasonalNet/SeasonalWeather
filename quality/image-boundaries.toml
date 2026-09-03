@@ -46,7 +46,7 @@ required_controller_packages = [
   "httpx2==",
   "slixmpp==",
   "SQLAlchemy==",
-  "uvicorn==",
+  "uvicorn",
 ]
 forbidden_controller_packages = [
   "piper-tts",
