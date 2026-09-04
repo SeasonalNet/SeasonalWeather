@@ -229,7 +229,7 @@ def test_spfy_handler_uses_native_wav_contract_and_bounded_environment(monkeypat
         "bounded spfy test",
         options=LocalEngineOptions(
             engine="spfy",
-            voice="spfy-tom",
+            voice="tom",
             spfy={"executable": str(executable), "voice_dir": str(voice_dir)},
         ),
         output_dir=output_dir,
@@ -241,7 +241,7 @@ def test_spfy_handler_uses_native_wav_contract_and_bounded_environment(monkeypat
     assert commands == [
         [
             str(executable),
-            "spfy-tom",
+            "tom",
             "--no-update-check",
             "--file",
             str(output_dir / "spfy-input.txt"),

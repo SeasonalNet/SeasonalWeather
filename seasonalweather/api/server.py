@@ -7,7 +7,7 @@ import inspect
 import logging
 import signal
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -211,9 +211,12 @@ def _install_loop_exception_handler(
     prior = loop.get_exception_handler()
 
     def handle(_loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+        failure_kind = _asyncio_failure_kind(context.get("message"))
+        task_owner = _asyncio_task_owner(context)
         exception = context.get("exception")
         if not isinstance(exception, BaseException):
-            exception = RuntimeError(str(context.get("message") or "unhandled event-loop failure")[:256])
+            exception = RuntimeError(_asyncio_failure_summary(failure_kind))
+        exception.add_note(f"asyncio_failure={failure_kind} task_owner={task_owner}")
         supervisor.report_background_failure(exception)
 
     loop.set_exception_handler(handle)
@@ -222,6 +225,87 @@ def _install_loop_exception_handler(
         loop.set_exception_handler(prior)
 
     return remove
+
+
+def _asyncio_failure_kind(message: object) -> str:
+    text = str(message or "")
+    if text == "Task was destroyed but it is pending!":
+        return "destroyed_pending_task"
+    if text == "Task exception was never retrieved":
+        return "unretrieved_task_exception"
+    if text == "Future exception was never retrieved":
+        return "unretrieved_future_exception"
+    if text.startswith("Exception in callback"):
+        return "callback_exception"
+    return "unhandled_event_loop_failure"
+
+
+def _asyncio_failure_summary(failure_kind: str) -> str:
+    summaries = {
+        "destroyed_pending_task": "Task was destroyed but it is pending!",
+        "unretrieved_task_exception": "Task exception was never retrieved",
+        "unretrieved_future_exception": "Future exception was never retrieved",
+        "callback_exception": "An asyncio callback failed",
+    }
+    return summaries.get(failure_kind, "unhandled event-loop failure")
+
+
+def _asyncio_task_owner(context: Mapping[str, object]) -> str:
+    candidate = context.get("task") or context.get("future")
+    get_name = getattr(candidate, "get_name", None)
+    if not callable(get_name):
+        return "unclassified_background_task"
+    try:
+        name = str(get_name())
+    except Exception:
+        return "unclassified_background_task"
+    exact = {
+        "seasonalweather-api": "api_server",
+        "seasonalweather-orchestrator": "orchestrator",
+        "conductor": "cycle_conductor",
+        "segment_refresher": "segment_refresher",
+        "alert_audio_dispatcher": "alert_audio_dispatcher",
+        "health_state": "health_state",
+        "pns_api_backfill": "pns_api_backfill",
+        "now_cycle_worker": "now_cycle_worker",
+        "now_api_backfill": "now_api_backfill",
+        "nwws_xmpp": "nwws_transport",
+        "nwws_consumer": "nwws_consumer",
+        "nwws-source-delivery": "nwws_source_delivery",
+        "nwws-replay-delivery": "nwws_replay_delivery",
+        "cap_poller": "cap_poller",
+        "cap_consumer": "cap_consumer",
+        "ipaws_poller": "ipaws_poller",
+        "ipaws_consumer": "ipaws_consumer",
+        "ern_monitor": "ern_monitor",
+        "ern_consumer": "ern_consumer",
+        "database_housekeeping": "database_housekeeping",
+        "discord_log_drain": "discord_log_drain",
+        "station-feed-housekeeping": "station_feed_housekeeping",
+        "rwt_rmt_scheduler": "required_test_scheduler",
+        "swwp-worker-receiver": "swwp_receiver",
+        "swwp-worker-assignment-pump": "swwp_assignment_pump",
+        "swwp-worker-watchdog": "swwp_watchdog",
+        "controller-shutdown-wait": "controller_shutdown",
+        "process-marker-failure-wait": "process_marker",
+        "lifecycle-force-wait": "lifecycle_force_wait",
+        "publication-fence-wait": "publication_fence",
+        "alert-audio-drain-wait": "alert_audio_drain",
+        "lifecycle-state-notify": "lifecycle_notification",
+        "ern_same_listen_stderr": "ern_stderr_reader",
+    }
+    if name in exact:
+        return exact[name]
+    prefixes = {
+        "config_reload_": "configuration_reload",
+        "segment-refresh-": "segment_refresh",
+        "preflight-": "validation_preflight",
+        "restart:": "optional_task_restart",
+    }
+    return next(
+        (owner for prefix, owner in prefixes.items() if name.startswith(prefix)),
+        "unclassified_background_task",
+    )
 
 
 def _prepare_runtime_diagnostics(
