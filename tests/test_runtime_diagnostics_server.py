@@ -3,18 +3,103 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, cast, final
 
 import pytest
+from typing_extensions import override
 
 from seasonalweather.api import server as api_server
 from seasonalweather.config import AuthMode
 from seasonalweather.database import SeasonalDatabase
 from seasonalweather.diagnostics.bindings import RUNTIME_CODES
-from seasonalweather.lifecycle import Lifecycle, LifecycleState, LifecycleTimeouts
+from seasonalweather.lifecycle import Lifecycle, LifecycleState, LifecycleTimeouts, TaskSupervisor
 from seasonalweather.runtime_diagnostics import fatal as runtime_fatal
+from seasonalweather.runtime_diagnostics.evidence import capture_exception
 from seasonalweather.runtime_diagnostics.fatal import FatalBoundary, SecondaryFailureLedger
 from seasonalweather.runtime_diagnostics.repository import OccurrenceRepository
+
+
+@final
+class _CapturedSupervisor(TaskSupervisor):
+    def __init__(self) -> None:
+        super().__init__(Lifecycle())
+        self.failures: list[BaseException] = []
+
+    @override
+    def report_background_failure(self, exception: BaseException) -> None:
+        self.failures.append(exception)
+
+
+@final
+class _NamedTask:
+    def __init__(self, name: str) -> None:
+        self.name: str = name
+
+    def get_name(self) -> str:
+        return self.name
+
+
+def test_loop_exception_handler_attributes_known_task_without_dynamic_identity() -> None:
+    loop = asyncio.new_event_loop()
+    supervisor = _CapturedSupervisor()
+    remove = api_server._install_loop_exception_handler(loop, supervisor)
+    try:
+        handler = loop.get_exception_handler()
+        assert handler is not None
+        for task_name in ("segment-refresh-command_private_123", "cap_consumer"):
+            _ = handler(
+                loop,
+                {
+                    "message": "Task was destroyed but it is pending!",
+                    "task": _NamedTask(task_name),
+                },
+            )
+    finally:
+        remove()
+        loop.close()
+    assert len(supervisor.failures) == 2
+    assert all(str(failure) == "Task was destroyed but it is pending!" for failure in supervisor.failures)
+    assert supervisor.failures[0].__notes__ == ["asyncio_failure=destroyed_pending_task task_owner=segment_refresh"]
+    assert supervisor.failures[1].__notes__ == ["asyncio_failure=destroyed_pending_task task_owner=cap_consumer"]
+    assert "private_123" not in repr(supervisor.failures[0].__notes__)
+
+
+def test_loop_exception_handler_sanitizes_unknown_context_and_retains_exception() -> None:
+    loop = asyncio.new_event_loop()
+    supervisor = _CapturedSupervisor()
+    remove = api_server._install_loop_exception_handler(loop, supervisor)
+    original = RuntimeError("original failure")
+    try:
+        handler = loop.get_exception_handler()
+        assert handler is not None
+        _ = handler(
+            loop,
+            {
+                "message": "Exception in callback password=private",
+                "future": _NamedTask("customer-token-private"),
+                "exception": original,
+            },
+        )
+    finally:
+        remove()
+        loop.close()
+    assert supervisor.failures == [original]
+    assert original.__notes__ == ["asyncio_failure=callback_exception task_owner=unclassified_background_task"]
+    rendered = runtime_fatal.emergency_bytes(
+        {
+            "code": "SWRUN5001",
+            "message": "The controller terminated after an uncaught fatal failure.",
+            "context": {
+                "role": "controller",
+                "component": "controller",
+                "instance_id": "controller_test",
+            },
+            "exception_evidence": capture_exception(original),
+        }
+    ).decode()
+    assert "note: asyncio_failure=callback_exception task_owner=unclassified_background_task" in rendered
+    assert "password" not in rendered
+    assert "customer-token-private" not in rendered
 
 
 class _IdleFence:

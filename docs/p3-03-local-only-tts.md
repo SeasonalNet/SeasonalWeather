@@ -62,11 +62,12 @@ The `spfy` engine invokes the pinned worker executable with the configured
 voice and returns native WAV for the existing common finalization path. The
 VoiceText Paul engine retains its existing VTML and Wine wrapper behavior; its
 image entrypoint starts the bounded headless Xvfb display required by Wine.
-Compose supplies a root-owned mode-1777 tmpfs at `/tmp/.X11-unix` beneath the
-general temporary mount, and a private writable Wine home under `/tmp/voicetext`.
-Xvfb and the worker still run as UID/GID 10001; no root startup or extra
-capabilities are required. The entrypoint rejects an incorrectly owned X11
-socket directory before starting the worker.
+Compose supplies one root-owned mode-1777 tmpfs at `/tmp`, allowing the
+non-root Xvfb process to create its display lock there without relying on
+unreliable nested tmpfs ownership. The entrypoint creates a private writable
+X11 socket directory and Wine home inside that container-only tmpfs. Xvfb and
+the worker still run as UID/GID 10001; no root startup or extra capabilities
+are required.
 Neither profile receives controller state, job state, provider credentials, or
 publication authority. The worker profiles remain fail-closed until P3-06
 supplies the deployment-owned resolver that invokes these handlers.

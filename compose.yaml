@@ -433,9 +433,8 @@ services:
       VOICETEXT_PAUL_TMPDIR: /tmp/voicetext
       VOICETEXT_PAUL_LOCK_PATH: /tmp/voicetext/voicetext.lock
     tmpfs:
-      - /tmp:rw,nosuid,nodev,noexec
+      - /tmp:rw,nosuid,nodev,noexec,mode=1777,uid=0,gid=0
       - /run:rw,nosuid,nodev,noexec
-      - /tmp/.X11-unix:rw,nosuid,nodev,noexec,mode=1777,uid=0,gid=0
     volumes:
       - type: volume
         source: seasonalweather-artifacts

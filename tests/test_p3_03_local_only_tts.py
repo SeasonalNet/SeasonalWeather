@@ -142,10 +142,14 @@ def test_specialized_workers_mount_only_engine_runtime_state() -> None:
     assert voicetext_environment["VOICETEXT_PAUL_LOCK_PATH"] == "/tmp/voicetext/voicetext.lock"
     voicetext_mounts = _mounts(voicetext)
     assert _strings(voicetext["tmpfs"]) == [
-        "/tmp:rw,nosuid,nodev,noexec",
+        "/tmp:rw,nosuid,nodev,noexec,mode=1777,uid=0,gid=0",
         "/run:rw,nosuid,nodev,noexec",
-        "/tmp/.X11-unix:rw,nosuid,nodev,noexec,mode=1777,uid=0,gid=0",
     ]
+    entrypoint = (ROOT / "scripts/worker/voicetext-paul-entrypoint").read_text(encoding="utf-8")
+    assert "[[ ! -w /tmp ]]" in entrypoint
+    assert "chmod 0700 /tmp/.X11-unix /tmp/voicetext/home" in entrypoint
+    assert "[[ ! -w /tmp/.X11-unix ]]" in entrypoint
+    assert "stat -c %u:%a /tmp/.X11-unix" not in entrypoint
     assert voicetext_mounts["/var/lib/seasonalweather/voices/voicetext_paul"]["source"] == (
         "seasonalweather-voicetext-paul-voices"
     )
