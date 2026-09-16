@@ -212,6 +212,80 @@ def test_tls_success_callback_rejects_unverified_handshake_before_authentication
     assert disconnected == [True]
 
 
+def test_room_subject_timeout_is_nonfatal_while_presence_remains_authoritative(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def exercise() -> None:
+        authenticated: list[bool] = []
+        joined: list[bool] = []
+        failures: list[tuple[str, BaseException | None]] = []
+        callbacks = SessionCallbacks(
+            lambda: authenticated.append(True),
+            lambda: joined.append(True),
+            lambda _: None,
+            lambda _: None,
+            lambda kind, error: failures.append((kind, error)),
+        )
+        session = _slixmpp_session(callbacks)
+        session._tls_established = True
+        monkeypatch.setattr(session, "send_presence", lambda: None)
+        monkeypatch.setattr(session, "get_roster", lambda: None)
+
+        async def wait_for_absent_subject() -> None:
+            raise TimeoutError
+
+        def join_without_subject(*_args: object, **_kwargs: object) -> asyncio.Task[None]:
+            return asyncio.create_task(wait_for_absent_subject())
+
+        plugin = session.plugin["xep_0045"]
+        monkeypatch.setattr(plugin, "join_muc", join_without_subject)
+
+        await session._session_start(None)
+        session._presence({"from": "NWWS@conference.example.invalid/Synthetic"})
+
+        assert authenticated == [True]
+        assert joined == [True]
+        assert failures == []
+
+    asyncio.run(exercise())
+
+
+def test_slixmpp_disconnect_cancels_and_reaps_persistent_output_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def exercise() -> None:
+        session = _slixmpp_session()
+        started = asyncio.Event()
+        finalized = asyncio.Event()
+
+        async def output_filter() -> None:
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                finalized.set()
+
+        task = asyncio.create_task(output_filter(), name="synthetic-slixmpp-output-filter")
+        monkeypatch.setattr(session, "_output_filter_task", task)
+        await started.wait()
+
+        def disconnected(*_args: object, **_kwargs: object) -> asyncio.Future[None]:
+            future = asyncio.get_running_loop().create_future()
+            future.set_result(None)
+            return future
+
+        monkeypatch.setattr("seasonalweather.nwws.slixmpp_adapter.slixmpp.ClientXMPP.disconnect", disconnected)
+
+        await session.disconnect()
+
+        assert finalized.is_set()
+        assert task.done()
+        assert task.cancelled()
+        assert session._output_filter_task is None
+
+    asyncio.run(exercise())
+
+
 def _source(
     factory,
     *,
@@ -791,9 +865,12 @@ def test_stanza_traversal_is_bounded_and_rejects_malformed_delay_metadata() -> N
     with pytest.raises(NwwsProtocolError, match="timestamp"):
         _wire_from_slixmpp_message(XmlStanza(malformed_delay, body=""))
 
+    delay_stamp = (
+        (dt.datetime.now(dt.UTC).replace(microsecond=0) - dt.timedelta(seconds=17)).isoformat().replace("+00:00", "Z")
+    )
     normal = ET.fromstring(
         '<message><x xmlns="nwws"><![CDATA[ABCD12 KLWX 121200\nKPHI\nPRODUCT]]></x>'
-        '<delay xmlns="urn:xmpp:delay" stamp="2026-08-12T12:00:00Z"/></message>'
+        f'<delay xmlns="urn:xmpp:delay" stamp="{delay_stamp}"/></message>'
     )
     wire = _wire_from_slixmpp_message(XmlStanza(normal, body=""))
     assert normalize_nwws_message(wire).raw_text.startswith("ABCD12 KLWX")

@@ -35,6 +35,16 @@ def _data_base(value: str = "") -> Path:
     return Path(configured or os.getenv("SEASONALWEATHER_DATA_BASE", "/var/lib/seasonalweather"))
 
 
+def _voicetext_process_lock_path(state_base: Path) -> Path:
+    configured = os.getenv("VOICETEXT_PAUL_LOCK_PATH", "").strip()
+    if configured:
+        return Path(configured)
+    runtime_dir = os.getenv("VOICETEXT_PAUL_TMPDIR", "").strip()
+    if runtime_dir:
+        return Path(runtime_dir) / ".voicetext_paul_tts.lock"
+    return state_base / ".voicetext_paul_tts.lock"
+
+
 @contextmanager
 def _process_lock(lock_path: Path, *, deadline: float, cancellation: Event | None):
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -381,7 +391,7 @@ def _synthesize_voicetext_paul(
     source = engine_dir / "output.wav"
     reset_tool = handler.reset_path
     command = [str(wrapper)]
-    lock_path = Path(os.getenv("VOICETEXT_PAUL_LOCK_PATH", str(state_base / ".voicetext_paul_tts.lock")))
+    lock_path = _voicetext_process_lock_path(state_base)
     with _process_lock(lock_path, deadline=deadline, cancellation=cancellation):
         call_number = handler._invocations.next()
         if vtp.kill_before or (vtp.reset_every > 0 and call_number % vtp.reset_every == 0):

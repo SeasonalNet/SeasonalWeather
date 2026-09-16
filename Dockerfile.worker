@@ -416,7 +416,9 @@ RUN case "${SW_IMAGE_PROFILE}" in \
     esac
 
 WORKDIR /opt/seasonalweather
-ENV PIPER_MODEL_DIR="/opt/piper/models"
+ENV PIPER_MODEL_DIR="/opt/piper/models" \
+    VOICETEXT_PAUL_TMPDIR="/tmp/voicetext" \
+    VOICETEXT_PAUL_LOCK_PATH="/tmp/voicetext/voicetext.lock"
 USER seasonalweather
 
 RUN python -I -m seasonalweather worker --help >/dev/null
