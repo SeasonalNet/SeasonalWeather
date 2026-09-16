@@ -68,6 +68,8 @@ def test_worker_build_smoke_cannot_import_the_unpruned_build_context() -> None:
     assert "RUN python -I -m seasonalweather worker --help" in dockerfile
     assert 'HOME="/tmp"' in dockerfile
     assert 'PIPER_MODEL_DIR="/opt/piper/models"' in dockerfile
+    assert 'VOICETEXT_PAUL_TMPDIR="/tmp/voicetext"' in dockerfile
+    assert 'VOICETEXT_PAUL_LOCK_PATH="/tmp/voicetext/voicetext.lock"' in dockerfile
 
 
 def test_controller_authority_modules_are_not_shipped_in_workers() -> None:

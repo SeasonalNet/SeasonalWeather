@@ -14,7 +14,7 @@ import inspect
 import logging
 import ssl
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, cast
 
 import slixmpp
 
@@ -75,6 +75,7 @@ class _SlixmppSession(slixmpp.ClientXMPP, SessionTransport):
         self._tls_established = False
         self._tls_failure_reported = False
         self._disconnect_task: asyncio.Task[Any] | None = None
+        self._output_filter_task: asyncio.Future[object] | None = None
         self.register_plugin("xep_0030")
         self.register_plugin("xep_0199")
         self.register_plugin("xep_0045")
@@ -144,7 +145,12 @@ class _SlixmppSession(slixmpp.ClientXMPP, SessionTransport):
         self._tls_established = False
         self._tls_failure_reported = False
         try:
-            await slixmpp.ClientXMPP.connect(self, host=self._server, port=self._port)
+            connection = slixmpp.ClientXMPP.connect(self, host=self._server, port=self._port)
+            self._output_filter_task = cast(
+                asyncio.Future[object] | None,
+                getattr(self, "_run_out_filters", None),
+            )
+            await connection
         except ssl.SSLError as exc:
             self._callbacks.failure("tls", exc)
             raise NwwsTlsError("NWWS trust negotiation failed") from exc
@@ -166,6 +172,20 @@ class _SlixmppSession(slixmpp.ClientXMPP, SessionTransport):
             # The adapter owns the bounded lifecycle; a transport close failure
             # is reported by the source rather than leaking wire state.
             return
+        finally:
+            await self._reap_output_filter_task()
+
+    async def _reap_output_filter_task(self) -> None:
+        """Cancel and await the persistent task Slixmpp leaves behind."""
+
+        task = self._output_filter_task
+        self._output_filter_task = None
+        if task is None:
+            return
+        if not task.done():
+            task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
 
     async def _session_start(self, _event: object) -> None:
         if not self._tls_established:
@@ -184,7 +204,13 @@ class _SlixmppSession(slixmpp.ClientXMPP, SessionTransport):
             except TypeError:
                 joined = plugin.join_muc(self._room_jid, self._nick, None)
             if inspect.isawaitable(joined):
-                await asyncio.wait_for(joined, timeout=self._muc_confirm_seconds)
+                try:
+                    await asyncio.wait_for(joined, timeout=self._muc_confirm_seconds)
+                except TimeoutError:
+                    # Slixmpp's legacy join future also waits for a room subject.
+                    # NWWS can be joined and delivering traffic without sending
+                    # one, so presence/message callbacks remain authoritative.
+                    log.warning("NWWS room-subject confirmation timed out; awaiting room presence")
         except asyncio.CancelledError:
             raise
         except Exception as exc:

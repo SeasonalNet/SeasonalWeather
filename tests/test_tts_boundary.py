@@ -384,6 +384,42 @@ def test_voicetext_paul_retries_after_reset_with_fake_resources(monkeypatch, tmp
     assert reset_calls == 1
 
 
+def test_voicetext_worker_lock_defaults_to_writable_runtime_directory(monkeypatch, tmp_path: Path) -> None:
+    state_base = tmp_path / "read-only-state"
+    runtime_dir = tmp_path / "runtime"
+    engine_dir = tmp_path / "engine"
+    state_base.mkdir(mode=0o500)
+    engine_dir.mkdir()
+    (engine_dir / "voicetext_paul.exe").write_bytes(b"fake")
+    wrapper = tmp_path / "wrapper"
+    wrapper.write_bytes(b"fake")
+    monkeypatch.setenv("SEASONALWEATHER_DATA_BASE", str(state_base))
+    monkeypatch.setenv("VOICETEXT_PAUL_TMPDIR", str(runtime_dir))
+    monkeypatch.delenv("VOICETEXT_PAUL_LOCK_PATH", raising=False)
+    monkeypatch.setenv("VOICETEXT_PAUL_BIN_DIR", str(engine_dir))
+    monkeypatch.setattr(VoiceTextPaulHandler, "wrapper_path", wrapper)
+    handler = VoiceTextPaulHandler()
+
+    def fake_run(argv, *, input_bytes, deadline, cancellation, cwd=None):
+        del argv, input_bytes, deadline, cancellation, cwd
+        write_silence_wav(engine_dir / "output.wav", 0.2, 22_050)
+
+    monkeypatch.setattr(handler, "_run", fake_run)
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    result = handler.synthesize(
+        "worker lock path test",
+        options=LocalEngineOptions(engine="voicetext_paul", voice="9"),
+        output_dir=output_dir,
+        deadline=__import__("time").monotonic() + 10,
+        cancellation=None,
+    )
+
+    assert result.output_path.is_file()
+    assert (runtime_dir / ".voicetext_paul_tts.lock").is_file()
+    assert not (state_base / ".voicetext_paul_tts.lock").exists()
+
+
 def test_voicetext_paul_preserves_primary_failure_when_reset_fails(monkeypatch, tmp_path: Path) -> None:
     state_base = tmp_path / "state"
     engine_dir = tmp_path / "engine"
