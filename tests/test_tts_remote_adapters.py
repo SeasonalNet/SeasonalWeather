@@ -735,7 +735,6 @@ def test_credential_bounds_and_transport_tls_failure_are_redacted(tmp_path: Path
     ("response", "classification"),
     [
         (FakeResponse(200, b"no", "application/json"), "unsupported_audio_format"),
-        (FakeResponse(200, b"four", "audio/wav"), "response_too_large"),
     ],
 )
 def test_openai_response_media_and_size_are_validated(
@@ -762,6 +761,31 @@ def test_openai_response_media_and_size_are_validated(
             cancellation=threading.Event(),
         )
     assert error.value.classification == classification
+
+
+def test_openai_generated_audio_floor_overrides_smaller_legacy_response_cap(tmp_path: Path) -> None:
+    key = tmp_path / "key"
+    key.write_text("sk-test-secret", encoding="ascii")
+    adapter = OpenAICompatibleAdapter(
+        OpenAICompatibleConfig(
+            base_url="https://api.example.test/v1",
+            api_key_file=str(key),
+            model="m",
+            voice="v",
+            max_response_bytes=3,
+        ),
+        transport=FakeTransport([FakeResponse(200, b"four", "audio/wav")]),
+    )
+
+    result = adapter.synthesize(
+        _request(BackendId.OPENAI_COMPATIBLE),
+        TEXT,
+        output_dir=tmp_path,
+        deadline=9999999999,
+        cancellation=threading.Event(),
+    )
+
+    assert result.path.read_bytes() == b"four"
 
 
 def test_remote_timeout_and_malformed_token_response_are_classified(tmp_path: Path) -> None:

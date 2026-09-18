@@ -1,3 +1,5 @@
+import pytest
+
 from seasonalweather.tts.voicetext_paul_vtml import apply_voicetext_paul_vtml
 
 
@@ -63,3 +65,32 @@ def test_awips_text_substitutions_do_not_leak_awips_markup_into_aliases() -> Non
 
     assert '<vtml_sub alias="scattered frost">Scattered frost</vtml_sub>' in rendered
     assert "<break" not in rendered
+
+
+def test_full_supported_vtml_dialect_is_preserved() -> None:
+    marked = (
+        '<vtml_speed value="120"><vtml_pitch value="105">'
+        '<vtml_volume value="90"><vtml_partofsp part="noun">record</vtml_partofsp>'
+        '<vtml_break level="2"/><vtml_pause time="250"/>'
+        '<vtml_phoneme alphabet="x-cmu" ph="T EY1 K">take</vtml_phoneme>'
+        '<vtml_sayas interpret-as="ssml:date" format="mdy">09/17/2026</vtml_sayas>'
+        '<vtml_sub alias="National Weather Service">NWS</vtml_sub>'
+        "</vtml_volume></vtml_pitch></vtml_speed>"
+    )
+
+    assert apply_voicetext_paul_vtml(marked, vtml_lexicon=False) == marked
+
+
+@pytest.mark.parametrize(
+    "marked",
+    (
+        '<vtml_speed value="49">too slow</vtml_speed>',
+        '<vtml_pause time="70000"/>',
+        '<vtml_phoneme alphabet="unknown" ph="x">word</vtml_phoneme>',
+        '<vtml_unknown value="1">word</vtml_unknown>',
+        '<vtml_sub alias="missing close">word',
+    ),
+)
+def test_unsupported_or_malformed_vtml_is_rejected(marked: str) -> None:
+    with pytest.raises(ValueError):
+        apply_voicetext_paul_vtml(marked, vtml_lexicon=False)

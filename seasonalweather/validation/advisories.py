@@ -56,6 +56,18 @@ RULES = (
         remove=True,
     ),
     AdvisoryRule(
+        "generated_audio.minimum_duration",
+        "advisory.generated_audio_minimum",
+        ConfigPath(("audio", "generated_max_duration_seconds")),
+        DiagnosticSeverity.WARNING,
+        "Generated-audio duration was normalized to the supported 900-second minimum.",
+        "Set audio.generated_max_duration_seconds to 900 or a larger finite value.",
+        "generated-audio",
+        "0.18.0",
+        "Remove only if the generated-media minimum policy is retired.",
+        replacement=900.0,
+    ),
+    AdvisoryRule(
         "advisory.tts.espeak_ng_alias",
         "advisory.configuration",
         ConfigPath(("tts", "backend")),
@@ -110,6 +122,10 @@ def _evaluate_rule(
         return None
     if rule.path == ConfigPath(("tts", "backend")) and old_value != "espeak_ng":
         return None
+    if rule.validator_rule_id == "generated_audio.minimum_duration" and (
+        not isinstance(old_value, (int, float)) or isinstance(old_value, bool) or float(old_value) >= 900.0
+    ):
+        return None
     node = parsed.locations.get(rule.path)
     location = node.value if node else None
     fix = _rule_fix(compiled, rule, old_value=old_value, location=location)
@@ -130,7 +146,11 @@ def _evaluate_rule(
         ),
         help=rule.help,
         fixes=(fix,),
-        documentation_reference="docs/configuration-validation.md",
+        documentation_reference=(
+            "docs/generated-audio-policy.md"
+            if rule.validator_rule_id == "generated_audio.minimum_duration"
+            else "docs/configuration-validation.md"
+        ),
     )
 
 

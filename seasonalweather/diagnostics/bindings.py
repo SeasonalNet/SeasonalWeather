@@ -15,6 +15,7 @@ class RuleCodeBinding:
 
 RULE_BINDINGS = (
     RuleCodeBinding("advisory.configuration", "SWCFG0001", "advisory"),
+    RuleCodeBinding("advisory.generated_audio_minimum", "SWCFG0005", "advisory"),
     RuleCodeBinding("admission.invalid", "SWCFG1021", "semantic"),
     RuleCodeBinding("compiler.issue_limit", "SWCFG7006", "schema"),
     RuleCodeBinding("compatibility.advisory", "SWCFG0003", "compatibility"),

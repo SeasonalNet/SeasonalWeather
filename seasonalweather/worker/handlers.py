@@ -176,13 +176,19 @@ class LocalTtsHandler:
             rate_wpm=int(descriptor.get("rate_wpm", 180)),
             volume=float(descriptor.get("volume", 1.0)),
             sample_rate=int(descriptor.get("sample_rate", 48_000)),
+            generated_max_duration_seconds=float(descriptor.get("generated_max_duration_seconds", 900.0)),
             text_overrides=list(descriptor.get("text_overrides") or ()),
             vtp_cfg=SimpleNamespace(**(vtp if isinstance(vtp, dict) else {})),
             tts_data_base=str(descriptor.get("data_base", "")),
             capability_check=_assigned_local_capability,
         )
         try:
-            tts.synth_to_wav(descriptor["text"], output_path, purpose="alert" if alert else "routine")
+            tts.synth_to_wav(
+                descriptor["text"],
+                output_path,
+                purpose="alert" if alert else "routine",
+                markup_mode=str(descriptor.get("markup_mode", "plain")),
+            )
         finally:
             tts.close()
 
@@ -192,8 +198,17 @@ class LocalTtsHandler:
         descriptor: dict[str, Any],
         output_path: Path,
     ) -> dict[str, object]:
-        media = inspect_wav(output_path, policy=WavPolicy(allowed_channels=(1, 2)))
-        identity = hash_file(output_path, maximum_bytes=1_073_741_824)
+        from ..artifacts.generated_audio import GeneratedAudioPolicy
+
+        policy = GeneratedAudioPolicy(
+            sample_rate_hz=int(descriptor.get("sample_rate", 48_000)),
+            maximum_duration_seconds=float(descriptor.get("generated_max_duration_seconds", 900.0)),
+        )
+        media = inspect_wav(
+            output_path,
+            policy=WavPolicy(maximum_duration_seconds=policy.maximum_duration_seconds, allowed_channels=(1, 2)),
+        )
+        identity = hash_file(output_path, maximum_bytes=policy.maximum_bytes)
         payload = assignment.payload
         artifact = ArtifactReference(
             artifact_class=ArtifactClass.WAV,

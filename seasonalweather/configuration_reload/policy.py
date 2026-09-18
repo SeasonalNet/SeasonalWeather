@@ -97,6 +97,7 @@ _DECLARED_POLICY: dict[tuple[str, ...], ReloadDisposition] = {
     ("audio", "attention_tone_seconds"): ReloadDisposition.QUIESCENT,
     ("audio", "eom_beep_hz"): ReloadDisposition.QUIESCENT,
     ("audio", "eom_beep_seconds"): ReloadDisposition.QUIESCENT,
+    ("audio", "generated_max_duration_seconds"): ReloadDisposition.QUIESCENT,
     ("audio", "inter_segment_silence_seconds"): ReloadDisposition.QUIESCENT,
     ("audio", "post_alert_silence_seconds"): ReloadDisposition.QUIESCENT,
     ("audio", "sample_rate"): ReloadDisposition.QUIESCENT,

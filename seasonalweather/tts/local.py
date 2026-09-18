@@ -347,7 +347,14 @@ class SpfyHandler(_SubprocessHandler):
             input_bytes=None,
             deadline=deadline,
             cancellation=cancellation,
-            environment={"SPFY_VOICE_DIR": str(voice_dir), "SPFY_NO_UPDATE_CHECK": "1"},
+            environment={
+                "SPFY_VOICE_DIR": str(voice_dir),
+                "SPFY_NO_UPDATE_CHECK": "1",
+                # Upstream defines SPFY_RATE as a whole-utterance time scale:
+                # values above 1 are faster.  Keep the established 180 WPM
+                # configured 165 WPM baseline as the neutral point.
+                "SPFY_RATE": f"{options.rate_wpm / 165.0:.6f}",
+            },
         )
         if not output_path.is_file() or output_path.stat().st_size < 44:
             raise ProcessFailure("nonzero_exit", "spfy produced no bounded output")
@@ -378,6 +385,8 @@ def _synthesize_voicetext_paul(
             for item in vtp.phoneme_overrides_x_cmu
         ],
     )
+    speed_percent = max(50, min(400, round(options.rate_wpm / 165.0 * 100)))
+    prepared = f'<vtml_speed value="{speed_percent}">{prepared}</vtml_speed>'
     _fence(deadline, cancellation, "VoiceText preprocessing")
     state_base = _data_base(options.voicetext_paul.data_base)
     engine_root = Path(

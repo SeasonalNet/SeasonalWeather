@@ -11,6 +11,7 @@ from seasonalweather.configuration_reload.safe_point import PUBLICATION, WORKER_
 from seasonalweather.lifecycle import WorkClass
 
 from .integration import ArtifactResultCoordinator, CurrentArtifactAuthority
+from .media import WavPolicy
 from .promotion import PromotionService
 from .service import ArtifactService
 from .staging import StagingService
@@ -31,6 +32,7 @@ def build_controller_artifact_composition(
     *,
     work_root: Path,
     maximum_bytes: int,
+    maximum_duration_seconds: float = 900.0,
 ) -> ControllerArtifactComposition:
     """Compose P1-10 production owners without creating a worker process."""
 
@@ -43,6 +45,7 @@ def build_controller_artifact_composition(
         repository,
         admission_check=lambda: orchestrator.lifecycle.require(WorkClass.PUBLICATION),
         activity_context=lambda: activities.activity(PUBLICATION),
+        wav_policy=WavPolicy(maximum_duration_seconds=maximum_duration_seconds),
     )
 
     def authority(assignment: Any) -> CurrentArtifactAuthority:

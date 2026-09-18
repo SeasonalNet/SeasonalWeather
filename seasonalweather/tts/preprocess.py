@@ -8,6 +8,7 @@ import time
 from threading import Event
 
 
+from .markup_parser import parse_strict_markup
 from .models import MAX_SYNTHESIS_TEXT, TextOverride
 from .regex_safety import (
     MAX_CONFIGURED_REGEX_PATTERN,
@@ -28,6 +29,7 @@ PREPROCESSING_VERSION = "tts-preprocess-v1"
 MAX_OVERRIDE_PATTERN = MAX_CONFIGURED_REGEX_PATTERN
 MAX_OVERRIDE_REPLACEMENTS = MAX_CONFIGURED_REGEX_REPLACEMENTS
 _SPACE_RE = re.compile(r"[ \t]+")
+_MARKUP_TAG_RE = re.compile(r"(<[^>]+>)")
 _URL_RE = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
 _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^)]+)\)", re.IGNORECASE)
 _ANGLE_URL_RE = re.compile(r"<(https?://[^>]+)>", re.IGNORECASE)
@@ -192,7 +194,7 @@ def normalize_nws_dual_time_zones(text: str) -> str:
     return _NWS_DUAL_TZ_RE.sub(_repl, text)
 
 
-def _compile_text_override_rx(spec: dict) -> re.Pattern[str]:
+def _compile_text_override_rx(spec: dict[str, object]) -> re.Pattern[str]:
     match = str(spec.get("match", "") or "")
     if not match:
         raise ValueError("text override is missing 'match'")
@@ -498,13 +500,16 @@ def preprocess_text(
     text: str,
     overrides: tuple[TextOverride, ...] = (),
     *,
+    markup_mode: str = "plain",
     deadline: float | None = None,
     cancellation: Event | None = None,
 ) -> str:
     if len(overrides) > MAX_CONFIGURED_REGEX_RULES:
         raise ValueError("too many text overrides")
     _check_fence(deadline, cancellation, "preprocessing")
-    result = clean_for_tts(text)
+    if markup_mode not in {"plain", "ssml", "engine"}:
+        raise ValueError("unsupported synthesis markup mode")
+    result = clean_for_tts(text) if markup_mode == "plain" else _prepare_declared_markup(text, markup_mode)
     _check_fence(deadline, cancellation, "preprocessing")
     result = normalize_nws_spoken_times(result)
     for override in overrides:
@@ -512,7 +517,15 @@ def preprocess_text(
         if len(override.replace) > MAX_CONFIGURED_REGEX_REPLACEMENT:
             raise ValueError("text override replacement is overlong")
         expression = _compile_bounded_override(override)
-        result, count = expression.subn(override.replace, result, count=MAX_OVERRIDE_REPLACEMENTS + 1)
+        if markup_mode == "plain":
+            result, count = expression.subn(override.replace, result, count=MAX_OVERRIDE_REPLACEMENTS + 1)
+        else:
+            result, count = _replace_outside_markup(
+                result,
+                expression,
+                override.replace,
+                limit=MAX_OVERRIDE_REPLACEMENTS + 1,
+            )
         if count > MAX_OVERRIDE_REPLACEMENTS:
             raise ValueError("text override replacement work exceeded its bound")
         if len(result) > MAX_SYNTHESIS_TEXT:
@@ -522,3 +535,40 @@ def preprocess_text(
         raise ValueError("preprocessing produced empty synthesis text")
     _check_fence(deadline, cancellation, "preprocessing")
     return result
+
+
+def _prepare_declared_markup(text: str, markup_mode: str) -> str:
+    if "\x00" in text or len(text) > MAX_SYNTHESIS_TEXT:
+        raise ValueError("marked synthesis text is invalid or overlong")
+    rendered = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not rendered:
+        raise ValueError("marked synthesis text is empty")
+    if markup_mode == "ssml":
+        lowered = rendered.casefold()
+        if "<!doctype" in lowered or "<!entity" in lowered:
+            raise ValueError("SSML declarations are not permitted")
+        try:
+            roots, _elements, outside_text = parse_strict_markup(rendered)
+        except ValueError as exc:
+            raise ValueError("SSML is malformed") from exc
+        if roots != ("speak",) or outside_text.strip():
+            raise ValueError("SSML root must be speak")
+    return rendered
+
+
+def _replace_outside_markup(
+    text: str,
+    expression: re.Pattern[str],
+    replacement: str,
+    *,
+    limit: int,
+) -> tuple[str, int]:
+    parts = _MARKUP_TAG_RE.split(text)
+    count = 0
+    for index in range(0, len(parts), 2):
+        remaining = max(0, limit - count)
+        if remaining == 0:
+            break
+        parts[index], replaced = expression.subn(replacement, parts[index], count=remaining)
+        count += replaced
+    return "".join(parts), count

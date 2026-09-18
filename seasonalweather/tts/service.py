@@ -839,6 +839,7 @@ class SynthesisService:
             return preprocess_text(
                 request.text,
                 request.text_overrides,
+                markup_mode=request.markup_mode.value,
                 deadline=deadline,
                 cancellation=cancellation,
             )

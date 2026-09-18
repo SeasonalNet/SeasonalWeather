@@ -81,9 +81,11 @@ class DatabaseHousekeeper:
         return max(60, int(getattr(self.cfg.database.housekeeping, "audio_asset_grace_seconds", 900) or 900))
 
     def _generated_audio_retention_seconds(self) -> int:
+        # This is solely a crash/race grace for files whose durable reference
+        # has not appeared yet. Reference reachability, not age, is authority.
         return max(
-            3600,
-            int(getattr(self.cfg.database.housekeeping, "generated_audio_retention_seconds", 10800) or 86400),
+            60,
+            int(getattr(self.cfg.database.housekeeping, "generated_audio_retention_seconds", 300) or 300),
         )
 
     def _generated_audio_max_bytes(self) -> int:
@@ -230,14 +232,18 @@ class DatabaseHousekeeper:
         if not self._audio_dir.exists():
             return {"generated_audio_deleted": 0, "generated_audio_bytes_deleted": 0}
 
-        keep_paths = self._protected_audio_paths(now)
+        try:
+            keep_paths = self._protected_audio_paths(now)
+        except Exception:
+            # A partial reference inventory is not deletion authority.  Leave
+            # every candidate in place and retry on the next maintenance pass.
+            log.exception("database housekeeping: failed to load protected audio paths")
+            return {"generated_audio_deleted": 0, "generated_audio_bytes_deleted": 0}
         cutoff_ts = (now - dt.timedelta(seconds=self._generated_audio_retention_seconds())).timestamp()
         candidates = self._generated_audio_candidates()
 
         deleted = 0
         bytes_deleted = 0
-        survivors: list[tuple[float, Path, int]] = []
-
         for wav_path in candidates:
             keep_key = self._path_key(wav_path)
             if keep_key in keep_paths:
@@ -255,21 +261,6 @@ class DatabaseHousekeeper:
                     deleted += 1
                     bytes_deleted += size
                 continue
-            survivors.append((float(st.st_mtime), wav_path, size))
-
-        max_bytes = self._generated_audio_max_bytes()
-        if max_bytes > 0:
-            current_bytes = sum(size for _mtime, _path, size in survivors)
-            for _mtime, wav_path, size in sorted(survivors, key=lambda item: item[0]):
-                if current_bytes <= max_bytes:
-                    break
-                keep_key = self._path_key(wav_path)
-                if keep_key in keep_paths:
-                    continue
-                if _safe_unlink(wav_path):
-                    deleted += 1
-                    bytes_deleted += size
-                    current_bytes -= size
 
         return {
             "generated_audio_deleted": deleted,
@@ -314,35 +305,32 @@ class DatabaseHousekeeper:
         for item in self._segments.load_entries():
             self._add_audio_path(keep, item.get("audio_path"))
 
-        try:
-            with self.db.connect() as conn:
-                rows = conn.execute(
-                    "SELECT audio_path FROM active_alerts WHERE audio_path IS NOT NULL AND expires_at >= ?",
-                    (now_iso,),
-                ).fetchall()
-                for row in rows:
-                    self._add_audio_path(keep, row["audio_path"])
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                "SELECT audio_path FROM active_alerts WHERE audio_path IS NOT NULL AND expires_at >= ?",
+                (now_iso,),
+            ).fetchall()
+            for row in rows:
+                self._add_audio_path(keep, row["audio_path"])
 
-                feed_rows = conn.execute(
-                    "SELECT payload_json FROM station_feed_alerts WHERE expires_at >= ?",
-                    (now_iso,),
-                ).fetchall()
-                for row in feed_rows:
-                    self._add_station_feed_audio_paths(keep, str(row["payload_json"] or "{}"))
+            feed_rows = conn.execute(
+                "SELECT payload_json FROM station_feed_alerts WHERE expires_at >= ?",
+                (now_iso,),
+            ).fetchall()
+            for row in feed_rows:
+                self._add_station_feed_audio_paths(keep, str(row["payload_json"] or "{}"))
 
-                insert_rows = conn.execute(
-                    """
-                    SELECT audio_path FROM cycle_inserts
-                    WHERE audio_path IS NOT NULL
-                      AND status = 'active'
-                      AND expires_at >= ?
-                    """,
-                    (now_iso,),
-                ).fetchall()
-                for row in insert_rows:
-                    self._add_audio_path(keep, row["audio_path"])
-        except Exception:
-            log.exception("database housekeeping: failed to load protected audio paths")
+            insert_rows = conn.execute(
+                """
+                SELECT audio_path FROM cycle_inserts
+                WHERE audio_path IS NOT NULL
+                  AND status = 'active'
+                  AND expires_at >= ?
+                """,
+                (now_iso,),
+            ).fetchall()
+            for row in insert_rows:
+                self._add_audio_path(keep, row["audio_path"])
 
         for item in self._assets.list_live_assets(now_iso):
             self._add_audio_path(keep, item.get("wav_path"))

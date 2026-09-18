@@ -32,9 +32,9 @@ ARG DECTALK_SOURCE_URL="https://github.com/dectalk/dectalk/archive/refs/tags/202
 ARG DECTALK_SOURCE_SHA256="511c845e453917eea3a353cdbe8e0401360d8992dcfadfe2e9b4b83fde168f7e"
 ARG VOICETEXT_ARCHIVE_URL="https://cdn.dondaplayer.com/WeatherRadioSuite-LIB.zip"
 ARG VOICETEXT_ARCHIVE_SHA256="441ac30ea4bf899f81896f374b330860c5e9022601ca2b3e3c8cbf89e33fa8f5"
-ARG SPEECHIFY_RELEASE_URL="https://github.com/wagwan-piffting-blud/Speechify/releases/download/2026.08.23/spfy-linux-x86_64-2026.08.23.tar.gz"
-ARG SPEECHIFY_RELEASE_SHA256="3e57df579281a6a0c0e7c1a6233a269617bba2e761b08047918069883f84ed49"
-ARG SPEECHIFY_COMMIT="7f28fb751a02b2981358d690f9df3651628c8151"
+ARG SPEECHIFY_RELEASE_URL="https://github.com/wagwan-piffting-blud/Speechify/releases/download/2026.09.06/spfy-linux-x86_64-2026.09.06.tar.gz"
+ARG SPEECHIFY_RELEASE_SHA256="b932f76874be06e9545fbd677bb050d0d603d93519a4710a4d474db16784a6c5"
+ARG SPEECHIFY_COMMIT="698c6e137cde17815272e7090be05442bed995e9"
 ARG SPEECHIFY_RAW_BASE_URL="https://raw.githubusercontent.com/wagwan-piffting-blud/Speechify"
 
 RUN case "${SW_IMAGE_PROFILE}" in \
@@ -338,9 +338,9 @@ ARG DECTALK_SOURCE_URL="https://github.com/dectalk/dectalk/archive/refs/tags/202
 ARG DECTALK_SOURCE_SHA256="511c845e453917eea3a353cdbe8e0401360d8992dcfadfe2e9b4b83fde168f7e"
 ARG VOICETEXT_ARCHIVE_URL="https://cdn.dondaplayer.com/WeatherRadioSuite-LIB.zip"
 ARG VOICETEXT_ARCHIVE_SHA256="441ac30ea4bf899f81896f374b330860c5e9022601ca2b3e3c8cbf89e33fa8f5"
-ARG SPEECHIFY_RELEASE_URL="https://github.com/wagwan-piffting-blud/Speechify/releases/download/2026.08.23/spfy-linux-x86_64-2026.08.23.tar.gz"
-ARG SPEECHIFY_RELEASE_SHA256="3e57df579281a6a0c0e7c1a6233a269617bba2e761b08047918069883f84ed49"
-ARG SPEECHIFY_COMMIT="7f28fb751a02b2981358d690f9df3651628c8151"
+ARG SPEECHIFY_RELEASE_URL="https://github.com/wagwan-piffting-blud/Speechify/releases/download/2026.09.06/spfy-linux-x86_64-2026.09.06.tar.gz"
+ARG SPEECHIFY_RELEASE_SHA256="b932f76874be06e9545fbd677bb050d0d603d93519a4710a4d474db16784a6c5"
+ARG SPEECHIFY_COMMIT="698c6e137cde17815272e7090be05442bed995e9"
 RUN case "${SW_IMAGE_PROFILE}" in \
         routine-worker|espeak|piper|festival|dectalk|legacy-tts|voicetext-paul|spfy|maintenance|development) ;; \
         *) exit 1 ;; \
