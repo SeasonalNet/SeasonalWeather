@@ -18,9 +18,11 @@ legacy-TTS, maintenance, and development profiles through `make images`, and
 then runs `tools.quality.phase2_exit_gate --images`.
 
 Forgejo splits that combined interface across two ordered jobs for the same
-commit. The ordinary `victus-fast` runner executes `make check`. After it
-passes, the dedicated `victus-builder` runner executes `make phase2-images`,
-which builds and inspects the matrix without repeating quality and tests.
+commit. The ordinary `cobalt` runner executes `make check`. After it
+passes, the dedicated `cobalt-builder` runner executes `make phase2-images`,
+which builds and inspects the matrix without repeating quality and tests. It
+then executes the built Speechify and VoiceText Paul engines with networking
+disabled and verifies that each produces a bounded, non-silent PCM WAV.
 Only the builder job runs `tools/ci/bootstrap_docker.sh`; it installs the
 Docker CLI/Buildx when needed and requires the runner-provided `dind-builder`
 endpoint. See [Forgejo Runner Docker access](forgejo-runner-docker.md). GitHub

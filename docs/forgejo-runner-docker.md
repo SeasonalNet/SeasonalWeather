@@ -7,15 +7,17 @@ container is not sufficient: BuildKit requires mount capabilities that the job
 does not own.
 
 SeasonalWeather therefore assigns image work only to the dedicated
-`victus-builder` runner. Its workflow job installs only `docker-ce-cli` and the
+`cobalt-builder` runner. Its workflow job installs only `docker-ce-cli` and the
 Buildx plugin, verifies the supplied endpoint before installing Python
-dependencies, and then runs `make phase2-images`. The ordinary `victus-fast`
+dependencies, and then runs `make phase2-images`. The ordinary `cobalt`
 runner runs `make check` without Docker access. No other runner needs the P2-09
-Docker authority.
+Docker authority. The phase target finishes by running the built Speechify and
+VoiceText Paul images without networking and checking that their real engine
+handlers emit bounded, non-silent PCM WAV output.
 
 ## Recommended isolated DIND topology
 
-`victus-builder` uses the isolated `dind-builder` daemon. This follows the
+`cobalt-builder` uses the isolated `dind-builder` daemon. This follows the
 [Forgejo 15 Docker access guide](https://forgejo.org/docs/v15.0/admin/actions/docker-access/).
 Pin the DIND image to the deployment's reviewed digest.
 
@@ -52,7 +54,7 @@ disposable trusted job that `docker info` and `docker buildx inspect
 checks and fails with this document's path before the Python suite starts when
 the endpoint is absent.
 
-Keep `victus-builder` at capacity one unless each concurrent builder has an
+Keep `cobalt-builder` at capacity one unless each concurrent builder has an
 independent DIND daemon. Jobs sharing a daemon can inspect or mutate one
 another's images and containers. The SeasonalWeather Forgejo workflows do not
 use the registry as a BuildKit cache backend because the deployment proxy can

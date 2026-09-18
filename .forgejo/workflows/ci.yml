@@ -12,7 +12,7 @@ on:
 
 jobs:
   python:
-    runs-on: [docker, victus-fast]
+    runs-on: [docker, cobalt]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -61,7 +61,7 @@ jobs:
 
   images:
     needs: python
-    runs-on: [docker, victus-builder]
+    runs-on: [docker, cobalt-builder]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -86,7 +86,7 @@ jobs:
           . .venv-ci/bin/activate
           python -m pip install --upgrade pip uv==0.12.4
           uv sync --frozen --active --group controller --group worker-runtime --group dev
-      - name: Build and inspect the Phase 2 image matrix
+      - name: Build, inspect, and synthesize with the Phase 2 image matrix
         run: |
           . .venv-ci/bin/activate
           make phase2-images
