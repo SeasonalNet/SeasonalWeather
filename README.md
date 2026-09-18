@@ -209,6 +209,7 @@ points include:
 - [Configuration validation](docs/configuration-validation.md)
 - [Compose authority and volumes](docs/p3-02-authority-separated-volumes.md)
 - [Local TTS workers](docs/p3-03-local-only-tts.md)
+- [Generated-audio policy](docs/generated-audio-policy.md)
 - [Staging operation](docs/p3-07-staging.md)
 - [Production migration and Phase 3 gate](docs/p3-08-production-migration.md)
 - [API command and job contracts](docs/command-job-contracts.md)

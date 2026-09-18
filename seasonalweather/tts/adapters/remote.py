@@ -248,10 +248,11 @@ def _seasonal_synthesis(
                 )
                 continue
             raise failure
+        generated_maximum_bytes = max(adapter.config.max_response_bytes, request.output.maximum_bytes)
         body = _run_async(
             read_bounded_response(
                 response,
-                maximum_bytes=adapter.config.max_response_bytes,
+                maximum_bytes=generated_maximum_bytes,
                 deadline=synthesis_deadline,
                 operation_deadline=operation_deadline,
                 cancellation=cancellation,
@@ -265,7 +266,7 @@ def _seasonal_synthesis(
         write_bounded(
             output,
             body.data,
-            maximum_bytes=adapter.config.max_response_bytes,
+            maximum_bytes=generated_maximum_bytes,
             deadline=synthesis_deadline,
             operation_deadline=operation_deadline,
             cancellation=cancellation,
@@ -566,7 +567,6 @@ class OpenAICompatibleAdapter(_RemoteAdapter):
         deadline: float,
         cancellation: object,
     ) -> ProviderAudio:
-        del request
         try:
             if len(text.encode("utf-8")) > self.config.max_input_bytes:
                 raise ProcessFailure("input_limit", "remote synthesis input exceeded its size limit")
@@ -604,10 +604,11 @@ class OpenAICompatibleAdapter(_RemoteAdapter):
                     )
                 )
                 raise failure
+            generated_maximum_bytes = max(self.config.max_response_bytes, request.output.maximum_bytes)
             body = _run_async(
                 read_bounded_response(
                     response,
-                    maximum_bytes=self.config.max_response_bytes,
+                    maximum_bytes=generated_maximum_bytes,
                     deadline=synthesis_deadline,
                     operation_deadline=deadline,
                     cancellation=cancellation,
@@ -632,7 +633,7 @@ class OpenAICompatibleAdapter(_RemoteAdapter):
             write_bounded(
                 output,
                 body.data,
-                maximum_bytes=self.config.max_response_bytes,
+                maximum_bytes=generated_maximum_bytes,
                 deadline=synthesis_deadline,
                 operation_deadline=deadline,
                 cancellation=cancellation,

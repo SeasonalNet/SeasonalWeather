@@ -9,6 +9,7 @@ from functools import lru_cache
 from importlib import resources
 from typing import Callable, Pattern, cast
 
+from .markup_parser import parse_strict_markup
 from .regex_safety import (
     MAX_CONFIGURED_REGEX_PATTERN,
     MAX_CONFIGURED_REGEX_REPLACEMENT,
@@ -29,6 +30,20 @@ _AWIPS_PHONEME_RE = re.compile(
     re.IGNORECASE,
 )
 _AWIPS_BREAK_RE = re.compile(r'<break\b[^>]*\bstrength="([^"]+)"[^>]*/>', re.IGNORECASE)
+_BARE_AMPERSAND_RE = re.compile(r"&(?!#(?:[0-9]+|x[0-9a-fA-F]+);|[A-Za-z][A-Za-z0-9]+;)")
+_VTML_TAGS = {
+    "vtml_break",
+    "vtml_partofsp",
+    "vtml_pause",
+    "vtml_phoneme",
+    "vtml_pitch",
+    "vtml_sayas",
+    "vtml_speed",
+    "vtml_sub",
+    "vtml_volume",
+}
+_VTML_PHONEME_ALPHABETS = {"ipa", "x-worldbet", "x-sampa", "x-sapi", "x-cmu"}
+_VTML_PARTS_OF_SPEECH = {"unknown", "noun", "verb", "modifier", "function", "interjection"}
 
 # _env_enabled() removed — vtml_lexicon is now passed as a function argument.
 
@@ -578,11 +593,11 @@ def _awips_national_rules() -> tuple[Rule, ...]:
     return tuple(rules)
 
 
-def _user_rule_flags(spec: dict) -> int:
+def _user_rule_flags(spec: dict[str, object]) -> int:
     return re.IGNORECASE if bool(spec.get("ignore_case", False)) else 0
 
 
-def _compile_user_rule_rx(spec: dict) -> Pattern[str]:
+def _compile_user_rule_rx(spec: dict[str, object]) -> Pattern[str]:
     match = str(spec.get("match", "") or "")
     if not match:
         raise ValueError("override is missing 'match'")
@@ -594,8 +609,8 @@ def _compile_user_rule_rx(spec: dict) -> Pattern[str]:
 
 
 def _build_user_rules(
-    alias_overrides: list[dict] | None = None,
-    phoneme_overrides_x_cmu: list[dict] | None = None,
+    alias_overrides: list[dict[str, object]] | None = None,
+    phoneme_overrides_x_cmu: list[dict[str, object]] | None = None,
 ) -> list[Rule]:
     if len(alias_overrides or []) > MAX_CONFIGURED_REGEX_RULES:
         raise ValueError("too many VoiceText alias overrides")
@@ -609,7 +624,7 @@ def _build_user_rules(
 
 
 def _build_user_rule_group(
-    specs: list[dict] | None,
+    specs: list[dict[str, object]] | None,
     replacement_key: str,
     label: str,
     replacement_factory: Callable[[str], Callable[[re.Match[str]], str]],
@@ -632,8 +647,8 @@ def _build_user_rule_group(
 def apply_voicetext_paul_vtml(
     text: str,
     vtml_lexicon: bool = True,
-    alias_overrides: list[dict] | None = None,
-    phoneme_overrides_x_cmu: list[dict] | None = None,
+    alias_overrides: list[dict[str, object]] | None = None,
+    phoneme_overrides_x_cmu: list[dict[str, object]] | None = None,
 ) -> str:
     """
     Apply small, meteorology-focused VTML tweaks.
@@ -654,6 +669,7 @@ def apply_voicetext_paul_vtml(
         rules.extend(_awips_national_rules())
 
     if not rules:
+        validate_voicetext_paul_vtml(text)
         return text
 
     rendered = text
@@ -676,4 +692,93 @@ def apply_voicetext_paul_vtml(
         for index, tag in enumerate(tags):
             rendered = rendered.replace(f"\x00SW_TAG_{index}\x00", tag)
 
+    validate_voicetext_paul_vtml(rendered)
     return rendered
+
+
+def validate_voicetext_paul_vtml(text: str) -> None:
+    """Validate the bounded English VoiceText 3.9 VTML grammar we pass to Paul."""
+
+    if "<vtml_" not in text.casefold():
+        return
+    try:
+        _roots, elements, _outside_text = parse_strict_markup(_BARE_AMPERSAND_RE.sub("&amp;", text))
+    except ValueError as exc:
+        raise ValueError("VoiceText VTML is malformed") from exc
+    for element in elements:
+        tag = element.tag
+        if tag not in _VTML_TAGS:
+            raise ValueError("VoiceText VTML contains an unsupported tag")
+        _validate_vtml_element(tag, element.attributes, element.text)
+
+
+def _validate_vtml_element(tag: str, attributes: dict[str, str], text: str) -> None:
+    if tag == "vtml_break":
+        _require_exact_attributes(attributes, {"level"})
+        _bounded_integer(attributes["level"], 0, 3)
+    elif tag == "vtml_pause":
+        _require_exact_attributes(attributes, {"time"})
+        _bounded_integer(attributes["time"], 0, 65_535)
+    elif tag == "vtml_partofsp":
+        _require_exact_attributes(attributes, {"part"})
+        if attributes["part"].casefold() not in _VTML_PARTS_OF_SPEECH:
+            raise ValueError("VoiceText VTML part of speech is unsupported")
+        _bounded_vtml_text(text)
+    elif tag == "vtml_phoneme":
+        _validate_vtml_phoneme(attributes, text)
+    elif tag in {"vtml_pitch", "vtml_speed", "vtml_volume"}:
+        _require_exact_attributes(attributes, {"value"})
+        bounds = {
+            "vtml_pitch": (50, 200),
+            "vtml_speed": (50, 400),
+            "vtml_volume": (0, 500),
+        }[tag]
+        _bounded_integer(attributes["value"], *bounds)
+    elif tag == "vtml_sub":
+        _validate_vtml_sub(attributes, text)
+    elif tag == "vtml_sayas":
+        _validate_vtml_sayas(attributes, text)
+
+
+def _validate_vtml_phoneme(attributes: dict[str, str], text: str) -> None:
+    if set(attributes) not in ({"ph"}, {"ph", "alphabet"}) or not attributes.get("ph"):
+        raise ValueError("VoiceText VTML phoneme attributes are invalid")
+    if attributes.get("alphabet", "ipa").casefold() not in _VTML_PHONEME_ALPHABETS:
+        raise ValueError("VoiceText VTML phoneme alphabet is unsupported")
+    if len(attributes["ph"]) > 512:
+        raise ValueError("VoiceText VTML phoneme value is overlong")
+    _bounded_vtml_text(text)
+
+
+def _validate_vtml_sub(attributes: dict[str, str], text: str) -> None:
+    _require_exact_attributes(attributes, {"alias"})
+    if not attributes["alias"] or len(attributes["alias"].encode("utf-8")) > 511:
+        raise ValueError("VoiceText VTML alias is empty or overlong")
+    _bounded_vtml_text(text)
+
+
+def _validate_vtml_sayas(attributes: dict[str, str], text: str) -> None:
+    if "interpret-as" not in attributes or not set(attributes) <= {"interpret-as", "format", "detail"}:
+        raise ValueError("VoiceText VTML say-as attributes are invalid")
+    if not attributes["interpret-as"].casefold().startswith("ssml:"):
+        raise ValueError("VoiceText VTML say-as type is unsupported")
+    _bounded_vtml_text(text)
+
+
+def _require_exact_attributes(attributes: dict[str, str], expected: set[str]) -> None:
+    if set(attributes) != expected:
+        raise ValueError("VoiceText VTML attributes are invalid")
+
+
+def _bounded_integer(value: str, minimum: int, maximum: int) -> int:
+    if not value.isascii() or not value.isdigit():
+        raise ValueError("VoiceText VTML numeric value is invalid")
+    parsed = int(value)
+    if not minimum <= parsed <= maximum:
+        raise ValueError("VoiceText VTML numeric value is outside its supported range")
+    return parsed
+
+
+def _bounded_vtml_text(value: str) -> None:
+    if len(value.encode("utf-8")) > 511:
+        raise ValueError("VoiceText VTML text is overlong")

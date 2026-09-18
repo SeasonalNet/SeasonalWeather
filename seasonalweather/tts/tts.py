@@ -64,7 +64,7 @@ class TTS:
     rate_wpm: int
     volume: float
     sample_rate: int
-    text_overrides: list[dict] | None = None
+    text_overrides: list[dict[str, object]] | None = None
     vtp_cfg: object = None
     admission_check: Callable[[], None] | None = None
     activity_context: Callable[[], AbstractContextManager[None]] | None = None
@@ -84,10 +84,25 @@ class TTS:
     openai_compatible_config: object | None = None
     tts_data_base: str | None = None
     diagnostic_sink: object | None = None
+    generated_max_duration_seconds: float = 900.0
     _synthesis_service: SynthesisService | None = field(default=None, init=False, repr=False)
 
-    def _request(self, text: str, *, purpose: str = "routine", deadline_at: dt.datetime | None = None):
-        from .models import BackendId, LocalEngineOptions, SynthesisOutputPolicy, SynthesisPurpose, SynthesisRequest
+    def _request(
+        self,
+        text: str,
+        *,
+        purpose: str = "routine",
+        deadline_at: dt.datetime | None = None,
+        markup_mode: str = "plain",
+    ):
+        from .models import (
+            BackendId,
+            LocalEngineOptions,
+            MarkupMode,
+            SynthesisOutputPolicy,
+            SynthesisPurpose,
+            SynthesisRequest,
+        )
         from .policy import deadline_for
 
         local_engine = self._selected_local_engine()
@@ -100,6 +115,7 @@ class TTS:
             backend=backend,
             fallback_backend=None if self.fallback_backend is None else BackendId(self.fallback_backend),
             text=text,
+            markup_mode=MarkupMode(markup_mode),
             backend_profile_identity=self._backend_profile_identity(backend),
             configuration_generation=configuration_generation,
             deadline_at=deadline_at or deadline_for(SynthesisPurpose(purpose)),
@@ -110,8 +126,21 @@ class TTS:
                 sample_rate_hz=self.sample_rate,
                 voicetext_paul=self._voice_options(),
             ),
-            output=SynthesisOutputPolicy(sample_rate_hz=self.sample_rate, volume=self.volume),
+            output=SynthesisOutputPolicy(
+                sample_rate_hz=self.sample_rate,
+                maximum_duration_seconds=self.generated_max_duration_seconds,
+                maximum_bytes=self._generated_audio_maximum_bytes(),
+                volume=self.volume,
+            ),
             text_overrides=self._text_overrides(),
+        )
+
+    def _generated_audio_maximum_bytes(self) -> int:
+        from ..artifacts.generated_audio import generated_wav_maximum_bytes
+
+        return generated_wav_maximum_bytes(
+            sample_rate_hz=self.sample_rate,
+            maximum_duration_seconds=self.generated_max_duration_seconds,
         )
 
     def _backend_profile_identity(self, backend: object) -> str | None:
@@ -290,11 +319,12 @@ class TTS:
         purpose: str = "routine",
         deadline_at: dt.datetime | None = None,
         cancellation: Event | None = None,
+        markup_mode: str = "plain",
     ):
         if self.admission_check is not None:
             self.admission_check()
         return self._service().synthesize(
-            self._request(text, purpose=purpose, deadline_at=deadline_at),
+            self._request(text, purpose=purpose, deadline_at=deadline_at, markup_mode=markup_mode),
             Path(out_wav),
             cancellation=cancellation,
         )
@@ -374,6 +404,7 @@ class TTS:
         purpose: str = "routine",
         deadline_at: dt.datetime | None = None,
         cancellation: Event | None = None,
+        markup_mode: str = "plain",
     ) -> None:
         result = self.synthesize(
             text,
@@ -381,6 +412,7 @@ class TTS:
             purpose=purpose,
             deadline_at=deadline_at,
             cancellation=cancellation,
+            markup_mode=markup_mode,
         )
         from .models import SynthesisDisposition
 

@@ -11,7 +11,7 @@
       "3": 1
     },
     "SWCFG": {
-      "0": 4,
+      "0": 5,
       "1": 21,
       "2": 5,
       "3": 3,
@@ -1139,6 +1139,25 @@
       "related_codes": ["SWCFG2005"],
       "documentation_references": ["docs/configuration-reload.md"],
       "supported_phases": ["reload"]
+    },
+    {
+      "code": "SWCFG0005",
+      "title": "Generated-audio duration was raised to the supported minimum",
+      "summary": "A configured generated-audio duration below fifteen minutes was normalized to the nonfatal minimum.",
+      "namespace": "SWCFG",
+      "condition_class": 0,
+      "class_justification": "The candidate remains usable after a deterministic nonblocking policy normalization.",
+      "default_severity": "warning",
+      "default_blocking": false,
+      "default_fatal": false,
+      "default_retryable": false,
+      "owner": "configuration-validation",
+      "introduction_version": "0.18.0",
+      "status": "active",
+      "explanation_path": "explanations/SWCFG0005.md",
+      "related_codes": [],
+      "documentation_references": ["docs/generated-audio-policy.md"],
+      "supported_phases": ["advisory", "runtime"]
     },
     {
       "code": "SWCFG2005",

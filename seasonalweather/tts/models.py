@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from ..artifacts.generated_audio import generated_wav_maximum_bytes
 from ..validation.modeling import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 MAX_SYNTHESIS_TEXT = 65_536
@@ -31,6 +32,14 @@ class LocalQualificationDisposition(StrEnum):
     INCOMPATIBLE = "incompatible"
     UNKNOWN = "stale_or_unknown"
     NO_CAPACITY = "no_capacity"
+
+
+class MarkupMode(StrEnum):
+    """Caller-declared synthesis input grammar; never inferred from text."""
+
+    PLAIN = "plain"
+    SSML = "ssml"
+    ENGINE = "engine"
 
 
 @dataclass(frozen=True)
@@ -192,9 +201,22 @@ class LocalEngineOptions(TtsModel):
 class SynthesisOutputPolicy(TtsModel):
     format: str = Field(default="wav", pattern=r"^[a-z][a-z0-9_.-]{1,15}$")
     sample_rate_hz: int = Field(default=48_000, ge=8_000, le=192_000)
-    maximum_bytes: int = Field(default=20 * 1024 * 1024, ge=1, le=1_073_741_824)
-    maximum_duration_seconds: float = Field(default=3_600.0, gt=0, le=86_400)
+    maximum_bytes: int = Field(
+        default_factory=lambda: generated_wav_maximum_bytes(sample_rate_hz=48_000, maximum_duration_seconds=900.0),
+        ge=1,
+    )
+    maximum_duration_seconds: float = Field(default=900.0, ge=900.0)
     volume: float = Field(default=1.0, ge=0.0, le=2.0)
+
+    @model_validator(mode="after")
+    def enforce_derived_byte_floor(self) -> SynthesisOutputPolicy:
+        floor = generated_wav_maximum_bytes(
+            sample_rate_hz=self.sample_rate_hz,
+            maximum_duration_seconds=self.maximum_duration_seconds,
+        )
+        if self.maximum_bytes < floor:
+            object.__setattr__(self, "maximum_bytes", floor)
+        return self
 
 
 class SynthesisRequest(TtsModel):
@@ -202,6 +224,7 @@ class SynthesisRequest(TtsModel):
     backend: BackendId
     fallback_backend: BackendId | None = None
     text: str = Field(min_length=1, max_length=MAX_SYNTHESIS_TEXT)
+    markup_mode: MarkupMode = MarkupMode.PLAIN
     content_identity: str | None = None
     backend_profile_identity: str | None = None
     source_identity: str | None = None
@@ -264,9 +287,13 @@ class SynthesisRequest(TtsModel):
         normalized = preprocess_text(
             self.text,
             self.text_overrides,
+            markup_mode=self.markup_mode.value,
             deadline=time.monotonic() + 1.0,
         )
-        identity = content_identity_for(normalized, self.preprocessing_version)
+        identity = content_identity_for(
+            normalized,
+            f"{self.preprocessing_version}:{self.markup_mode.value}",
+        )
         if self.content_identity is not None and self.content_identity != identity:
             raise ValueError("content_identity does not match the synthesis input")
         object.__setattr__(self, "content_identity", identity)

@@ -13,7 +13,7 @@ from ..job_store.models import ArtifactPublicationReceipt
 from ..jobs.contracts import JobStatus
 from .fencing import ExpectedResultFence, FenceDecision, evaluate_fence
 from .hashing import ContentIdentity, hash_file
-from .media import validate_wav
+from .media import WavPolicy, validate_wav
 from .models import ArtifactClass, ArtifactResult, MediaMetadata
 from .promotion import PromotionService
 from .staging import StagingService
@@ -65,6 +65,7 @@ class ArtifactService:
         failure_injector: Callable[[str], None] = lambda _: None,
         required_targets: tuple[str, ...] = (),
         activity_context: Callable[[], AbstractContextManager[None]] | None = None,
+        wav_policy: WavPolicy | None = None,
     ) -> None:
         self._staging, self._promotion, self._journal, self._clock = staging, promotion, journal, clock
         self._closed = False
@@ -72,6 +73,7 @@ class ArtifactService:
         self._admission_check = admission_check
         self._failure_injector = failure_injector
         self._activity_context = activity_context
+        self._wav_policy = wav_policy or WavPolicy(maximum_duration_seconds=900.0)
         if len(required_targets) > 8:
             raise ValueError("too many required artifact targets")
         self._required_targets = required_targets
@@ -140,7 +142,7 @@ class ArtifactService:
         claim = self._staging.claim(result.artifact)
         self._failure_injector("after_claim")
         computed_media = (
-            validate_wav(claim.path, result.artifact.media)
+            validate_wav(claim.path, result.artifact.media, policy=self._wav_policy)
             if result.artifact.artifact_class is ArtifactClass.WAV
             else None
         )

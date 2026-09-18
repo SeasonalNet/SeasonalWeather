@@ -66,9 +66,13 @@ def test_housekeeper_keeps_db_referenced_audio_even_when_old(tmp_path) -> None:
 
     active_wav = audio_dir / "alert_20260520-110034.wav"
     segment_wav = audio_dir / "cycle_seg_fcst.wav"
+    insert_wav = audio_dir / "insert_20260520-110034.wav"
+    asset_wav = audio_dir / "api_audio_alert_20260520-110034.wav"
     stale_wav = audio_dir / "rebcast_20260520-110034.wav"
     _touch(active_wav, age_seconds=7200)
     _touch(segment_wav, age_seconds=7200)
+    _touch(insert_wav, age_seconds=7200)
+    _touch(asset_wav, age_seconds=7200)
     _touch(stale_wav, age_seconds=7200)
 
     now = dt.datetime.now(dt.timezone.utc)
@@ -82,9 +86,48 @@ def test_housekeeper_keeps_db_referenced_audio_even_when_old(tmp_path) -> None:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                "alert-1", "CAP", "Test", "SVR", "Test", "Test script", str(active_wav),
-                future, future, 0, future, future,
+                "alert-1",
+                "CAP",
+                "Test",
+                "SVR",
+                "Test",
+                "Test script",
+                str(active_wav),
+                future,
+                future,
+                0,
+                future,
+                future,
             ),
+        )
+        conn.execute(
+            """
+            INSERT INTO cycle_inserts (
+                insert_id, kind, title, audio_path, placement, expires_at,
+                repeat_mode, status, actor, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "insert-1",
+                "audio",
+                "Test insert",
+                str(insert_wav),
+                "after_time",
+                future,
+                "once",
+                "active",
+                "test",
+                future,
+                future,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO audio_assets (
+                asset_id, wav_path, created_at, expires_at, meta_json
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            ("asset-1", str(asset_wav), future, future, "{}"),
         )
         conn.execute(
             """
@@ -93,9 +136,11 @@ def test_housekeeper_keeps_db_referenced_audio_even_when_old(tmp_path) -> None:
             ) VALUES (?, ?, ?, ?, ?)
             """,
             (
-                "feed-1", future,
+                "feed-1",
+                future,
                 json.dumps({"id": "feed-1", "links": {"wav": str(active_wav)}}),
-                future, future,
+                future,
+                future,
             ),
         )
 
@@ -116,10 +161,12 @@ def test_housekeeper_keeps_db_referenced_audio_even_when_old(tmp_path) -> None:
     assert stats["generated_audio_deleted"] == 1
     assert active_wav.exists()
     assert segment_wav.exists()
+    assert insert_wav.exists()
+    assert asset_wav.exists()
     assert not stale_wav.exists()
 
 
-def test_housekeeper_size_cap_deletes_oldest_unreferenced_audio(tmp_path) -> None:
+def test_housekeeper_legacy_size_cap_never_bypasses_reference_grace(tmp_path) -> None:
     cfg = _cfg(tmp_path, retention_seconds=86400, max_bytes=10)
     db = SeasonalDatabase(path=str(tmp_path / "state.sqlite3"))
     audio_dir = tmp_path / "audio"
@@ -133,7 +180,54 @@ def test_housekeeper_size_cap_deletes_oldest_unreferenced_audio(tmp_path) -> Non
 
     stats = DatabaseHousekeeper(cfg, db).run_once()
 
-    assert stats["generated_audio_deleted"] == 2
-    assert not oldest.exists()
-    assert not newer.exists()
+    assert stats["generated_audio_deleted"] == 0
+    assert oldest.exists()
+    assert newer.exists()
     assert newest.exists()
+
+
+def test_housekeeper_reaps_only_after_reference_drop_and_restart(tmp_path) -> None:
+    cfg = _cfg(tmp_path, retention_seconds=60)
+    db = SeasonalDatabase(path=str(tmp_path / "state.sqlite3"))
+    wav = tmp_path / "audio" / "cycle_seg_restart.wav"
+    _touch(wav, age_seconds=120)
+    segments = SegmentRepository(db)
+    segments.upsert_entry(
+        {
+            "key": "restart",
+            "title": "Restart",
+            "text": "Restart reference",
+            "audio_path": str(wav),
+            "duration_s": 1.0,
+            "last_updated_ts": 1.0,
+            "refresh_interval_s": 300,
+        }
+    )
+
+    assert DatabaseHousekeeper(cfg, db).run_once()["generated_audio_deleted"] == 0
+    segments.replace_entries([])
+
+    assert DatabaseHousekeeper(cfg, db).run_once()["generated_audio_deleted"] == 1
+    assert not wav.exists()
+
+
+def test_housekeeper_fails_closed_when_reference_inventory_fails(tmp_path, monkeypatch) -> None:
+    cfg = _cfg(tmp_path, retention_seconds=60)
+    db = SeasonalDatabase(path=str(tmp_path / "state.sqlite3"))
+    wav = tmp_path / "audio" / "alert_20260520-110034.wav"
+    _touch(wav, age_seconds=120)
+    housekeeper = DatabaseHousekeeper(cfg, db)
+
+    calls = 0
+
+    def fail_inventory_once(_repository):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("injected reference inventory failure")
+        return []
+
+    monkeypatch.setattr(SegmentRepository, "load_entries", fail_inventory_once)
+
+    assert housekeeper.run_once()["generated_audio_deleted"] == 0
+    assert wav.exists()

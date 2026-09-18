@@ -133,6 +133,23 @@ def _report(text: str | None = None, **context):
     )
 
 
+def test_generated_audio_minimum_is_nonblocking_and_catalog_governed() -> None:
+    text = EXAMPLE.read_text(encoding="utf-8").replace(
+        "  generated_max_duration_seconds: 900",
+        "  generated_max_duration_seconds: 120",
+        1,
+    )
+
+    report = _report(text)
+    issue = next(item for item in report.issues if item.code == "SWCFG0005")
+
+    assert issue.phase is ValidationStage.ADVISORY
+    assert issue.severity is DiagnosticSeverity.WARNING
+    assert not issue.blocking
+    assert issue.path is not None
+    assert issue.path.to_pointer() == "/audio/generated_max_duration_seconds"
+
+
 def test_parse_and_schema_failures_skip_later_stages_without_relabeling() -> None:
     parse = _report("station: [\n")
     schema = _report(EXAMPLE.read_text(encoding="utf-8").replace('  name: "SeasonalWeather"\n', "", 1))

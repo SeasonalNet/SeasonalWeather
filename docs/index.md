@@ -49,6 +49,7 @@ points to the detailed contracts.
 - [SWWP](swwp.md)
 - [Worker capabilities](worker-capabilities.md)
 - [Artifact staging](artifact-staging.md)
+- [Generated-audio policy](generated-audio-policy.md)
 - [Segment registry](segment-registry.md)
 - [Segment behavior](p1-20-segments.md)
 - [Formatter subsystem](formatter-subsystem.md)

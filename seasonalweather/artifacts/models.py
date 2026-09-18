@@ -34,8 +34,8 @@ class MediaMetadata(ArtifactModel):
     sample_width_bytes: int | None = Field(default=None, ge=1, le=8)
     sample_rate_hz: int | None = Field(default=None, ge=8000, le=192000)
     channels: int | None = Field(default=None, ge=1, le=8)
-    frame_count: int | None = Field(default=None, ge=1, le=2_000_000_000)
-    duration_seconds: float | None = Field(default=None, gt=0, le=86400)
+    frame_count: int | None = Field(default=None, ge=1)
+    duration_seconds: float | None = Field(default=None, gt=0)
 
     @field_validator("media_type")
     @classmethod
@@ -57,7 +57,7 @@ class ArtifactReference(ArtifactModel):
     staging_namespace: str = Field(min_length=3, max_length=64)
     staging_token: str = Field(min_length=1, max_length=256)
     claimed_sha256: str
-    claimed_size_bytes: int = Field(ge=1, le=1_073_741_824)
+    claimed_size_bytes: int = Field(ge=1)
     media: MediaMetadata
 
     @field_validator("staging_namespace")

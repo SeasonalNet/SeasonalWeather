@@ -43,6 +43,7 @@ class SynthesisClient(Protocol):
         source_identity: str | None = None,
         event_identity: str | None = None,
         content_identity: str | None = None,
+        markup_mode: str = "plain",
     ) -> None: ...
 
 
@@ -53,6 +54,7 @@ class WorkerSynthesisConfiguration:
     rate_wpm: int
     volume: float
     sample_rate: int
+    generated_max_duration_seconds: float = 900.0
     text_overrides: tuple[dict[str, Any], ...] = ()
     voicetext_paul: dict[str, Any] | None = None
     data_base: str = ""
@@ -68,6 +70,7 @@ class WorkerSynthesisConfiguration:
             rate_wpm=int(tts.rate_wpm),
             volume=float(tts.volume),
             sample_rate=int(configuration.audio.sample_rate),
+            generated_max_duration_seconds=float(getattr(configuration.audio, "generated_max_duration_seconds", 900.0)),
             text_overrides=tuple(dict(item) for item in (tts.text_overrides or ())),
             voicetext_paul=(
                 {
@@ -100,7 +103,9 @@ class WorkerInputStore:
         self.root = Path(root)
         self.maximum_bytes = int(maximum_bytes)
 
-    def put(self, *, text: str, configuration: WorkerSynthesisConfiguration) -> tuple[str, str]:
+    def put(
+        self, *, text: str, configuration: WorkerSynthesisConfiguration, markup_mode: str = "plain"
+    ) -> tuple[str, str]:
         if not text or len(text.encode("utf-8")) > self.maximum_bytes // 2:
             raise ValueError("worker synthesis input is empty or overlong")
         self.root.mkdir(mode=0o750, parents=True, exist_ok=True)
@@ -111,11 +116,13 @@ class WorkerInputStore:
             "content_ref": content_ref,
             "voice_profile_ref": profile_ref,
             "text": text,
+            "markup_mode": markup_mode,
             "engine": configuration.engine,
             "voice": configuration.voice,
             "rate_wpm": configuration.rate_wpm,
             "volume": configuration.volume,
             "sample_rate": configuration.sample_rate,
+            "generated_max_duration_seconds": configuration.generated_max_duration_seconds,
             "text_overrides": list(configuration.text_overrides),
             "voicetext_paul": configuration.voicetext_paul,
             "data_base": configuration.data_base,
@@ -199,6 +206,7 @@ class WorkerSynthesisClient:
         source_identity: str | None = None,
         event_identity: str | None = None,
         content_identity: str | None = None,
+        markup_mode: str = "plain",
     ) -> None:
         if self._job_service is None or self._repository is None or self._active_root is None:
             raise WorkerJobUnavailable("worker job service is not bound")
@@ -207,7 +215,9 @@ class WorkerSynthesisClient:
         if purpose == "administrative":
             purpose = "routine"
         configuration = WorkerSynthesisConfiguration.from_configuration(self.configuration)
-        content_ref, profile_ref = self.input_store.put(text=text, configuration=configuration)
+        if markup_mode not in {"plain", "ssml", "engine"}:
+            raise ValueError("unsupported synthesis markup mode")
+        content_ref, profile_ref = self.input_store.put(text=text, configuration=configuration, markup_mode=markup_mode)
         generation = self.configuration_generation
         now = dt.datetime.now(dt.UTC)
         deadline = deadline_at or (now + dt.timedelta(seconds=180 if purpose == "routine" else 90))

@@ -40,6 +40,7 @@ from seasonalweather.tts.models import (
     BackendId,
     LastKnownGoodCandidate,
     LocalEngineOptions,
+    MarkupMode,
     SynthesisDisposition,
     SynthesisFailure,
     SynthesisOutputPolicy,
@@ -248,9 +249,45 @@ def test_spfy_handler_uses_native_wav_contract_and_bounded_environment(monkeypat
             str(result.output_path),
         ]
     ]
-    assert environments == [{"SPFY_VOICE_DIR": str(voice_dir), "SPFY_NO_UPDATE_CHECK": "1"}]
+    assert environments == [{"SPFY_VOICE_DIR": str(voice_dir), "SPFY_NO_UPDATE_CHECK": "1", "SPFY_RATE": "1.000000"}]
     assert (output_dir / "spfy-input.txt").read_text(encoding="utf-8") == "bounded spfy test\n"
     assert (output_dir / "spfy-input.txt").stat().st_mode & 0o777 == 0o600
+
+
+def test_declared_spfy_markup_is_preserved_and_not_guessed() -> None:
+    from seasonalweather.tts.models import TextOverride
+    from seasonalweather.tts.preprocess import preprocess_text
+
+    marked = '<speak>Take <prosody rate="120%">cover</prosody> \\!p250 now.</speak>'
+    assert preprocess_text(marked, markup_mode="ssml") == marked
+    assert preprocess_text(
+        marked,
+        (TextOverride(match="cover", replace="shelter"),),
+        markup_mode="ssml",
+    ) == marked.replace("cover", "shelter")
+    assert preprocess_text("Take \\!rp120 cover.", markup_mode="engine") == "Take \\!rp120 cover."
+
+
+@pytest.mark.parametrize(
+    "marked",
+    (
+        "<speak><prosody>broken</speak>",
+        "<prosody>missing speak root</prosody>",
+        '<!DOCTYPE speak [<!ENTITY x "unsafe">]><speak>&x;</speak>',
+    ),
+)
+def test_declared_ssml_rejects_malformed_or_unsafe_markup(marked: str) -> None:
+    from seasonalweather.tts.preprocess import preprocess_text
+
+    with pytest.raises(ValueError):
+        preprocess_text(marked, markup_mode="ssml")
+
+
+def test_markup_intent_participates_in_content_identity() -> None:
+    engine = request(text="Take \\!p250 cover.", markup_mode=MarkupMode.ENGINE)
+    plain = request(text="Take \\!p250 cover.", markup_mode=MarkupMode.PLAIN)
+
+    assert engine.content_identity != plain.content_identity
 
 
 @pytest.mark.parametrize(
@@ -1999,278 +2036,278 @@ def test_real_orchestrator_local_composition_uses_controller_qualification_autho
     monkeypatch, tmp_path: Path
 ) -> None:
     """
-    Historical controller-local qualification tests are retained below as
-    reference text only; P3-06 moves this execution boundary to SWWP workers.
-    from seasonalweather.main import Orchestrator
+        Historical controller-local qualification tests are retained below as
+        reference text only; P3-06 moves this execution boundary to SWWP workers.
+        from seasonalweather.main import Orchestrator
 
-    orch = Orchestrator(_production_config(tmp_path, monkeypatch))
-    if not orch.tts.availability()[0]:
-        return
+        orch = Orchestrator(_production_config(tmp_path, monkeypatch))
+        if not orch.tts.availability()[0]:
+            return
 
-    from seasonalweather.artifacts.media import WavPolicy, inspect_wav
-    from seasonalweather.main import Orchestrator
+        from seasonalweather.artifacts.media import WavPolicy, inspect_wav
+        from seasonalweather.main import Orchestrator
 
-    cfg = _production_config(tmp_path, monkeypatch)
-    called: list[str] = []
+        cfg = _production_config(tmp_path, monkeypatch)
+        called: list[str] = []
 
-    class FakeHandler(LocalEngineHandler):
-        engine_id = "espeak-ng"
+        class FakeHandler(LocalEngineHandler):
+            engine_id = "espeak-ng"
 
-        def synthesize(self, text, *, options, output_dir, deadline, cancellation, volume=1.0):
-            del text, options, deadline, cancellation, volume
-            called.append(self.engine_id)
-            output = output_dir / "engine.wav"
-            write_silence_wav(output, 0.1, 48_000)
-            return LocalHandlerResult(output, self.engine_id)
+            def synthesize(self, text, *, options, output_dir, deadline, cancellation, volume=1.0):
+                del text, options, deadline, cancellation, volume
+                called.append(self.engine_id)
+                output = output_dir / "engine.wav"
+                write_silence_wav(output, 0.1, 48_000)
+                return LocalHandlerResult(output, self.engine_id)
 
-    monkeypatch.setattr(LocalEngineRegistry, "handler", classmethod(lambda cls, _engine: FakeHandler()))
-    monkeypatch.setattr(
-        LocalEngineRegistry,
-        "qualification_evidence",
-        classmethod(
-            lambda cls, _engine, _options: LocalCapabilityEvidence(
-                True,
-                "healthy",
-                True,
-                1,
-                1,
-                {
-                    "format": "wav",
-                    "profiles": "espeak-ng",
-                    "voices": "9",
-                    "sample_rates": 48_000,
-                    "max_input_bytes": 65_536,
-                },
+        monkeypatch.setattr(LocalEngineRegistry, "handler", classmethod(lambda cls, _engine: FakeHandler()))
+        monkeypatch.setattr(
+            LocalEngineRegistry,
+            "qualification_evidence",
+            classmethod(
+                lambda cls, _engine, _options: LocalCapabilityEvidence(
+                    True,
+                    "healthy",
+                    True,
+                    1,
+                    1,
+                    {
+                        "format": "wav",
+                        "profiles": "espeak-ng",
+                        "voices": "9",
+                        "sample_rates": 48_000,
+                        "max_input_bytes": 65_536,
+                    },
+                )
+            ),
+        )
+        monkeypatch.setattr(
+            SynthesisService,
+            "_normalize_local_audio",
+            lambda self, source, request, raw_dir, deadline, cancellation: (
+                source,
+                inspect_wav(source, policy=WavPolicy(maximum_duration_seconds=request.output.maximum_duration_seconds)),
+            ),
+        )
+        monkeypatch.setattr("seasonalweather.tts.service.shutil.which", lambda name: f"/fake/{name}")
+        orch = Orchestrator(cfg)
+        orch.lifecycle.mark_running()
+        result = orch.tts.synthesize("controller-local", tmp_path / "qualified.wav")
+        assert result.failure is None
+        assert called == ["espeak-ng"]
+        assert orch.tts.availability() == (True, "tts_available")
+        assert orch.tts_capability_check.registry is orch.capability_registry
+        assert orch.tts_capability_check.local_source is orch.tts_capability_source
+        assert any(
+            snapshot.worker_id == "controller-local-tts"
+            for snapshot in orch.capability_registry.snapshots(dt.datetime.now(dt.UTC))
+        )
+
+        from seasonalweather.configuration_reload.models import ReloadDisposition
+        from seasonalweather.configuration_reload.resources import OrchestratorResourcePreparer
+
+        path = SimpleNamespace(
+            segments=("tts", "local", "voice"),
+            to_pointer=lambda: "/tts/local/voice",
+        )
+        diff = SimpleNamespace(
+            entries=(SimpleNamespace(path=path),),
+            disposition=ReloadDisposition.QUIESCENT,
+            digest="sha256:" + "a" * 64,
+        )
+        replacement_cfg = replace(cfg, tts=replace(cfg.tts, local=replace(cfg.tts.local, voice="8")))
+        replacement = __import__("asyncio").run(
+            OrchestratorResourcePreparer(orch, orch.reload_activities).prepare(
+                replacement_cfg,
+                diff=diff,
+                expected_generation=0,
+                target_generation=1,
+                candidate_identity_sha256="b" * 64,
             )
-        ),
-    )
-    monkeypatch.setattr(
-        SynthesisService,
-        "_normalize_local_audio",
-        lambda self, source, request, raw_dir, deadline, cancellation: (
-            source,
-            inspect_wav(source, policy=WavPolicy(maximum_duration_seconds=request.output.maximum_duration_seconds)),
-        ),
-    )
-    monkeypatch.setattr("seasonalweather.tts.service.shutil.which", lambda name: f"/fake/{name}")
-    orch = Orchestrator(cfg)
-    orch.lifecycle.mark_running()
-    result = orch.tts.synthesize("controller-local", tmp_path / "qualified.wav")
-    assert result.failure is None
-    assert called == ["espeak-ng"]
-    assert orch.tts.availability() == (True, "tts_available")
-    assert orch.tts_capability_check.registry is orch.capability_registry
-    assert orch.tts_capability_check.local_source is orch.tts_capability_source
-    assert any(
-        snapshot.worker_id == "controller-local-tts"
-        for snapshot in orch.capability_registry.snapshots(dt.datetime.now(dt.UTC))
-    )
-
-    from seasonalweather.configuration_reload.models import ReloadDisposition
-    from seasonalweather.configuration_reload.resources import OrchestratorResourcePreparer
-
-    path = SimpleNamespace(
-        segments=("tts", "local", "voice"),
-        to_pointer=lambda: "/tts/local/voice",
-    )
-    diff = SimpleNamespace(
-        entries=(SimpleNamespace(path=path),),
-        disposition=ReloadDisposition.QUIESCENT,
-        digest="sha256:" + "a" * 64,
-    )
-    replacement_cfg = replace(cfg, tts=replace(cfg.tts, local=replace(cfg.tts.local, voice="8")))
-    replacement = __import__("asyncio").run(
-        OrchestratorResourcePreparer(orch, orch.reload_activities).prepare(
-            replacement_cfg,
-            diff=diff,
-            expected_generation=0,
-            target_generation=1,
-            candidate_identity_sha256="b" * 64,
         )
+        assert replacement.tts is not None
+        assert replacement.tts.capability_check is replacement.tts_capability_check
+        assert replacement.tts.capability_check is not orch.tts_capability_check
+        assert replacement.tts.capability_check.local_source is replacement.tts_capability_source
+        assert replacement.tts_capability_source is not None
+        assert replacement.tts_capability_source.configured_options.voice == "8"
+        assert replacement.tts_capability_source.configuration_generation == 1
+
+
+    @pytest.mark.parametrize(
+        "evidence",
+        [
+            LocalCapabilityEvidence(True, "unavailable", False, 1, 0, {}),
+            LocalCapabilityEvidence(True, "healthy", True, 1, 0, {}),
+        ],
     )
-    assert replacement.tts is not None
-    assert replacement.tts.capability_check is replacement.tts_capability_check
-    assert replacement.tts.capability_check is not orch.tts_capability_check
-    assert replacement.tts.capability_check.local_source is replacement.tts_capability_source
-    assert replacement.tts_capability_source is not None
-    assert replacement.tts_capability_source.configured_options.voice == "8"
-    assert replacement.tts_capability_source.configuration_generation == 1
+    def test_real_orchestrator_local_composition_fails_when_controller_capability_is_unusable(
+        monkeypatch, tmp_path: Path, evidence: LocalCapabilityEvidence
+    ) -> None:
+        from seasonalweather.main import Orchestrator
 
+        orch = Orchestrator(_production_config(tmp_path, monkeypatch))
+        if not orch.tts.availability()[0]:
+            return
 
-@pytest.mark.parametrize(
-    "evidence",
-    [
-        LocalCapabilityEvidence(True, "unavailable", False, 1, 0, {}),
-        LocalCapabilityEvidence(True, "healthy", True, 1, 0, {}),
-    ],
-)
-def test_real_orchestrator_local_composition_fails_when_controller_capability_is_unusable(
-    monkeypatch, tmp_path: Path, evidence: LocalCapabilityEvidence
-) -> None:
-    from seasonalweather.main import Orchestrator
+        from seasonalweather.main import Orchestrator
 
-    orch = Orchestrator(_production_config(tmp_path, monkeypatch))
-    if not orch.tts.availability()[0]:
-        return
-
-    from seasonalweather.main import Orchestrator
-
-    cfg = _production_config(tmp_path, monkeypatch)
-    monkeypatch.setattr(
-        LocalEngineRegistry, "qualification_evidence", classmethod(lambda cls, _engine, _options: evidence)
-    )
-    orch = Orchestrator(cfg)
-    orch.lifecycle.mark_running()
-    result = orch.tts.synthesize("controller-local", tmp_path / "rejected.wav")
-    assert result.failure is SynthesisFailure.CAPABILITY_REJECTED
-    assert orch.tts.availability()[0] is False
-
-
-def _reload_diff_for_tts(path_segments: tuple[str, ...], disposition):
-    path = SimpleNamespace(segments=path_segments, to_pointer=lambda: "/" + "/".join(path_segments))
-    return SimpleNamespace(
-        entries=(SimpleNamespace(path=path),),
-        disposition=disposition,
-        digest="sha256:" + "d" * 64,
-    )
-
-
-@pytest.mark.parametrize(
-    ("path", "disposition", "safe_point"),
-    (
-        (
-            ("dedupe", "ttl_seconds"),
-            __import__(
-                "seasonalweather.configuration_reload.models", fromlist=["ReloadDisposition"]
-            ).ReloadDisposition.LIVE,
-            False,
-        ),
-        (
-            ("nwws", "allowed_wfos"),
-            __import__(
-                "seasonalweather.configuration_reload.models", fromlist=["ReloadDisposition"]
-            ).ReloadDisposition.QUIESCENT,
-            True,
-        ),
-    ),
-)
-def test_production_retained_tts_captures_generation_after_non_tts_reload(
-    monkeypatch, tmp_path: Path, path: tuple[str, ...], disposition, safe_point: bool
-) -> None:
-    from seasonalweather.main import Orchestrator
-
-    orch = Orchestrator(_production_config(tmp_path, monkeypatch))
-    if not orch.tts.availability()[0]:
-        return
-
-    from seasonalweather.configuration_reload.resources import OrchestratorResourcePreparer
-    from seasonalweather.main import Orchestrator
-
-    _install_fake_controller_tts(monkeypatch)
-    cfg = _production_config(tmp_path, monkeypatch)
-    orch = Orchestrator(cfg)
-    orch.lifecycle.mark_running()
-    retained = orch.tts
-    replacement_cfg = (
-        replace(cfg, dedupe=replace(cfg.dedupe, ttl_seconds=cfg.dedupe.ttl_seconds + 1))
-        if path[0] == "dedupe"
-        else replace(cfg, nwws=replace(cfg.nwws, allowed_wfos=["KXXX"]))
-    )
-    plan = __import__("asyncio").run(
-        OrchestratorResourcePreparer(orch, orch.reload_activities).prepare(
-            replacement_cfg,
-            diff=_reload_diff_for_tts(path, disposition),
-            expected_generation=0,
-            target_generation=1,
-            candidate_identity_sha256="e" * 64,
+        cfg = _production_config(tmp_path, monkeypatch)
+        monkeypatch.setattr(
+            LocalEngineRegistry, "qualification_evidence", classmethod(lambda cls, _engine, _options: evidence)
         )
+        orch = Orchestrator(cfg)
+        orch.lifecycle.mark_running()
+        result = orch.tts.synthesize("controller-local", tmp_path / "rejected.wav")
+        assert result.failure is SynthesisFailure.CAPABILITY_REJECTED
+        assert orch.tts.availability()[0] is False
+
+
+    def _reload_diff_for_tts(path_segments: tuple[str, ...], disposition):
+        path = SimpleNamespace(segments=path_segments, to_pointer=lambda: "/" + "/".join(path_segments))
+        return SimpleNamespace(
+            entries=(SimpleNamespace(path=path),),
+            disposition=disposition,
+            digest="sha256:" + "d" * 64,
+        )
+
+
+    @pytest.mark.parametrize(
+        ("path", "disposition", "safe_point"),
+        (
+            (
+                ("dedupe", "ttl_seconds"),
+                __import__(
+                    "seasonalweather.configuration_reload.models", fromlist=["ReloadDisposition"]
+                ).ReloadDisposition.LIVE,
+                False,
+            ),
+            (
+                ("nwws", "allowed_wfos"),
+                __import__(
+                    "seasonalweather.configuration_reload.models", fromlist=["ReloadDisposition"]
+                ).ReloadDisposition.QUIESCENT,
+                True,
+            ),
+        ),
     )
-    assert plan.tts is None
-    if safe_point:
-        plan.activate(safe_point_acquired=True)
-    else:
+    def test_production_retained_tts_captures_generation_after_non_tts_reload(
+        monkeypatch, tmp_path: Path, path: tuple[str, ...], disposition, safe_point: bool
+    ) -> None:
+        from seasonalweather.main import Orchestrator
+
+        orch = Orchestrator(_production_config(tmp_path, monkeypatch))
+        if not orch.tts.availability()[0]:
+            return
+
+        from seasonalweather.configuration_reload.resources import OrchestratorResourcePreparer
+        from seasonalweather.main import Orchestrator
+
+        _install_fake_controller_tts(monkeypatch)
+        cfg = _production_config(tmp_path, monkeypatch)
+        orch = Orchestrator(cfg)
+        orch.lifecycle.mark_running()
+        retained = orch.tts
+        replacement_cfg = (
+            replace(cfg, dedupe=replace(cfg.dedupe, ttl_seconds=cfg.dedupe.ttl_seconds + 1))
+            if path[0] == "dedupe"
+            else replace(cfg, nwws=replace(cfg.nwws, allowed_wfos=["KXXX"]))
+        )
+        plan = __import__("asyncio").run(
+            OrchestratorResourcePreparer(orch, orch.reload_activities).prepare(
+                replacement_cfg,
+                diff=_reload_diff_for_tts(path, disposition),
+                expected_generation=0,
+                target_generation=1,
+                candidate_identity_sha256="e" * 64,
+            )
+        )
+        assert plan.tts is None
+        if safe_point:
+            plan.activate(safe_point_acquired=True)
+        else:
+            plan.activate()
+        assert orch.tts is retained
+        assert orch.configuration_generation == 1
+        result = orch.tts.synthesize("retained facade", tmp_path / f"{path[0]}.wav")
+        assert result.failure is None
+        assert result.configuration_generation == 1
+
+
+    def test_production_running_synthesis_keeps_old_generation_and_fails_closed_on_reload(
+        monkeypatch, tmp_path: Path
+    ) -> None:
+        from seasonalweather.main import Orchestrator
+
+        orch = Orchestrator(_production_config(tmp_path, monkeypatch))
+        if not orch.tts.availability()[0]:
+            return
+
+        from seasonalweather.configuration_reload.models import ReloadDisposition
+        from seasonalweather.configuration_reload.resources import OrchestratorResourcePreparer
+        from seasonalweather.main import Orchestrator
+
+        started = threading.Event()
+        release = threading.Event()
+        _install_fake_controller_tts(monkeypatch, release=release, started=started)
+        cfg = _production_config(tmp_path, monkeypatch)
+        orch = Orchestrator(cfg)
+        orch.lifecycle.mark_running()
+        output = tmp_path / "overtaken.wav"
+        holder: dict[str, object] = {}
+
+        def synthesize() -> None:
+            holder["result"] = orch.tts.synthesize("old generation", output)
+
+        worker = threading.Thread(target=synthesize)
+        worker.start()
+        assert started.wait(5)
+        plan = __import__("asyncio").run(
+            OrchestratorResourcePreparer(orch, orch.reload_activities).prepare(
+                replace(cfg, dedupe=replace(cfg.dedupe, ttl_seconds=cfg.dedupe.ttl_seconds + 1)),
+                diff=_reload_diff_for_tts(("dedupe", "ttl_seconds"), ReloadDisposition.LIVE),
+                expected_generation=0,
+                target_generation=1,
+                candidate_identity_sha256="f" * 64,
+            )
+        )
         plan.activate()
-    assert orch.tts is retained
-    assert orch.configuration_generation == 1
-    result = orch.tts.synthesize("retained facade", tmp_path / f"{path[0]}.wav")
-    assert result.failure is None
-    assert result.configuration_generation == 1
+        release.set()
+        worker.join(5)
+        assert not worker.is_alive()
+        assert getattr(holder["result"], "failure", None) is SynthesisFailure.STALE_RESULT
+        assert not output.exists()
 
 
-def test_production_running_synthesis_keeps_old_generation_and_fails_closed_on_reload(
-    monkeypatch, tmp_path: Path
-) -> None:
-    from seasonalweather.main import Orchestrator
+    def test_tts_changing_reload_installs_explicit_target_generation_facade(monkeypatch, tmp_path: Path) -> None:
+        from seasonalweather.main import Orchestrator
 
-    orch = Orchestrator(_production_config(tmp_path, monkeypatch))
-    if not orch.tts.availability()[0]:
-        return
+        orch = Orchestrator(_production_config(tmp_path, monkeypatch))
+        if not orch.tts.availability()[0]:
+            return
 
-    from seasonalweather.configuration_reload.models import ReloadDisposition
-    from seasonalweather.configuration_reload.resources import OrchestratorResourcePreparer
-    from seasonalweather.main import Orchestrator
+        from seasonalweather.configuration_reload.models import ReloadDisposition
+        from seasonalweather.configuration_reload.resources import OrchestratorResourcePreparer
+        from seasonalweather.main import Orchestrator
 
-    started = threading.Event()
-    release = threading.Event()
-    _install_fake_controller_tts(monkeypatch, release=release, started=started)
-    cfg = _production_config(tmp_path, monkeypatch)
-    orch = Orchestrator(cfg)
-    orch.lifecycle.mark_running()
-    output = tmp_path / "overtaken.wav"
-    holder: dict[str, object] = {}
-
-    def synthesize() -> None:
-        holder["result"] = orch.tts.synthesize("old generation", output)
-
-    worker = threading.Thread(target=synthesize)
-    worker.start()
-    assert started.wait(5)
-    plan = __import__("asyncio").run(
-        OrchestratorResourcePreparer(orch, orch.reload_activities).prepare(
-            replace(cfg, dedupe=replace(cfg.dedupe, ttl_seconds=cfg.dedupe.ttl_seconds + 1)),
-            diff=_reload_diff_for_tts(("dedupe", "ttl_seconds"), ReloadDisposition.LIVE),
-            expected_generation=0,
-            target_generation=1,
-            candidate_identity_sha256="f" * 64,
+        _install_fake_controller_tts(monkeypatch)
+        cfg = _production_config(tmp_path, monkeypatch)
+        orch = Orchestrator(cfg)
+        replacement_cfg = replace(cfg, tts=replace(cfg.tts, local=replace(cfg.tts.local, voice="8")))
+        plan = __import__("asyncio").run(
+            OrchestratorResourcePreparer(orch, orch.reload_activities).prepare(
+                replacement_cfg,
+                diff=_reload_diff_for_tts(("tts", "voice"), ReloadDisposition.QUIESCENT),
+                expected_generation=0,
+                target_generation=1,
+                candidate_identity_sha256="1" * 64,
+            )
         )
-    )
-    plan.activate()
-    release.set()
-    worker.join(5)
-    assert not worker.is_alive()
-    assert getattr(holder["result"], "failure", None) is SynthesisFailure.STALE_RESULT
-    assert not output.exists()
-
-
-def test_tts_changing_reload_installs_explicit_target_generation_facade(monkeypatch, tmp_path: Path) -> None:
-    from seasonalweather.main import Orchestrator
-
-    orch = Orchestrator(_production_config(tmp_path, monkeypatch))
-    if not orch.tts.availability()[0]:
-        return
-
-    from seasonalweather.configuration_reload.models import ReloadDisposition
-    from seasonalweather.configuration_reload.resources import OrchestratorResourcePreparer
-    from seasonalweather.main import Orchestrator
-
-    _install_fake_controller_tts(monkeypatch)
-    cfg = _production_config(tmp_path, monkeypatch)
-    orch = Orchestrator(cfg)
-    replacement_cfg = replace(cfg, tts=replace(cfg.tts, local=replace(cfg.tts.local, voice="8")))
-    plan = __import__("asyncio").run(
-        OrchestratorResourcePreparer(orch, orch.reload_activities).prepare(
-            replacement_cfg,
-            diff=_reload_diff_for_tts(("tts", "voice"), ReloadDisposition.QUIESCENT),
-            expected_generation=0,
-            target_generation=1,
-            candidate_identity_sha256="1" * 64,
-        )
-    )
-    assert plan.tts is not None
-    assert plan.tts.configuration_generation == 1
-    plan.activate(safe_point_acquired=True)
-    assert orch.tts is plan.tts
-    assert orch.tts._request("target generation").configuration_generation == 1
+        assert plan.tts is not None
+        assert plan.tts.configuration_generation == 1
+        plan.activate(safe_point_acquired=True)
+        assert orch.tts is plan.tts
+        assert orch.tts._request("target generation").configuration_generation == 1
     """
 
 

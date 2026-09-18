@@ -935,6 +935,17 @@ class AudioConfig:
     eom_beep_seconds: float
     inter_segment_silence_seconds: float
     post_alert_silence_seconds: float
+    generated_max_duration_seconds: float = 900.0
+    generated_duration_was_clamped: bool = False
+
+    @property
+    def generated_audio_policy(self):
+        from .artifacts.generated_audio import GeneratedAudioPolicy
+
+        return GeneratedAudioPolicy(
+            sample_rate_hz=self.sample_rate,
+            maximum_duration_seconds=self.generated_max_duration_seconds,
+        )
 
 
 @dataclass(frozen=True)
@@ -2635,7 +2646,17 @@ def _build_app_config(
     # ------------------------------------------------------------------
     # audio
     # ------------------------------------------------------------------
-    audio = AudioConfig(**raw["audio"])
+    audio_raw = dict(raw["audio"])
+    from .artifacts.generated_audio import normalize_generated_duration
+
+    generated_duration, _generated_duration_clamped = normalize_generated_duration(
+        audio_raw.pop("generated_max_duration_seconds", None)
+    )
+    audio = AudioConfig(
+        **audio_raw,
+        generated_max_duration_seconds=generated_duration,
+        generated_duration_was_clamped=_generated_duration_clamped,
+    )
 
     # ------------------------------------------------------------------
     # controller lifecycle
@@ -2681,7 +2702,7 @@ def _build_app_config(
             startup_delay_seconds=int(db_hk_raw.get("startup_delay_seconds", 45)),
             api_command_retention_days=int(db_hk_raw.get("api_command_retention_days", 14)),
             audio_asset_grace_seconds=int(db_hk_raw.get("audio_asset_grace_seconds", 900)),
-            generated_audio_retention_seconds=int(db_hk_raw.get("generated_audio_retention_seconds", 10800)),
+            generated_audio_retention_seconds=int(db_hk_raw.get("generated_audio_retention_seconds", 300)),
             generated_audio_max_bytes=int(db_hk_raw.get("generated_audio_max_bytes", 1073741824)),
             tmp_file_grace_seconds=int(db_hk_raw.get("tmp_file_grace_seconds", 900)),
             wal_checkpoint=bool(db_hk_raw.get("wal_checkpoint", True)),

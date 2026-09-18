@@ -33,7 +33,14 @@ from ..configuration_reload.validation_job import ValidationJobRunner
 from ..control import OrchestratorControl
 from ..database.bootstrap import bootstrap_database_from_config
 from ..database.configuration_reload import ReloadRepository
-from ..diagnostics.bindings import FOUNDATION_CODES, OBS_CODES, RELOAD_CODES, RUNTIME_CODES, SEGMENT_CODES
+from ..diagnostics.bindings import (
+    FOUNDATION_CODES,
+    OBS_CODES,
+    RELOAD_CODES,
+    RUNTIME_CODES,
+    SEGMENT_CODES,
+    code_for_rule,
+)
 from ..health_service import build_runtime_health_service
 from ..job_store import (
     CommandJobCoordinator,
@@ -583,6 +590,22 @@ async def _run_api_server_impl(
                 generation_provider=lambda: orch.configuration_generation,
             )
         )
+        if bool(getattr(getattr(cfg, "audio", None), "generated_duration_was_clamped", False)):
+            generated_audio_code = code_for_rule("advisory.generated_audio_minimum")
+            configuration_sink = RuntimeDiagnosticSink(
+                diagnostic_service,
+                context,
+                codes={"generated_audio_minimum": generated_audio_code},
+                generation_provider=lambda: orch.configuration_generation,
+            )
+            configuration_sink.emit(
+                generated_audio_code,
+                component="configuration",
+                message="Generated-audio duration was normalized to the supported minimum.",
+                operational_effect="Generated WAV output remains enabled with a 900-second minimum.",
+                recovery_action="Set audio.generated_max_duration_seconds to 900 or a larger finite value.",
+                source_id="runtime-configuration",
+            )
         if hasattr(orch, "db_housekeeper"):
             housekeeper = orch.db_housekeeper
             if housekeeper is not None:
@@ -621,7 +644,8 @@ async def _run_api_server_impl(
             orch,
             job_service.repository,
             work_root=_artifact_root(cfg),
-            maximum_bytes=cfg.jobs.result_max_bytes,
+            maximum_bytes=cfg.audio.generated_audio_policy.maximum_bytes,
+            maximum_duration_seconds=cfg.audio.generated_audio_policy.maximum_duration_seconds,
         )
         orch.artifact_service = artifact_composition.service
         orch.artifact_results = artifact_composition.results

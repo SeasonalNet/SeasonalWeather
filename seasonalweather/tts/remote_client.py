@@ -58,6 +58,7 @@ class RemoteSynthesisClient:
             seasonal_ttsd_config=configuration.tts.seasonal_ttsd,
             openai_compatible_config=configuration.tts.openai_compatible,
             tts_data_base=configuration.paths.operational_state_dir,
+            generated_max_duration_seconds=configuration.audio.generated_max_duration_seconds,
         )
 
     def reconfigure(self, configuration: Any) -> None:
@@ -83,6 +84,7 @@ class RemoteSynthesisClient:
         source_identity: str | None = None,
         event_identity: str | None = None,
         content_identity: str | None = None,
+        markup_mode: str = "plain",
     ) -> None:
         del cancellation, source_identity, event_identity, content_identity
         context = self._activity_context() if self._activity_context is not None else nullcontext()
@@ -94,6 +96,7 @@ class RemoteSynthesisClient:
                     Path(output_path),
                     purpose=purpose,
                     deadline_at=deadline_at,
+                    markup_mode=markup_mode,
                 )
 
         await asyncio.to_thread(render)

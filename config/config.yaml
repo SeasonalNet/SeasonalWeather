@@ -637,6 +637,8 @@ audio:
   eom_beep_seconds: 0.6
   inter_segment_silence_seconds: 0.35
   post_alert_silence_seconds: 1.2
+  # Generated PCM WAV policy. Values below 900 seconds normalize to 900.
+  generated_max_duration_seconds: 900
 
 paths:
   work_dir: "/var/lib/seasonalweather"
@@ -693,8 +695,8 @@ database:
     startup_delay_seconds: 45    # give startup/import a moment before first pass
     api_command_retention_days: 14
     audio_asset_grace_seconds: 900
-    generated_audio_retention_seconds: 10800  # prune unreferenced generated WAVs older than 3h
-    generated_audio_max_bytes: 1073741824     # soft cap: delete oldest unreferenced generated WAVs above 1GiB
+    generated_audio_retention_seconds: 300    # crash/race grace after the last durable reference is gone
+    generated_audio_max_bytes: 1073741824     # legacy compatibility value; never overrides live references
     tmp_file_grace_seconds: 900               # prune stale temp files after 15m
     wal_checkpoint: true
 

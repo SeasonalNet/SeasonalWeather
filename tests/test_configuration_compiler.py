@@ -109,6 +109,29 @@ def test_supported_database_housekeeping_names_preserve_runtime_values(
     assert runtime.database.housekeeping.audio_asset_grace_seconds == 1234
 
 
+def test_generated_audio_duration_is_normalized_by_runtime_loader(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    candidate = tmp_path / "generated-audio-floor.yaml"
+    candidate.write_text(
+        EXAMPLE.read_text(encoding="utf-8").replace(
+            "  generated_max_duration_seconds: 900",
+            "  generated_max_duration_seconds: 120",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ICECAST_SOURCE_PASSWORD", "synthetic-source")
+    monkeypatch.setenv("SEASONAL_API_TOKEN", "synthetic-token")
+
+    config = load_config(str(candidate))
+
+    assert config.audio.generated_max_duration_seconds == 900
+    assert config.audio.generated_duration_was_clamped
+    assert config.audio.generated_audio_policy.maximum_bytes == 172_804_096
+
+
 def test_six_obsolete_live_paths_are_rejected_and_were_runtime_noops() -> None:
     stale_text = _with_obsolete_live_fields(EXAMPLE.read_text(encoding="utf-8"))
     compiled = compile_source(_source(stale_text), environ={})
