@@ -26,4 +26,6 @@ def test_tts_image_smoke_decodes_and_rejects_silent_wavs() -> None:
     assert "VoiceTextPaulHandler().synthesize(" in smoke
     assert 'wave.open(str(path), "rb")' in smoke
     assert "peak < 128 or rms < 16.0" in smoke
-    assert 'voice="en-US/tom"' in smoke
+    assert 'voice="tom"' in smoke
+    assert '"--list-voices", "--json"' in smoke
+    assert '"discovered_voices": discovered' in smoke

@@ -353,10 +353,19 @@ def test_timeout_terminates_and_reaps_worker_and_descendant_process_group(tmp_pa
     )
     baseline = {child.pid for child in multiprocessing.active_children()}
 
-    result = asyncio.run(run_preflight((probe,), executor=_SpawnProbeExecutor(worker_target=_defective_tree_worker)))[0]
+    executor = _SpawnProbeExecutor(worker_target=_defective_tree_worker)
+
+    async def exercise_timeout_after_worker_setup() -> tuple[ProbeObservation, ProbeFailureKind | None]:
+        def controlled_monotonic() -> float:
+            return 1.0 if _read_pid_pair(pid_file) is not None else 0.0
+
+        return await asyncio.wait_for(executor.observe(probe, controlled_monotonic), timeout=10.0)
+
+    observation, failure_kind = asyncio.run(exercise_timeout_after_worker_setup())
     pid_pair = _read_pid_pair(pid_file)
 
-    assert result.failure_kind is ProbeFailureKind.TIMEOUT
+    assert observation.status is ProbeStatus.INDETERMINATE
+    assert failure_kind is ProbeFailureKind.TIMEOUT
     assert pid_pair is not None
     worker_pid, child_pid = pid_pair
     assert not _pid_exists(worker_pid)
