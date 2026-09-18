@@ -10,6 +10,7 @@ def test_tts_image_smoke_runs_real_engines_under_hardened_containers() -> None:
 
     assert "seasonalweather-worker:spfy" in script
     assert "seasonalweather-worker:voicetext-paul" in script
+    assert "--interactive" in script
     assert "--read-only" in script
     assert "--network none" in script
     assert "--cap-drop ALL" in script
@@ -17,6 +18,9 @@ def test_tts_image_smoke_runs_real_engines_under_hardened_containers() -> None:
     assert "--profile spfy" in script
     assert "--profile voicetext-paul" in script
     assert "Xvfb :99" in script
+    assert "type=bind" not in script
+    assert "python - --profile voicetext-paul" in script
+    assert '"${spfy_image}" - --profile spfy < "${smoke_script}"' in script
 
 
 def test_tts_image_smoke_decodes_and_rejects_silent_wavs() -> None:

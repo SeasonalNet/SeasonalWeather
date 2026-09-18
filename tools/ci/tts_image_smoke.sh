@@ -8,18 +8,18 @@ voicetext_image="${SEASONALWEATHER_VOICETEXT_SMOKE_IMAGE:-seasonalweather-worker
 
 common=(
   --rm
+  --interactive
   --read-only
   --network none
   --cap-drop ALL
   --security-opt no-new-privileges
   --tmpfs /tmp:rw,nosuid,nodev,size=512m,mode=1777
   --tmpfs /run:rw,nosuid,nodev,size=64m,mode=755
-  --mount "type=bind,src=${smoke_script},dst=/opt/tts-engine-smoke.py,readonly"
 )
 
 docker run "${common[@]}" \
   --entrypoint python \
-  "${spfy_image}" /opt/tts-engine-smoke.py --profile spfy
+  "${spfy_image}" - --profile spfy < "${smoke_script}"
 
 docker run "${common[@]}" \
   --mount type=volume,dst=/var/lib/seasonalweather/voices/voicetext_paul \
@@ -30,7 +30,7 @@ docker run "${common[@]}" \
   "${voicetext_image}" -ceu '
     mkdir -p /tmp/.X11-unix /tmp/voicetext/home
     chmod 0700 /tmp/.X11-unix /tmp/voicetext/home
-    Xvfb :99 -screen 0 1024x768x24 -nolisten tcp -noreset -ac &
+    Xvfb :99 -screen 0 1024x768x24 -nolisten tcp -noreset -ac </dev/null &
     xvfb_pid=$!
     cleanup() {
       kill "${xvfb_pid}" 2>/dev/null || true
@@ -42,5 +42,5 @@ docker run "${common[@]}" \
       sleep 0.1
     done
     [[ -S /tmp/.X11-unix/X99 ]]
-    python /opt/tts-engine-smoke.py --profile voicetext-paul
-  '
+    python - --profile voicetext-paul
+  ' < "${smoke_script}"
