@@ -65,11 +65,13 @@ class _ScriptedExecutor:
         self.delay = delay
         self.active = 0
         self.maximum_active = 0
+        self.started = asyncio.Event()
 
     async def observe(self, probe, monotonic):
         del monotonic
         self.active += 1
         self.maximum_active = max(self.maximum_active, self.active)
+        self.started.set()
         try:
             if probe.identifier in self.blocked:
                 await asyncio.Event().wait()
@@ -239,7 +241,7 @@ def test_preflight_cancellation_propagates_to_injected_executor() -> None:
     async def scenario() -> None:
         executor = _ScriptedExecutor(blocked=frozenset({"blocked"}))
         task = asyncio.create_task(run_preflight((_probe("blocked", required=False, timeout=1.0),), executor=executor))
-        await asyncio.sleep(0.03)
+        await asyncio.wait_for(executor.started.wait(), timeout=1.0)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
@@ -351,10 +353,19 @@ def test_timeout_terminates_and_reaps_worker_and_descendant_process_group(tmp_pa
     )
     baseline = {child.pid for child in multiprocessing.active_children()}
 
-    result = asyncio.run(run_preflight((probe,), executor=_SpawnProbeExecutor(worker_target=_defective_tree_worker)))[0]
+    executor = _SpawnProbeExecutor(worker_target=_defective_tree_worker)
+
+    async def exercise_timeout_after_worker_setup() -> tuple[ProbeObservation, ProbeFailureKind | None]:
+        def controlled_monotonic() -> float:
+            return 1.0 if _read_pid_pair(pid_file) is not None else 0.0
+
+        return await asyncio.wait_for(executor.observe(probe, controlled_monotonic), timeout=10.0)
+
+    observation, failure_kind = asyncio.run(exercise_timeout_after_worker_setup())
     pid_pair = _read_pid_pair(pid_file)
 
-    assert result.failure_kind is ProbeFailureKind.TIMEOUT
+    assert observation.status is ProbeStatus.INDETERMINATE
+    assert failure_kind is ProbeFailureKind.TIMEOUT
     assert pid_pair is not None
     worker_pid, child_pid = pid_pair
     assert not _pid_exists(worker_pid)

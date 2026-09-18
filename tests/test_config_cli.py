@@ -6,9 +6,19 @@ from pathlib import Path
 import pytest
 
 from seasonalweather.cli.config import main
+from seasonalweather.validation import preflight as preflight_module
+from seasonalweather.validation.preflight import _dispatch_framework_probe
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE = REPO_ROOT / "config/config.yaml"
+
+
+class _InlineFrameworkProbeExecutor:
+    """Exercise framework-owned probes without subprocess scheduling noise."""
+
+    async def observe(self, probe, monotonic):
+        del monotonic
+        return _dispatch_framework_probe(probe.specification), None
 
 
 def test_config_lint_valid_human_mode(capsys) -> None:
@@ -125,6 +135,7 @@ def test_config_lint_preflight_is_explicit_read_only_and_does_not_create_databas
     monkeypatch,
     capsys,
 ) -> None:
+    monkeypatch.setattr(preflight_module, "_SpawnProbeExecutor", _InlineFrameworkProbeExecutor)
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     executable = tmp_path / "espeak-ng"
