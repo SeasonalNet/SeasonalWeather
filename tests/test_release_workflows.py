@@ -39,6 +39,7 @@ def test_github_release_image_publishing_is_gated_before_release_creation() -> N
 
 def test_forgejo_release_publishes_assets_without_image_registry_access() -> None:
     release = (ROOT / ".forgejo/workflows/release.yml").read_text()
+    assert "runs-on: [docker, cobalt-builder]" in release
     assert "Publish Forgejo release" in release
     assert "release-images" not in release
     assert "bootstrap_docker.sh" not in release
