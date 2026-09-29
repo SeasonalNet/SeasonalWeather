@@ -30,11 +30,11 @@ def test_p2_09_forgejo_confines_docker_to_dedicated_builder() -> None:
     workflow = (ROOT / ".forgejo/workflows/ci.yml").read_text(encoding="utf-8")
     python_job, image_job = workflow.split("  images:\n", maxsplit=1)
 
-    assert "runs-on: [docker, cobalt]" in python_job
+    assert "runs-on: [docker, slate]" in python_job
     assert "make check" in python_job
     assert "bootstrap_docker.sh" not in python_job
     assert "needs: python" in image_job
-    assert "runs-on: [docker, cobalt-builder]" in image_job
+    assert "runs-on: [docker, slate-builder]" in image_job
     assert "bash ./tools/ci/bootstrap_docker.sh" in image_job
     assert "make phase2-images" in image_job
     assert image_job.index("bootstrap_docker.sh") < image_job.index("Install Python tooling")
