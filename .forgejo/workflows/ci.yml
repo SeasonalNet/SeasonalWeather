@@ -12,7 +12,7 @@ on:
 
 jobs:
   python:
-    runs-on: [docker, cobalt]
+    runs-on: [docker, slate]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -61,7 +61,7 @@ jobs:
 
   images:
     needs: python
-    runs-on: [docker, cobalt-builder]
+    runs-on: [docker, slate-builder]
     steps:
       - uses: actions/checkout@v6
         with:

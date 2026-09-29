@@ -51,14 +51,16 @@ inline suppressions.
 
 Forgejo is the canonical SeasonalWeather CI authority:
 
-- `.forgejo/workflows/ci.yml` runs `make check` on `cobalt` with the
+- `.forgejo/workflows/ci.yml` runs `make check` on `slate-runner` with the
   explicit suppression comparison base, then runs `make phase2-images` on the
-  dedicated `cobalt-builder` Docker lane. The image gate also synthesizes a
+  dedicated `slate-builder` Docker lane. The image gate also synthesizes a
   representative utterance through the built Speechify and VoiceText Paul
   images and rejects invalid or effectively silent WAV output.
 - `.forgejo/workflows/security.yml` runs the repository Gitleaks contract.
 - `.forgejo/workflows/semver.yml` validates PEP 440 working versions and
   SemVer release tags.
+  Both jobs keep generic runner labels so any compatible SeasonalForge runner
+  can claim them.
 
 GitHub parity is maintained in the corresponding `.github/workflows/` files.
 GitHub uses `ubuntu-latest` and the equivalent hosted-runner package setup;
@@ -66,7 +68,7 @@ the repository phase gate, suppression base selection, security scan, and
 SemVer guardrails remain the same. The Release workflow calls all three
 workflows as reusable jobs and publishes only after all three pass. GitHub uses
 its native Docker support.
-Forgejo's CI-only bootstrap runs only on `cobalt-builder`, installs only the
+Forgejo's CI-only bootstrap runs only on `slate-builder`, installs only the
 Docker client, and rejects a missing runner-owned endpoint; ordinary runners
 receive no Docker authority. The administrator contract is documented in
 [`forgejo-runner-docker.md`](forgejo-runner-docker.md). GitHub results are
