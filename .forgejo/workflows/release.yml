@@ -30,6 +30,9 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ forge.ref }}
+      - name: Prepare runner-provided Docker
+        shell: bash
+        run: bash ./tools/ci/bootstrap_docker.sh
       - name: Cache Python packages
         uses: actions/cache@v4
         continue-on-error: true
@@ -48,6 +51,21 @@ jobs:
           uv sync --frozen --active --group controller --group worker-runtime --group dev
           make release-artifacts SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
           test -n "$(find dist/release -maxdepth 1 -type f -print -quit)"
+      - name: Log in to Harbor
+        env:
+          HARBOR_CI_USERNAME: ${{ secrets.HARBOR_CI_USERNAME }}
+          HARBOR_CI_PASSWORD: ${{ secrets.HARBOR_CI_PASSWORD }}
+        run: printf '%s' "$HARBOR_CI_PASSWORD" | docker login registry.lan.seasonalnet.org --username "$HARBOR_CI_USERNAME" --password-stdin
+      - name: Build and publish Harbor images
+        env:
+          IMAGE_REPOSITORY_BASE: registry.lan.seasonalnet.org/seasonalnet/seasonalweather
+          IMAGE_TAG: ${{ forge.ref_name }}
+        run: |
+          . .venv-release/bin/activate
+          source_date_epoch="$(git show -s --format=%ct HEAD)"
+          make PYTHON=.venv-release/bin/python TARGET_PLATFORM=linux/amd64 \
+              IMAGE_REPOSITORY_BASE="$IMAGE_REPOSITORY_BASE" IMAGE_TAG="$IMAGE_TAG" \
+              SOURCE_DATE_EPOCH="$source_date_epoch" release-images
       - name: Publish Forgejo release
         uses: https://code.forgejo.org/actions/forgejo-release@v2.13.4
         with:
