@@ -60,10 +60,12 @@ runtime compatibility check consumes a software version.
 Pushing an annotated `v*` tag starts the Release workflow after CI, Security,
 and SemVer guardrails have all passed. It builds the source distribution and
 wheel, plus `SHA256SUMS`, in `dist/release/`. Both providers publish those
-release assets. The GitHub workflow additionally builds and pushes all declared
-controller and worker image profiles to GHCR, and writes
-`IMAGE-REFERENCES.txt` with the exact image references included by that
-release. The release is published only after its required assets are complete.
+release assets. The GitHub workflow builds and pushes all declared controller
+and worker image profiles to GHCR. The Forgejo workflow builds the same profile
+matrix and pushes it to the internal Harbor registry using the `HARBOR_CI_*`
+organization secrets. Each provider writes `IMAGE-REFERENCES.txt` with the
+exact references for its registry. The release is published only after its
+required assets are complete.
 No release is published for an untagged commit.
 
 Container image tags are profile-qualified and immutable. For a release such
@@ -73,15 +75,17 @@ as `v0.18.0-alpha.2`, the controller and development images use the
 deployment should use these exact release references rather than a mutable
 `latest` tag.
 
-GHCR is the canonical release image registry:
+GHCR is the canonical public release image registry:
 `ghcr.io/seasonalnet/seasonalweather` for controller and development images,
 and `ghcr.io/seasonalnet/seasonalweather-worker` for worker profiles. The
-Compose deployment should use the exact profile-qualified references recorded
-in `dist/release/IMAGE-REFERENCES.txt`; it should not reconstruct them from a
-provider-specific registry hostname.
+Forgejo release also publishes the matching profile-qualified images to
+`registry.lan.seasonalnet.org/seasonalnet/seasonalweather` and
+`registry.lan.seasonalnet.org/seasonalnet/seasonalweather-worker` for internal
+use. Each workflow writes its own exact image references to
+`dist/release/IMAGE-REFERENCES.txt`; use those references rather than
+reconstructing them from a registry hostname.
 
-The Forgejo workflow intentionally does not authenticate to a container
-registry or build images. Its automatic `forge.token` is used only to publish
-the source, wheel, and checksum assets. This keeps Forgejo release publication
-available without sending large image layers through the proxied Forgejo
-registry path; GitHub remains the image build and publication authority.
+The Forgejo workflow uses `HARBOR_CI_USERNAME` and `HARBOR_CI_PASSWORD` only
+for the internal Harbor registry. Its automatic `forge.token` remains limited
+to publishing the source, wheel, and checksum assets. Forgejo does not publish
+image layers through its proxied package registry path.
