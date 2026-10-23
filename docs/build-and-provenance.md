@@ -118,9 +118,10 @@ dependency installation or image build. The cache is an acceleration mechanism
 only; quality, test, image inspection, and release publication gates still run.
 
 Forgejo's automatic workflow token is sufficient for creating the Forgejo
-release assets. No package-registry credentials are required by the Forgejo
-release workflow. GitHub is the image build and publication authority, using
-the workflow's GHCR package permission.
+release assets. The release workflow uses the `HARBOR_CI_USERNAME` and
+`HARBOR_CI_PASSWORD` organization secrets to publish profile-qualified images
+to the internal Harbor registry. GitHub publishes the corresponding image
+matrix to GHCR using the workflow's package permission.
 
 The runtime loads the embedded record when present and uses a bounded source
 fallback for unbuilt checkouts. The same identity feeds `seasonalweather

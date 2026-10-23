@@ -13,14 +13,15 @@ def test_release_workflows_require_all_gates_and_publish_release_directory() -> 
         assert "uses: ./" + provider + "/workflows/semver.yml" in release
         assert "needs: [ci, security, semver]" in release
         assert "dist/release" in release
+        assert "release-images" in release
+        assert "IMAGE_REPOSITORY_BASE" in release
+        assert "IMAGE_TAG" in release
         if provider == ".github":
-            assert "release-images" in release
-            assert "IMAGE_REPOSITORY_BASE" in release
-            assert "IMAGE_TAG" in release
+            assert "ghcr.io/seasonalnet/seasonalweather" in release
         else:
-            assert "release-images" not in release
-            assert "IMAGE_REPOSITORY_BASE" not in release
-            assert "IMAGE_TAG" not in release
+            assert "registry.lan.seasonalnet.org/seasonalnet/seasonalweather" in release
+            assert "secrets.HARBOR_CI_USERNAME" in release
+            assert "secrets.HARBOR_CI_PASSWORD" in release
 
 
 def test_release_gate_workflows_are_reusable() -> None:
@@ -37,12 +38,16 @@ def test_github_release_image_publishing_is_gated_before_release_creation() -> N
     assert image_step < provider_release
 
 
-def test_forgejo_release_publishes_assets_without_image_registry_access() -> None:
+def test_forgejo_release_publishes_images_to_harbor_and_release_assets() -> None:
     release = (ROOT / ".forgejo/workflows/release.yml").read_text()
     assert "runs-on: [docker, slate-builder]" in release
+    assert "needs: [ci, security, semver]" in release
     assert "Publish Forgejo release" in release
-    assert "release-images" not in release
-    assert "bootstrap_docker.sh" not in release
+    assert "bootstrap_docker.sh" in release
+    assert "registry.lan.seasonalnet.org/seasonalnet/seasonalweather" in release
+    assert "secrets.HARBOR_CI_USERNAME" in release
+    assert "secrets.HARBOR_CI_PASSWORD" in release
+    assert "release-images" in release
     assert "PACKAGE_REGISTRY_" not in release
 
 
@@ -90,6 +95,7 @@ def test_github_release_publishes_images_to_ghcr() -> None:
     forgejo_release = (ROOT / ".forgejo/workflows/release.yml").read_text()
     github_release = (ROOT / ".github/workflows/release.yml").read_text()
 
-    assert "SW_IMAGE_PUSH_MODE" not in forgejo_release
+    assert "ghcr.io/" not in forgejo_release
+    assert "registry.lan.seasonalnet.org/seasonalnet/seasonalweather" in forgejo_release
     assert "ghcr.io/seasonalnet/seasonalweather" in github_release
     assert "release-images" in github_release
