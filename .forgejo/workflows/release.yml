@@ -44,13 +44,15 @@ jobs:
       - name: Install release tooling
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends make python3 python3-venv python3-pip
+          apt-get install -y --no-install-recommends ca-certificates make python3 python3-venv python3-pip
           python3 -m venv .venv-release
           . .venv-release/bin/activate
           python -m pip install --upgrade pip uv==0.12.4
           uv sync --frozen --active --group controller --group worker-runtime --group dev
           make release-artifacts SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
           test -n "$(find dist/release -maxdepth 1 -type f -print -quit)"
+      - name: Trust the SeasonalNet Harbor CA
+        run: update-ca-certificates
       - name: Log in to Harbor
         env:
           HARBOR_CI_USERNAME: ${{ secrets.HARBOR_CI_USERNAME }}
