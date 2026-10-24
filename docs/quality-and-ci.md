@@ -11,6 +11,15 @@ boundaries, and container security. Existing finding ceilings are ratchets:
 they may be reduced when debt is removed, but they are not raised to accept a
 new finding.
 
+Repository-wide source discovery excludes generated virtual environments
+(`.venv` and `.venv-*`), `build`, `dist`, and tool caches. The architecture and
+suppression scanners share a directory-pruning walker that still examines new,
+untracked source files. basedpyright and deptry exclude these generated trees
+as well. CI creates the project interpreter in `.venv`; basedpyright uses that
+environment for dependency resolution. Other quality commands scan their
+explicit application, test, or tooling source directories, or named contract
+files. Baselines and application-source checks remain enforced.
+
 ## Suppression guardrail
 
 `make suppressions-check` runs

@@ -13,10 +13,10 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 from tools.quality.governance import ROOT
+from tools.quality.source_files import python_sources
 
 SuppressionKey = tuple[str, str]
 
-_SKIP_DIRECTORIES = frozenset({".git", ".venv", ".venv-ci", "build", "__pycache__"})
 _SUPPRESSION = re.compile(
     r"#\s*(?P<directive>"
     r"noqa(?:\s*:[^#]*)?|"
@@ -31,13 +31,6 @@ _SUPPRESSION = re.compile(
     r")",
     re.IGNORECASE,
 )
-
-
-def _source_files(root: Path) -> Iterable[Path]:
-    for path in sorted(root.rglob("*.py")):
-        if not _SKIP_DIRECTORIES.isdisjoint(path.relative_to(root).parts):
-            continue
-        yield path
 
 
 def _collect_text(relative: str, text: str) -> Counter[SuppressionKey]:
@@ -63,7 +56,7 @@ def collect_suppressions(root: Path) -> Counter[SuppressionKey]:
     """Collect inline suppression directives from the current source tree."""
 
     findings: Counter[SuppressionKey] = Counter()
-    for path in _source_files(root):
+    for path in python_sources(root):
         relative = path.relative_to(root).as_posix()
         findings.update(_collect_text(relative, path.read_text(encoding="utf-8")))
     return findings

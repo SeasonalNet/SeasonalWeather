@@ -79,3 +79,13 @@ def test_suppression_scanner_ignores_directive_text_outside_comments(tmp_path):
     )
 
     assert sum(collect_suppressions(tmp_path).values()) == 1
+
+
+@pytest.mark.parametrize("directory", [".venv-bootstrap", ".venv-ci", ".venv-release", "build", "dist", ".cache"])
+def test_suppression_scanner_ignores_generated_directories(tmp_path, directory):
+    (tmp_path / "module.py").write_text("value = object()  # noqa: F841\n", encoding="utf-8")
+    bootstrap = tmp_path / directory / "lib/python3.11/site-packages"
+    bootstrap.mkdir(parents=True)
+    (bootstrap / "third_party.py").write_text("value = object()  # type: ignore\n", encoding="utf-8")
+
+    assert sum(collect_suppressions(tmp_path).values()) == 1

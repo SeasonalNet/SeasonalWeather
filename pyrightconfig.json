@@ -1,11 +1,16 @@
 {
   "$schema": "https://raw.githubusercontent.com/DetachHead/basedpyright/refs/heads/main/packages/vscode-pyright/schemas/pyrightconfig.schema.json",
   "exclude": [
-    ".venv",
-    ".venv-ci",
-    ".venv-bootstrap",
+    "**/.venv",
+    "**/.venv-*",
+    "**/__pycache__",
+    "**/node_modules",
     "build",
+    "dist",
     ".cache",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
     "tests/architecture/fixtures/invalid"
   ],
   "venvPath": ".",

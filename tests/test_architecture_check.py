@@ -1,3 +1,5 @@
+import pytest
+
 from tools.quality.architecture_check import scan
 from tools.quality.governance import ROOT, load_toml
 
@@ -7,6 +9,18 @@ CONFIG = load_toml(ROOT / "quality/architecture.toml")
 
 def test_valid_architecture_fixture_passes():
     assert scan(FIXTURES / "valid", CONFIG) == []
+
+
+@pytest.mark.parametrize("directory", [".venv-bootstrap", ".venv-ci", ".venv-release", "build", "dist", ".cache"])
+def test_architecture_scanner_ignores_generated_trees_but_checks_new_source(tmp_path, directory):
+    generated = tmp_path / directory / "lib"
+    generated.mkdir(parents=True)
+    (generated / "third_party.py").write_text("if ???\n", encoding="utf-8")
+    (tmp_path / "new_module.py").write_text("if ???\n", encoding="utf-8")
+
+    findings = scan(tmp_path, CONFIG)
+
+    assert [(finding.rule, finding.path) for finding in findings] == [("SWARCH000", "new_module.py")]
 
 
 def test_project_metadata_dependency_profiles_have_independent_boundaries(tmp_path):

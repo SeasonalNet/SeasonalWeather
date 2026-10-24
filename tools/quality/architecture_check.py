@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.quality.governance import ROOT, load_toml
+from tools.quality.source_files import python_sources, source_files
 
 
 @dataclass(frozen=True, order=True)
@@ -64,9 +65,7 @@ def _imports(tree: ast.AST, module: str) -> Iterable[tuple[str, int]]:
 
 def _module_index(root: Path) -> dict[str, Path]:
     modules: dict[str, Path] = {}
-    for path in sorted(root.rglob("*.py")):
-        if any(part in {".git", ".venv", ".venv-ci", "__pycache__"} for part in path.parts):
-            continue
+    for path in python_sources(root):
         if path.relative_to(root).as_posix().startswith("tests/architecture/fixtures/"):
             continue
         modules[_module_name(path, root)] = path
@@ -626,10 +625,8 @@ def scan(root: Path, config: dict[str, Any], exceptions: list[dict[str, Any]] | 
     worker_roots = config["worker_roots"]
     controller_roots = config["controller_roots"]
 
-    for path in sorted(root.rglob("*.py")):
+    for path in python_sources(root):
         relative = path.relative_to(root).as_posix()
-        if any(part in {".git", ".venv", ".venv-ci", "__pycache__"} for part in path.parts):
-            continue
         if relative.startswith("tests/architecture/fixtures/"):
             continue
         try:
@@ -1437,7 +1434,7 @@ def scan(root: Path, config: dict[str, Any], exceptions: list[dict[str, Any]] | 
         directory = root / script_root
         if not directory.is_dir():
             continue
-        for path in sorted(candidate for candidate in directory.rglob("*") if candidate.is_file()):
+        for path in source_files(directory):
             if path.suffix == ".py":
                 continue
             relative = path.relative_to(root).as_posix()
@@ -1445,10 +1442,10 @@ def scan(root: Path, config: dict[str, Any], exceptions: list[dict[str, Any]] | 
                 lines = path.read_text(encoding="utf-8").splitlines()
             except UnicodeDecodeError:
                 continue
-            for line_number, line in enumerate(lines, start=1):
-                lowered = line.lower()
+            for line_number, script_line in enumerate(lines, start=1):
+                lowered = script_line.lower()
                 if relative not in config.get("json_persistence_allowed_scripts", []) and _JSON_SHELL_MUTATION.search(
-                    line
+                    script_line
                 ):
                     findings.append(
                         Finding(
