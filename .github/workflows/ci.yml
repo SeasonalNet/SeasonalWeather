@@ -67,8 +67,8 @@ jobs:
           . .venv-bootstrap/bin/activate
           python -m pip install --upgrade pip uv==0.13.5
           .venv-bootstrap/bin/uv python install 3.15.1
-          .venv-bootstrap/bin/uv venv --clear --python 3.15.1 .venv-ci
-          . .venv-ci/bin/activate
+          .venv-bootstrap/bin/uv venv --clear --python 3.15.1 .venv
+          . .venv/bin/activate
           .venv-bootstrap/bin/uv sync --frozen --active --group controller --group worker-runtime --group dev
       - name: Audit locked Python dependencies
         run: .venv-bootstrap/bin/uv audit --locked --preview-features audit-command
@@ -76,5 +76,5 @@ jobs:
         uses: docker/setup-buildx-action@v3
       - name: Run the Phase 2 exit gate and real TTS image smokes
         run: |
-          . .venv-ci/bin/activate
+          . .venv/bin/activate
           make phase2-gate PYTEST_XDIST_ARGS="-n 4 --dist=loadfile"
