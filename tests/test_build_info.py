@@ -279,6 +279,6 @@ def test_image_matrix_declares_all_revision_profiles() -> None:
 
     assert all(f'target "{target}"' in matrix for target in IMAGE_TARGETS)
     assert 'target "common"' in matrix
-    assert 'variable "SW_VERSION" { default = "0.18.0" }' in matrix
-    assert 'variable "SW_BUILD_IDENTITY" { default = "seasonalweather-0.18.0" }' in matrix
+    assert 'variable "SW_VERSION" { default = "0.0.0+unknown" }' in matrix
+    assert 'variable "SW_BUILD_IDENTITY" { default = "seasonalweather-unknown" }' in matrix
     assert '"io.seasonalweather.build.identity"' in matrix
