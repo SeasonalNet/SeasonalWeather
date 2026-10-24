@@ -97,6 +97,7 @@ non_dev_dependency_groups = ["controller"]
 extend_exclude = [
   "tests/architecture/fixtures",
   "tools/quality",
+  "(^|/)(build|dist|\\.cache|\\.mypy_cache|\\.pytest_cache|\\.ruff_cache)(/|$)",
 ]
 
 [tool.bandit]
