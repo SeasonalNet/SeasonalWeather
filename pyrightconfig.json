@@ -3,10 +3,13 @@
   "exclude": [
     ".venv",
     ".venv-ci",
+    ".venv-bootstrap",
     "build",
     ".cache",
     "tests/architecture/fixtures/invalid"
   ],
+  "venvPath": ".",
+  "venv": ".venv",
   "ignore": [
     "tests/architecture/fixtures/invalid"
   ]
