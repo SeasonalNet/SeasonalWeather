@@ -53,10 +53,10 @@ jobs:
           python3 -m venv .venv-bootstrap
           . .venv-bootstrap/bin/activate
           python -m pip install --upgrade pip uv==0.13.5
-          uv python install 3.15.1
-          uv venv --clear --python 3.15.1 .venv-ci
+          .venv-bootstrap/bin/uv python install 3.15.1
+          .venv-bootstrap/bin/uv venv --clear --python 3.15.1 .venv-ci
           . .venv-ci/bin/activate
-          uv sync --frozen --active --group controller --group worker-runtime --group dev
+          .venv-bootstrap/bin/uv sync --frozen --active --group controller --group worker-runtime --group dev
       - name: Audit locked Python dependencies
         run: .venv-bootstrap/bin/uv audit --locked --preview-features audit-command
       - name: Run the repository check interface
@@ -90,7 +90,7 @@ jobs:
           python3 -m venv .venv-ci
           . .venv-ci/bin/activate
           python -m pip install --upgrade pip uv==0.13.5
-          uv sync --frozen --active --group controller --group worker-runtime --group dev
+          .venv-ci/bin/uv sync --frozen --active --group controller --group worker-runtime --group dev
       - name: Build, inspect, and synthesize with the Phase 2 image matrix
         run: |
           . .venv-ci/bin/activate
