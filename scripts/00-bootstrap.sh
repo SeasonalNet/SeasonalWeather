@@ -408,10 +408,18 @@ rsync -a --delete "${SRC_DIR}/" /opt/seasonalweather/app/
 # Python venv
 # -----------------------------------------------------------------------------------------
 log "Creating Python venv"
-if [[ ! -d /opt/seasonalweather/venv ]]; then
-  python3 -m venv /opt/seasonalweather/venv
+if [[ ! -x /opt/seasonalweather/.uv-bootstrap/bin/uv ]]; then
+  python3 -m venv /opt/seasonalweather/.uv-bootstrap
 fi
-/opt/seasonalweather/venv/bin/python -m pip install --upgrade pip uv==0.12.4
+/opt/seasonalweather/.uv-bootstrap/bin/python -m pip install --upgrade pip uv==0.13.5
+/opt/seasonalweather/.uv-bootstrap/bin/uv python install 3.15.1
+PYTHON_VERSION=3.15.1
+if [[ "${SEASONAL_PIPER:-0}" == "1" ]]; then
+  PYTHON_VERSION=3.14.9
+  /opt/seasonalweather/.uv-bootstrap/bin/uv python install "${PYTHON_VERSION}"
+fi
+/opt/seasonalweather/.uv-bootstrap/bin/uv venv --clear --python "${PYTHON_VERSION}" /opt/seasonalweather/venv
+/opt/seasonalweather/venv/bin/python -m pip install --upgrade pip uv==0.13.5
 cd /opt/seasonalweather/app
 if [[ "${SEASONAL_PIPER:-0}" == "1" ]]; then
   log "Installing Piper Python TTS stack"
