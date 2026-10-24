@@ -58,7 +58,7 @@ jobs:
           . .venv-ci/bin/activate
           uv sync --frozen --active --group controller --group worker-runtime --group dev
       - name: Audit locked Python dependencies
-        run: uv audit --locked --preview-features audit-command
+        run: .venv-bootstrap/bin/uv audit --locked --preview-features audit-command
       - name: Run the repository check interface
         run: |
           . .venv-ci/bin/activate

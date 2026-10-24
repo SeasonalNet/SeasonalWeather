@@ -9,4 +9,4 @@ except ImportError:
     except PackageNotFoundError:
         # Uninstalled source checkouts retain a bounded development fallback;
         # controlled builds derive the authoritative package version from Git.
-        __version__ = "0.17.0"
+        __version__ = "0.0.0+unknown"

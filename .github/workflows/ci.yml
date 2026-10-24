@@ -71,7 +71,7 @@ jobs:
           . .venv-ci/bin/activate
           uv sync --frozen --active --group controller --group worker-runtime --group dev
       - name: Audit locked Python dependencies
-        run: uv audit --locked --preview-features audit-command
+        run: .venv-bootstrap/bin/uv audit --locked --preview-features audit-command
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Run the Phase 2 exit gate and real TTS image smokes
