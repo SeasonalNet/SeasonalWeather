@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
-ARG UV_VERSION=0.12.4
-ARG PYTHON_BASE=python:3.11-slim-bookworm
+ARG UV_VERSION=0.13.5
+ARG PYTHON_BASE=python:3.15-slim@sha256:044d5bd747976e21f8bc4d746c3479b19a84bb8ae6261b802acdd26b29036c93
 ARG RUST_IMAGE=rust:1.85-bookworm
 ARG SAMEDEC_VERSION=0.4.2
 
@@ -78,6 +78,9 @@ ENV PATH="/opt/venv/bin:${PATH}" \
     SW_CAPABILITY_MANIFEST_VERSION="${SW_CAPABILITY_MANIFEST_VERSION}"
 
 WORKDIR /build
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends build-essential cmake \
+    && rm -rf /var/lib/apt/lists/*
 RUN python -m venv /opt/venv
 
 COPY --from=uv /uv /uvx /usr/local/bin/

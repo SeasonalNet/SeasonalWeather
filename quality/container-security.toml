@@ -3,7 +3,7 @@ status = "active"
 owner = "SeasonalWeather maintainers"
 rationale = "P2-05 defines the runtime hardening and secret-isolation contract consumed by each image profile before deployment wiring exists."
 scope = "Controller and worker image profiles; Compose topology and lifecycle remain owned by later packets."
-review_date = "2026-10-23"
+review_date = "2026-10-24"
 removal_condition = "Replace this contract only when the image profiles or their deployment security authority are deliberately revised."
 
 profiles = ["controller", "routine-worker", "piper", "espeak", "festival", "dectalk", "legacy-tts", "voicetext-paul", "spfy", "maintenance", "development"]

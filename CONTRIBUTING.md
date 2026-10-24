@@ -20,9 +20,8 @@ Create and activate a virtual environment, then install runtime and development
 dependencies:
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-uv sync --frozen --group controller --group worker-runtime --group dev
+uv venv --python 3.15.1 .venv
+uv sync --group controller --group worker-runtime --group dev
 ```
 
 Use the repository's existing environment and dependency conventions. Do not

@@ -203,4 +203,4 @@ source locations. Add compatibility dimensions as explicit ranges or sets.
 Add advisory rules with stable ownership and removal conditions. Add probes
 only for existing dependencies through the validation-owned specification
 factory; inject executors only in tests. All public conditions require canonical catalog bindings and curated
-explanations. Code must remain compatible with Python 3.11.
+explanations. The supported runtime baseline is Python 3.15.1.

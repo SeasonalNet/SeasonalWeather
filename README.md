@@ -13,6 +13,13 @@ It is hobbyist-developed, and under [SeasonalNet](https://www.seasonalnet.org).
 > It is not a NOAA, NWS, FEMA, EAS, or NWR service and should not be used as a
 > life-safety alert source. For reliable information, you should instead use your regions resources, such as NOAA Weather Radio, [weather.gov](https://weather.gov) and local authorities.
 
+## Runtime and dependency tooling
+
+The controller and standard workers use CPython 3.15.1 and uv 0.13.5. The
+optional Piper worker remains on CPython 3.14.9 because its ONNX Runtime
+dependency does not yet publish Python 3.15 wheels. Set `SEASONAL_PIPER=1` for
+the source installer; the `piper` image target uses the compatible 3.14 image.
+
 ## Overview
 
 SeasonalWeather can combine:

@@ -61,7 +61,7 @@ jobs:
         run: |
           python3 -m venv .venv-release
           . .venv-release/bin/activate
-          python -m pip install --upgrade pip uv==0.12.4
+          python -m pip install --upgrade pip uv==0.13.5
           uv sync --frozen --active --group controller --group worker-runtime --group dev
       - name: Build release artifacts
         run: |

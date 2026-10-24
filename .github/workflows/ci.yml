@@ -62,11 +62,16 @@ jobs:
       - name: Install Python tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends make python3 python3-venv python3-pip
-          python3 -m venv .venv-ci
+          sudo apt-get install -y --no-install-recommends build-essential cmake make python3 python3-venv python3-pip
+          python3 -m venv .venv-bootstrap
+          . .venv-bootstrap/bin/activate
+          python -m pip install --upgrade pip uv==0.13.5
+          uv python install 3.15.1
+          uv venv --clear --python 3.15.1 .venv-ci
           . .venv-ci/bin/activate
-          python -m pip install --upgrade pip uv==0.12.4
           uv sync --frozen --active --group controller --group worker-runtime --group dev
+      - name: Audit locked Python dependencies
+        run: uv audit --locked --preview-features audit-command
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Run the Phase 2 exit gate and real TTS image smokes

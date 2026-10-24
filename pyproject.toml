@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "seasonalweather"
 description = "Weather automation and alert orchestration service"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 dynamic = ["version"]
 dependencies = [
     "pydantic==2.13.4",
@@ -19,7 +19,7 @@ controller = [
     "bcrypt==5.0.0",
     "coloredlogs==15.0.1",
     "fastapi==0.139.0",
-    "httpx2==2.9.1",
+    "httpx2==2.12.0",
     "passlib==1.7.4",
     "PyMySQL==1.2.0",
     "python-dateutil==2.9.0.post0",
@@ -34,7 +34,7 @@ worker-runtime = [
     "websockets==15.0.1",
 ]
 piper = [
-    "piper-tts",
+    "piper-tts; python_version < '3.15'",
 ]
 dev = [
     "bandit==1.9.4",
@@ -102,3 +102,7 @@ extend_exclude = [
 [tool.bandit]
 exclude_dirs = ["tests", ".venv", ".venv-ci"]
 recursive = true
+
+[tool.uv]
+required-version = "==0.13.5"
+extra-build-dependencies = { pycares = ["cmake==4.4.4"] }

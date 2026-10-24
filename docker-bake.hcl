@@ -17,6 +17,8 @@ variable "SW_SOURCE_DATE_EPOCH" { default = "" }
 variable "SW_IMAGE_PROFILE" { default = "source" }
 variable "SW_TARGET_PLATFORM" { default = "unknown" }
 variable "SW_PYTHON_VERSION" { default = "unknown" }
+variable "SW_PIPER_PYTHON_VERSION" { default = "3.14.9" }
+variable "SW_PIPER_PYTHON_BASE" { default = "python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8" }
 variable "SW_SWWP_PROTOCOL_VERSIONS" { default = "1" }
 variable "SW_JOB_PAYLOAD_SCHEMA_VERSIONS" { default = "1" }
 variable "SW_JOB_RESULT_SCHEMA_VERSIONS" { default = "1" }
@@ -102,7 +104,11 @@ target "routine-worker" {
 target "piper" {
   inherits = ["common"]
   dockerfile = "Dockerfile.worker"
-  args = { SW_IMAGE_PROFILE = "piper" }
+  args = {
+    SW_IMAGE_PROFILE = "piper"
+    SW_PYTHON_VERSION = SW_PIPER_PYTHON_VERSION
+    PYTHON_BASE = SW_PIPER_PYTHON_BASE
+  }
   labels = { "io.seasonalweather.build.profile" = "piper" }
   tags = ["seasonalweather-worker:piper"]
 }
