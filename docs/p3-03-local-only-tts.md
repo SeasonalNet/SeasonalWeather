@@ -88,6 +88,12 @@ substitute another backend.
 The Festival profile carries Debian Festival and the `kal_diphone` voice. The
 DECtalk profile builds the checksum-pinned 2023-10-30 upstream source archive
 inside the worker build and carries its `say` runtime under `/opt/dectalk`.
+The build applies `docker/dectalk/gcc14-compat.patch` to correct the command
+buffer allocation and legacy C declarations for GCC 14. GTK development
+libraries are omitted so upstream's optional graphical frontends are not
+built for this headless worker. The image gate runs a real DECtalk synthesis
+under the worker's non-root, read-only, network-isolated container profile and
+checks the WAV for valid, non-silent audio.
 The espeak profile carries only `espeak-ng` and the common FFmpeg finalizer.
 
 All local-TTS workers use the P3-02 volume contract: the artifact root is

@@ -12,7 +12,7 @@ import wave
 from array import array
 from pathlib import Path
 
-from seasonalweather.tts.local import SpfyHandler, VoiceTextPaulHandler
+from seasonalweather.tts.local import DecTalkHandler, SpfyHandler, VoiceTextPaulHandler
 from seasonalweather.tts.models import LocalEngineOptions
 from seasonalweather.tts.subprocess import run_bounded
 
@@ -47,6 +47,14 @@ def _synthesize(profile: str, output_dir: Path) -> Path:
         result = SpfyHandler().synthesize(
             '<speak>Seasonal Weather synthesis smoke test.<break time="250ms"/>Audio is operational.</speak>',
             options=options,
+            output_dir=output_dir,
+            deadline=deadline,
+            cancellation=None,
+        )
+    elif profile == "dectalk":
+        result = DecTalkHandler().synthesize(
+            "Seasonal Weather synthesis smoke test. Winds west at ten knots.",
+            options=LocalEngineOptions(engine="dectalk", voice="9", rate_wpm=165),
             output_dir=output_dir,
             deadline=deadline,
             cancellation=None,
@@ -103,7 +111,7 @@ def _inspect_audio(profile: str, path: Path) -> dict[str, float | int | str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--profile", required=True, choices=("spfy", "voicetext-paul"))
+    parser.add_argument("--profile", required=True, choices=("spfy", "voicetext-paul", "dectalk"))
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix=f"{args.profile}-smoke-", dir="/tmp") as temporary:
         result = _inspect_audio(args.profile, _synthesize(args.profile, Path(temporary)))
