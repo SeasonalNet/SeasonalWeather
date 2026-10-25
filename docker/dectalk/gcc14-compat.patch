@@ -1,0 +1,104 @@
+--- a/src/dapi/src/cmd/cm_main.c
++++ b/src/dapi/src/cmd/cm_main.c
+@@ -179 +179 @@
+-			if((pCmd_t->cm = (int*)calloc(total_commands,sizeof(int) ))== NULL)
++			if((pCmd_t->cm = calloc(total_commands, sizeof(*pCmd_t->cm)))== NULL)
+--- a/src/dapi/src/cmd/par_dict.c
++++ b/src/dapi/src/cmd/par_dict.c
+@@ -71 +71 @@
+-#if defined ARM7 || defined __EMSCRIPTEN__ || defined (__APPLE__)
++#if defined ARM7 || defined __EMSCRIPTEN__ || defined (__APPLE__) || defined (__linux__)
+--- a/src/dapi/src/lts/l_gr_ru1.c
++++ b/src/dapi/src/lts/l_gr_ru1.c
+@@ -51 +51 @@
+-extern ls_rule_show_phone(PHONE *, PHONE *, char *); // NAL warning removal
++extern int ls_rule_show_phone(PHONE *, PHONE *, char *); // NAL warning removal
+--- a/src/dapi/src/lts/walker.c
++++ b/src/dapi/src/lts/walker.c
+@@ -1375 +1375,2 @@
+-  S16 i,j,ii,jj,j1,j2;
++  S16 i,j,ii;
++  int jj,j1,j2;
+--- a/src/dapi/src/ph/ph_task.c
++++ b/src/dapi/src/ph/ph_task.c
+@@ -157 +157 @@
+-#if defined (__APPLE__)
++#if defined (__APPLE__) || defined (__linux__)
+--- a/src/dapi/src/include/pipe.h
++++ b/src/dapi/src/include/pipe.h
+@@ -73 +73 @@
+-void write_pipe( LPPIPE_T, unsigned char *, UINT );
++void write_pipe( LPPIPE_T, void *, UINT );
+@@ -75 +75 @@
+-void read_pipe( LPPIPE_T, unsigned char *, UINT );
++void read_pipe( LPPIPE_T, void *, UINT );
+@@ -77 +77 @@
+-void read_pipeEx( LPPIPE_T *pPipe, unsigned char * pItems, UINT uiNumberToRead );
++void read_pipeEx( LPPIPE_T *pPipe, void * pItems, UINT uiNumberToRead );
+--- a/src/dapi/src/nt/pipe.c
++++ b/src/dapi/src/nt/pipe.c
+@@ -400 +400 @@
+-void write_pipe( LPPIPE_T pPipe, unsigned char * pItems, UINT uiNumberToWrite )
++void write_pipe( LPPIPE_T pPipe, void * pBuffer, UINT uiNumberToWrite )
+@@ -401,0 +402 @@
++  unsigned char *pItems = pBuffer;
+@@ -780 +781 @@
+-void read_pipe( LPPIPE_T pPipe, unsigned char * pItems, UINT uiNumberToRead )
++void read_pipe( LPPIPE_T pPipe, void * pItems, UINT uiNumberToRead )
+@@ -785 +786 @@
+-void read_pipeEx( LPPIPE_T *pPipe, unsigned char * pItems, UINT uiNumberToRead )
++void read_pipeEx( LPPIPE_T *pPipe, void * pBuffer, UINT uiNumberToRead )
+@@ -786,0 +788 @@
++	unsigned char *pItems = pBuffer;
+--- a/src/dapi/src/include/kernel.h
++++ b/src/dapi/src/include/kernel.h
+@@ -471,2 +471,2 @@
+-	unsigned char _far *    _far *          lang_typing;
+-	unsigned char _far *    _far *          lang_error;
++	const unsigned char _far *    _far *          lang_typing;
++	const unsigned char _far *    _far *          lang_error;
+@@ -818,2 +818,2 @@
+-	volatile unsigned char _far * _far *		typing_table;
+-	volatile unsigned char _far *   _far *		error_table;
++	volatile const unsigned char _far * _far *		typing_table;
++	volatile const unsigned char _far *   _far *		error_table;
+--- a/src/dtalkml/src/dtalk_ml.c
++++ b/src/dtalkml/src/dtalk_ml.c
+@@ -465 +465 @@
+-	funcs->TextToSpeechReset = (MMRESULT ((_cdecl*)())) GetProcAddress(funcs->mod,"TextToSpeechReset");
++	funcs->TextToSpeechReset = (MMRESULT (_cdecl *)(LPTTS_HANDLE_T, BOOL)) GetProcAddress(funcs->mod,"TextToSpeechReset");
+@@ -490 +490 @@
+-	funcs->TextToSpeechTyping = (VOID ((_cdecl*)())) GetProcAddress(funcs->mod,"TextToSpeechTyping");
++	funcs->TextToSpeechTyping = (VOID (_cdecl *)(LPTTS_HANDLE_T, unsigned char)) GetProcAddress(funcs->mod,"TextToSpeechTyping");
+@@ -493 +493 @@
+-	funcs->TextToSpeechReserved1 = (ULONG ((_cdecl*)())) GetProcAddress(funcs->mod,"TextToSpeechReserved1");
++	funcs->TextToSpeechReserved1 = (ULONG (_cdecl *)(UCHAR *, U8, BOOL, BOOL)) GetProcAddress(funcs->mod,"TextToSpeechReserved1");
+@@ -507 +507 @@
+-	funcs->TextToSpeechDictionaryHit = (DWORD ((_cdecl*)())) GetProcAddress(funcs->mod,"TextToSpeechDictionaryHit");
++	funcs->TextToSpeechDictionaryHit = (int (_cdecl *)(LPTTS_HANDLE_T, struct dic_entry *)) GetProcAddress(funcs->mod,"TextToSpeechDictionaryHit");
+@@ -509 +509 @@
+-	funcs->TextToSpeechUserDictionaryHit = (DWORD ((_cdecl*)())) GetProcAddress(funcs->mod,"TextToSpeechUserDictionaryHit");
++	funcs->TextToSpeechUserDictionaryHit = (int (_cdecl *)(LPTTS_HANDLE_T, struct dic_entry *)) GetProcAddress(funcs->mod,"TextToSpeechUserDictionaryHit");
+@@ -518 +518 @@
+-	funcs->TextToSpeechGetPhVdefParams = (DWORD ((_cdecl*)())) GetProcAddress(funcs->mod,"TextToSpeechGetPhVdefParams");
++	funcs->TextToSpeechGetPhVdefParams = (short *(_cdecl *)(LPTTS_HANDLE_T, UINT)) GetProcAddress(funcs->mod,"TextToSpeechGetPhVdefParams");
+@@ -769 +769 @@
+-	*a = handle;
++	*a = (LPTTS_HANDLE_T)handle;
+--- a/src/samplosf/src/dtsamples/dtmemory.c
++++ b/src/samplosf/src/dtsamples/dtmemory.c
+@@ -89,0 +90 @@
++#include <string.h>
+@@ -213 +214 @@
+-main( int argc, char *argv[] )
++int main( int argc, char *argv[] )
+--- a/src/licunix/src/csn.c
++++ b/src/licunix/src/csn.c
+@@ -10 +10 @@
+-#if defined (__APPLE__)
++#if defined (__APPLE__) || defined (__linux__)
+--- a/src/udicunix/src/udic_com.c
++++ b/src/udicunix/src/udic_com.c
+@@ -158 +158 @@
+-main(int argc,char *argv[])
++int main(int argc,char *argv[])

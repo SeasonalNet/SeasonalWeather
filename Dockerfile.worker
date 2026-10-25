@@ -86,19 +86,29 @@ RUN case "${SW_IMAGE_PROFILE}" in \
     esac
 
 COPY docker/spfy/voice-manifest.txt /tmp/spfy-voice-manifest.txt
+COPY docker/dectalk/gcc14-compat.patch /tmp/dectalk-gcc14-compat.patch
 RUN set -eux; \
     mkdir -p /var/lib/seasonalweather/voices/voicetext_paul/WeatherRadioSuite-LIB /opt/spfy /opt/dectalk/dectalk/dist; \
     case "${SW_IMAGE_PROFILE}" in \
       dectalk) \
         apt-get update; \
         apt-get install --yes --no-install-recommends autoconf automake build-essential ca-certificates curl git \
-          libasound2-dev libgtk2.0-dev libpulse-dev unzip; \
+          libasound2-dev libpulse-dev unzip; \
         mkdir -p /tmp/dectalk-src; \
         curl --fail --location --retry 5 --retry-all-errors \
           --connect-timeout 30 --max-time 1800 \
           --output /tmp/dectalk.tar.gz "${DECTALK_SOURCE_URL}"; \
         echo "${DECTALK_SOURCE_SHA256}  /tmp/dectalk.tar.gz" | sha256sum --check --strict -; \
         tar -xzf /tmp/dectalk.tar.gz -C /tmp/dectalk-src --strip-components=1; \
+        sed -i 's/[[:space:]]*$//' /tmp/dectalk-src/src/dapi/src/cmd/cm_main.c /tmp/dectalk-src/src/dapi/src/cmd/par_dict.c \
+          /tmp/dectalk-src/src/dapi/src/lts/l_gr_ru1.c /tmp/dectalk-src/src/dapi/src/lts/walker.c \
+          /tmp/dectalk-src/src/dapi/src/ph/ph_task.c \
+          /tmp/dectalk-src/src/dapi/src/include/kernel.h /tmp/dectalk-src/src/dapi/src/include/pipe.h \
+          /tmp/dectalk-src/src/dapi/src/nt/pipe.c \
+          /tmp/dectalk-src/src/dtalkml/src/dtalk_ml.c \
+          /tmp/dectalk-src/src/samplosf/src/dtsamples/dtmemory.c \
+          /tmp/dectalk-src/src/licunix/src/csn.c /tmp/dectalk-src/src/udicunix/src/udic_com.c; \
+        git -C /tmp/dectalk-src apply --unidiff-zero /tmp/dectalk-gcc14-compat.patch; \
         cd /tmp/dectalk-src/src; \
         ./configure; make -j"$(nproc)"; \
         test -x ../dist/say; \
@@ -153,7 +163,7 @@ RUN set -eux; \
         rm -rf /var/lib/apt/lists/* ;; \
       *) rm -f /tmp/spfy-voice-manifest.txt ;; \
     esac
-RUN rm -f /tmp/spfy-voice-manifest.txt
+RUN rm -f /tmp/spfy-voice-manifest.txt /tmp/dectalk-gcc14-compat.patch
 
 COPY seasonalweather ./seasonalweather
 RUN uv pip install --python /opt/venv/bin/python --no-deps .

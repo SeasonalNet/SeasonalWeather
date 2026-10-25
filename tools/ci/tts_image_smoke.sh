@@ -4,6 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 smoke_script="${repo_root}/tools/ci/tts_engine_smoke.py"
 spfy_image="${SEASONALWEATHER_SPFY_SMOKE_IMAGE:-seasonalweather-worker:spfy}"
+dectalk_image="${SEASONALWEATHER_DECTALK_SMOKE_IMAGE:-seasonalweather-worker:dectalk}"
 voicetext_image="${SEASONALWEATHER_VOICETEXT_SMOKE_IMAGE:-seasonalweather-worker:voicetext-paul}"
 
 common=(
@@ -16,6 +17,10 @@ common=(
   --tmpfs /tmp:rw,nosuid,nodev,size=512m,mode=1777
   --tmpfs /run:rw,nosuid,nodev,size=64m,mode=755
 )
+
+docker run "${common[@]}" \
+  --entrypoint python \
+  "${dectalk_image}" - --profile dectalk < "${smoke_script}"
 
 docker run "${common[@]}" \
   --entrypoint python \
