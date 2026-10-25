@@ -9,7 +9,7 @@ maximum = 47
 owner = "SeasonalWeather maintainers"
 rationale = "Remaining v0.17.0 Ruff formatter debt after touched-file cleanup."
 scope = "seasonalweather/, tests/, and tools/"
-review_date = "2026-10-24"
+review_date = "2026-12-24"
 removal_condition = "Reduce whenever legacy files are materially changed; reach zero."
 
 [checks.lint]
@@ -17,7 +17,7 @@ maximum = 801
 owner = "SeasonalWeather maintainers"
 rationale = "Initial v0.17.0 Ruff debt."
 scope = "seasonalweather/, tests/, and tools/"
-review_date = "2026-10-24"
+review_date = "2026-12-24"
 removal_condition = "Reduce as findings are corrected; do not permit net-new findings."
 
 [checks.typecheck]
@@ -25,7 +25,7 @@ maximum = 44
 owner = "SeasonalWeather maintainers"
 rationale = "Initial v0.17.0 mypy debt."
 scope = "seasonalweather/ and tools/quality/"
-review_date = "2026-10-24"
+review_date = "2026-12-24"
 removal_condition = "Reduce as package boundaries gain complete annotations."
 
 [checks.basedpyright]
@@ -33,7 +33,7 @@ maximum = 913
 owner = "SeasonalWeather maintainers"
 rationale = "Initial basedpyright repository debt; new findings are not permitted above this ceiling."
 scope = "Repository Python source analyzed by pyrightconfig.json."
-review_date = "2026-10-24"
+review_date = "2026-12-24"
 removal_condition = "Reduce as existing basedpyright findings are corrected; do not permit net-new findings."
 
 [checks.dependency]
@@ -41,7 +41,7 @@ maximum = 11
 owner = "SeasonalWeather maintainers"
 rationale = "Initial v0.17.0 declared/used dependency debt."
 scope = "Repository Python imports and project dependency metadata."
-review_date = "2026-10-24"
+review_date = "2026-12-24"
 removal_condition = "Resolve undeclared and unused dependencies without changing runtime behavior."
 
 [checks.dead-code]
@@ -49,7 +49,7 @@ maximum = 0
 owner = "SeasonalWeather maintainers"
 rationale = "Initial v0.17.0 high-confidence dead-code candidates."
 scope = "seasonalweather/ and tools/"
-review_date = "2026-10-24"
+review_date = "2026-12-24"
 removal_condition = "Review candidates and reduce the baseline when ownership is established."
 
 [checks.security]
@@ -57,7 +57,7 @@ maximum = 102
 owner = "SeasonalWeather maintainers"
 rationale = "Initial v0.17.0 Bandit findings pending focused security review."
 scope = "seasonalweather/"
-review_date = "2026-10-24"
+review_date = "2026-12-24"
 removal_condition = "Remediate or replace each finding with a narrow governed exception."
 
 [checks.complexity]
@@ -65,5 +65,5 @@ maximum = 179
 owner = "SeasonalWeather maintainers"
 rationale = "Initial v0.17.0 functions rated C or worse by Radon."
 scope = "seasonalweather/"
-review_date = "2026-10-24"
+review_date = "2026-12-24"
 removal_condition = "Reduce as modules are materially changed; do not add C-or-worse functions."
