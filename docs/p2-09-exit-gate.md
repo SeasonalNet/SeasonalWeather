@@ -39,8 +39,10 @@ The source-only inspection is also available without Docker:
 The gate inspects each image's effective user, entrypoint, healthcheck,
 exposed ports, OCI labels, and embedded `/usr/share/seasonalweather/build-info.json`.
 It compares immutable build identity, schema, protocol, and catalog fields
-across profiles while allowing the image profile and profile-derived build ID
-to differ.
+across profiles while allowing the image profile, profile-derived build ID, and
+profile-specific Python runtime to differ. Each embedded Python version must
+match the interpreter in that image; this permits the Piper compatibility image
+to use its declared older Python runtime without weakening provenance checks.
 
 Each image is executed with its entrypoint replaced by Python for bounded
 read-only probes. The probes verify that the build-info CLI agrees with the

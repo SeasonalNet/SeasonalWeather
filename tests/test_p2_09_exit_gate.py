@@ -9,6 +9,7 @@ from tools.quality.phase2_exit_gate import (
     IMAGE_SPECS,
     ImageSpec,
     validate_image_record,
+    validate_shared_build_identity,
     validate_source_contract,
 )
 
@@ -140,6 +141,40 @@ def test_p2_09_image_record_rejects_worker_port_and_wrong_identity() -> None:
             "Labels": {},
         }
     }
-    errors = validate_image_record(spec, inspect, info, {})
+    errors = validate_image_record(spec, inspect, info, {}, "3.11.13")
     assert any("profile" in error for error in errors)
     assert any("port" in error for error in errors)
+
+
+def test_p2_09_image_record_rejects_incorrect_embedded_python_version() -> None:
+    spec = IMAGE_SPECS[2]
+    info = {
+        "image_profile": "piper",
+        "python_version": "3.15.1",
+        "configuration_schema": {"minimum": 1, "maximum": 1},
+    }
+    inspect = {
+        "Config": {
+            "User": "seasonalweather",
+            "Entrypoint": list(spec.entrypoint),
+            "Healthcheck": {"Test": list(spec.healthcheck)},
+            "Labels": None,
+        }
+    }
+
+    errors = validate_image_record(spec, inspect, info, {}, "3.14.9")
+
+    assert any("embedded Python version" in error for error in errors)
+
+
+def test_p2_09_shared_identity_allows_profile_specific_python_version() -> None:
+    spec = IMAGE_SPECS[2]
+    controller = {"project": "seasonalweather", "python_version": "3.15.1"}
+    piper = {"project": "seasonalweather", "python_version": "3.14.9"}
+
+    assert validate_shared_build_identity(spec, controller, piper) == []
+
+    piper["project"] = "different-project"
+    assert validate_shared_build_identity(spec, controller, piper) == [
+        "seasonalweather-worker:piper: build field project differs from controller identity"
+    ]
