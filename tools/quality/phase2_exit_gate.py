@@ -126,7 +126,6 @@ _STABLE_BUILD_FIELDS = (
     "source_date_epoch",
     "build_identity",
     "target_platform",
-    "python_version",
     "swwp_protocol_versions",
     "job_payload_schema_versions",
     "job_result_schema_versions",
@@ -255,6 +254,7 @@ def validate_image_record(
     inspect: dict[str, Any],
     info: dict[str, Any],
     package_presence: dict[str, bool],
+    runtime_python_version: str,
 ) -> list[str]:
     """Validate one Docker image's declared metadata and package boundary."""
 
@@ -285,6 +285,8 @@ def validate_image_record(
 
     if info.get("image_profile") != spec.profile:
         errors.append(f"{spec.tag}: embedded image profile is not {spec.profile}")
+    if info.get("python_version") != runtime_python_version:
+        errors.append(f"{spec.tag}: embedded Python version does not match the runtime interpreter")
     expected_modules = _CONTROLLER_FORBIDDEN_MODULES if spec.role == "controller" else _WORKER_FORBIDDEN_MODULES
     for module in expected_modules:
         if package_presence.get(module, False):
@@ -294,6 +296,20 @@ def validate_image_record(
             if package_presence.get(module, False):
                 errors.append(f"{spec.tag}: controller-only dependency is present: {module}")
     return errors
+
+
+def validate_shared_build_identity(
+    spec: ImageSpec,
+    baseline: dict[str, Any],
+    info: dict[str, Any],
+) -> list[str]:
+    """Validate fields that must be identical across every image profile."""
+
+    return [
+        f"{spec.tag}: build field {field} differs from controller identity"
+        for field in _STABLE_BUILD_FIELDS
+        if info.get(field) != baseline.get(field)
+    ]
 
 
 def validate_built_images() -> list[str]:
@@ -306,6 +322,11 @@ def validate_built_images() -> list[str]:
             inspect = _image_inspect(spec)
             info = _embedded_file_json(spec, "/usr/share/seasonalweather/build-info.json")
             cli_info = _embedded_json(spec, "-m", "seasonalweather.build_metadata", "--json")
+            runtime_python_version = _embedded_json(
+                spec,
+                "-c",
+                "import json, platform; print(json.dumps(platform.python_version()))",
+            )
             package_presence = _package_presence(spec)
             catalog = _embedded_json(spec, "-m", "seasonalweather", "diagnostics", "list", "--format", "json")
         except GateError as exc:
@@ -314,16 +335,14 @@ def validate_built_images() -> list[str]:
         if info != cli_info:
             errors.append(f"{spec.tag}: build metadata CLI disagrees with the embedded record")
         reports.append((spec, inspect, info, package_presence, catalog))
-        errors.extend(validate_image_record(spec, inspect, info, package_presence))
+        errors.extend(validate_image_record(spec, inspect, info, package_presence, runtime_python_version))
 
     if not reports:
         return errors
     baseline = reports[0][2]
     baseline_catalog = json.dumps(reports[0][4], sort_keys=True, separators=(",", ":"))
     for spec, _inspect, info, _packages, catalog in reports[1:]:
-        for field in _STABLE_BUILD_FIELDS:
-            if info.get(field) != baseline.get(field):
-                errors.append(f"{spec.tag}: build field {field} differs from controller identity")
+        errors.extend(validate_shared_build_identity(spec, baseline, info))
         if json.dumps(catalog, sort_keys=True, separators=(",", ":")) != baseline_catalog:
             errors.append(f"{spec.tag}: diagnostic catalog differs from controller catalog")
     try:
