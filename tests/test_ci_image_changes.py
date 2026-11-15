@@ -21,7 +21,8 @@ def test_change_categories_select_the_smallest_gate() -> None:
     assert classify_paths(["tests/test_alerts.py", "quality/exceptions.toml"]) == {"tests", "quality"}
     assert gate_for_paths(["tests/test_alerts.py", "quality/exceptions.toml"]) == (True, False)
     assert gate_for_paths(["seasonalweather/main.py", "docs/notes.md"]) == (True, True)
-    assert gate_for_paths([".github/workflows/ci.yml"]) == (True, False)
+    assert gate_for_paths([".github/workflows/ci.yml"]) == (True, True)
+    assert gate_for_paths([".forgejo/workflows/ci.yml"]) == (True, True)
 
 
 def test_unknown_changes_fail_closed_to_the_full_gate() -> None:
