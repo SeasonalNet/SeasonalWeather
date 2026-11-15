@@ -26,15 +26,17 @@ docker run "${common[@]}" \
   --entrypoint python \
   "${spfy_image}" - --profile spfy < "${smoke_script}"
 
+# Keep Xvfb's socket directory root-owned across Docker implementations.
 docker run "${common[@]}" \
   --mount type=volume,dst=/var/lib/seasonalweather/voices/voicetext_paul \
   --mount type=volume,dst=/var/lib/seasonalweather/wineprefixes \
+  --tmpfs /tmp/.X11-unix:rw,nosuid,nodev,noexec,size=8m,mode=1777,uid=0,gid=0 \
   --env DISPLAY=:99 \
   --env HOME=/tmp/voicetext/home \
   --entrypoint /bin/bash \
   "${voicetext_image}" -ceu '
-    mkdir -p /tmp/.X11-unix /tmp/voicetext/home
-    chmod 0700 /tmp/.X11-unix /tmp/voicetext/home
+    mkdir -p /tmp/voicetext/home
+    chmod 0700 /tmp/voicetext/home
     Xvfb :99 -screen 0 1024x768x24 -nolisten tcp -noreset -ac </dev/null &
     xvfb_pid=$!
     cleanup() {
@@ -47,5 +49,16 @@ docker run "${common[@]}" \
       sleep 0.1
     done
     [[ -S /tmp/.X11-unix/X99 ]]
+    set +e
     python - --profile voicetext-paul
+    status=$?
+    set -e
+    if [[ ${status} -ne 0 ]]; then
+      for log in /tmp/voicetext/voicetext_paul_wine.*.log; do
+        [[ -s "${log}" ]] || continue
+        echo "[tts-image-smoke] ${log}" >&2
+        tail -n 80 "${log}" >&2 || true
+      done
+    fi
+    exit "${status}"
   ' < "${smoke_script}"
