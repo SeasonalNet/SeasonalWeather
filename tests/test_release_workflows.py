@@ -67,6 +67,13 @@ def test_ci_workflows_enable_best_effort_dependency_and_provider_build_caches() 
     assert "seasonalweather-cache" not in forgejo_ci
 
 
+def test_github_ci_pins_the_wine_compatible_runner() -> None:
+    github_ci = (ROOT / ".github/workflows/ci.yml").read_text()
+
+    assert github_ci.count("runs-on: ubuntu-24.04") == 2
+    assert "ubuntu-latest" not in github_ci
+
+
 def test_release_workflows_enable_best_effort_dependency_and_provider_build_caches() -> None:
     github_release = (ROOT / ".github/workflows/release.yml").read_text()
     forgejo_release = (ROOT / ".forgejo/workflows/release.yml").read_text()
