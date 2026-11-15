@@ -12,7 +12,7 @@ on:
 
 jobs:
   scope:
-    runs-on: [docker, slate]
+    runs-on: [docker, normal, general]
     outputs:
       run_checks: ${{ steps.classify.outputs.run_checks }}
       run_images: ${{ steps.classify.outputs.run_images }}
@@ -51,7 +51,7 @@ jobs:
   python:
     needs: scope
     if: needs.scope.outputs.run_checks == 'true'
-    runs-on: [docker, slate]
+    runs-on: [docker, normal, general]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -106,7 +106,7 @@ jobs:
   images:
     needs: [scope, python]
     if: needs.scope.outputs.run_images == 'true'
-    runs-on: [docker, slate-builder]
+    runs-on: [docker, normal, builder]
     steps:
       - uses: actions/checkout@v6
         with:

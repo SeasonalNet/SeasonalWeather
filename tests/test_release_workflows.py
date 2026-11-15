@@ -40,7 +40,7 @@ def test_github_release_image_publishing_is_gated_before_release_creation() -> N
 
 def test_forgejo_release_publishes_images_to_harbor_and_release_assets() -> None:
     release = (ROOT / ".forgejo/workflows/release.yml").read_text()
-    assert "runs-on: [docker, slate-builder]" in release
+    assert "runs-on: [docker, normal, builder]" in release
     assert "needs: [ci, security, semver]" in release
     assert "Publish Forgejo release" in release
     assert "bootstrap_docker.sh" in release

@@ -27,16 +27,16 @@ def test_p2_09_source_contract_passes() -> None:
     assert validate_source_contract(ROOT) == []
 
 
-def test_p2_09_forgejo_confines_docker_to_dedicated_builder() -> None:
+def test_p2_09_forgejo_confines_docker_to_builder_runners() -> None:
     workflow = (ROOT / ".forgejo/workflows/ci.yml").read_text(encoding="utf-8")
     python_job, image_job = workflow.split("  images:\n", maxsplit=1)
 
-    assert "runs-on: [docker, slate]" in python_job
+    assert "runs-on: [docker, normal, general]" in python_job
     assert "make check" in python_job
     assert "bootstrap_docker.sh" not in python_job
     assert "needs: [scope, python]" in image_job
     assert "if: needs.scope.outputs.run_images == 'true'" in image_job
-    assert "runs-on: [docker, slate-builder]" in image_job
+    assert "runs-on: [docker, normal, builder]" in image_job
     assert "bash ./tools/ci/bootstrap_docker.sh" in image_job
     assert "make phase2-images" in image_job
     assert "tools/ci/image_changes.py" in python_job.split("  images:\n", maxsplit=1)[0]
