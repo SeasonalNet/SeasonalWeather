@@ -16,6 +16,7 @@ def test_tts_image_smoke_runs_real_engines_under_hardened_containers() -> None:
     assert "--network none" in script
     assert "--cap-drop ALL" in script
     assert "--security-opt no-new-privileges" in script
+    assert "wineprefixes:rw,nosuid,nodev,size=1g,mode=0700,uid=10001,gid=10001" in script
     assert "--tmpfs /tmp/.X11-unix:rw,nosuid,nodev,noexec" in script
     assert "--profile spfy" in script
     assert '"${dectalk_image}" - --profile dectalk < "${smoke_script}"' in script

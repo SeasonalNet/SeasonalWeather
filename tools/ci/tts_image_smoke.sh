@@ -29,7 +29,7 @@ docker run "${common[@]}" \
 # Keep Xvfb's socket directory root-owned across Docker implementations.
 docker run "${common[@]}" \
   --mount type=volume,dst=/var/lib/seasonalweather/voices/voicetext_paul \
-  --mount type=volume,dst=/var/lib/seasonalweather/wineprefixes \
+  --tmpfs /var/lib/seasonalweather/wineprefixes:rw,nosuid,nodev,size=1g,mode=0700,uid=10001,gid=10001 \
   --tmpfs /tmp/.X11-unix:rw,nosuid,nodev,noexec,size=8m,mode=1777,uid=0,gid=0 \
   --env DISPLAY=:99 \
   --env HOME=/tmp/voicetext/home \
