@@ -430,6 +430,7 @@ RUN case "${SW_IMAGE_PROFILE}" in \
         test -x /opt/dectalk/dectalk/dist/say ;; \
       voicetext-paul) \
         chmod 0755 /usr/local/bin/voicetext_paul_synth /usr/local/bin/voicetext_paul_wineserver_kill /usr/local/bin/voicetext-paul-entrypoint; \
+        install -d -o 10001 -g 10001 /var/lib/seasonalweather/wineprefixes/voicetext_paul_voicetext; \
         chown -R 10001:10001 /var/lib/seasonalweather/voices/voicetext_paul /var/lib/seasonalweather/wineprefixes /tmp/voicetext ;; \
       *) rm -f /usr/local/bin/dectalk-env /usr/local/bin/dectalk-text2wav \
         /usr/local/bin/voicetext_paul_synth /usr/local/bin/voicetext_paul_wineserver_kill /usr/local/bin/voicetext-paul-entrypoint ;; \
