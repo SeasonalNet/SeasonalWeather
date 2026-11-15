@@ -103,7 +103,12 @@ def run_bounded(
     if output_limited:
         raise ProcessFailure("output_limit", "local synthesis process output exceeded its bound")
     if returncode != 0:
-        raise ProcessFailure("nonzero_exit", "local synthesis process returned a nonzero status")
+        raise ProcessFailure(
+            "nonzero_exit",
+            "local synthesis process returned a nonzero status",
+            returncode=returncode,
+            stderr=stderr,
+        )
     return ProcessResult(returncode or 0, stdout, stderr, False)
 
 
