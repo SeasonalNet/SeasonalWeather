@@ -63,9 +63,9 @@ inline suppressions.
 
 Forgejo is the canonical SeasonalWeather CI authority:
 
-- `.forgejo/workflows/ci.yml` runs `make check` on `slate-runner` with the
+- `.forgejo/workflows/ci.yml` runs `make check` on the normal general pool with the
   explicit suppression comparison base, then runs `make phase2-images` on the
-  dedicated `slate-builder` Docker lane. The image gate also synthesizes a
+  normal builder Docker lane. The image gate also synthesizes a
   representative utterance through the built Speechify and VoiceText Paul
   images and rejects invalid or effectively silent WAV output.
   Image inputs are submitted as one shared Bake solve; non-image changes skip
@@ -85,7 +85,7 @@ The repository phase gate, suppression base selection, security scan, and
 SemVer guardrails remain the same. The Release workflow calls all three
 workflows as reusable jobs and publishes only after all three pass. GitHub uses
 its native Docker support.
-Forgejo's CI-only bootstrap runs only on `slate-builder`, installs only the
+Forgejo's CI-only bootstrap runs only on builder-role runners, installs only the
 Docker client, and rejects a missing runner-owned endpoint; ordinary runners
 receive no Docker authority. The administrator contract is documented in
 [`forgejo-runner-docker.md`](forgejo-runner-docker.md). GitHub results are

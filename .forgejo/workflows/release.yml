@@ -23,7 +23,7 @@ jobs:
     name: Publish release
     needs: [ci, security, semver]
     if: startsWith(forge.ref, 'refs/tags/v')
-    runs-on: [docker, slate-builder]
+    runs-on: [docker, normal, builder]
     steps:
       - name: Check out release tag
         uses: actions/checkout@v6

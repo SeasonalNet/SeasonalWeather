@@ -50,16 +50,16 @@ default. GitHub CI declares an equivalent branch/ref concurrency group.
 
 ## Runner operations
 
-Forgejo intentionally uses the persistent BuildKit cache owned by
-`slate-builder`; registry cache export previously exceeded the proxy upload
-limit. Do not routinely prune that builder. If it must be replaced, expect one
-cold matrix build.
+Forgejo intentionally uses the persistent BuildKit cache owned by each builder
+runner; registry cache export previously exceeded the proxy upload limit. Do
+not routinely prune those builders. If one must be replaced, expect one cold
+matrix build on that runner.
 
 A versioned runner job image containing Docker CLI/Buildx, Python, uv, and the
 basic build packages can remove most of the remaining setup time. That image is
 runner administration, not a repository build input, and must be rolled out on
-`slate-builder` separately before the workflow can stop installing its fallback
-tooling.
+each builder runner separately before the workflow can stop installing its
+fallback tooling.
 
 ## Release images
 
