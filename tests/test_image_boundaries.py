@@ -98,6 +98,18 @@ def test_specialized_worker_profiles_carry_their_runtime_engines() -> None:
     assert "apt-get purge --yes curl;" in dockerfile
 
 
+def test_image_builds_keep_volatile_provenance_after_reusable_layers() -> None:
+    for name in ("Dockerfile", "Dockerfile.worker"):
+        dockerfile = (ROOT / name).read_text(encoding="utf-8")
+        assert dockerfile.index("uv sync --frozen") < dockerfile.index('ENV SW_PROJECT="${SW_PROJECT}"')
+        assert "--mount=type=cache,target=/root/.cache/uv" in dockerfile
+
+    worker = (ROOT / "Dockerfile.worker").read_text(encoding="utf-8")
+    assert worker.index('case "${SW_ENGINE_PAYLOAD}"') < worker.index('ENV SW_PROJECT="${SW_PROJECT}"')
+    assert 'case "${SW_WORKER_DEPENDENCY_SET}"' in worker
+    assert 'case "${SW_RUNTIME_FAMILY}"' in worker
+
+
 def test_worker_image_retains_shared_artifact_runtime() -> None:
     dockerfile = (ROOT / "Dockerfile.worker").read_text(encoding="utf-8")
     prune_start = dockerfile.index("package_root =")

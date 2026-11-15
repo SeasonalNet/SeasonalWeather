@@ -6,70 +6,14 @@ ARG PYTHON_BASE=python:3.15-slim@sha256:044d5bd747976e21f8bc4d746c3479b19a84bb8a
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 FROM ${PYTHON_BASE} AS builder
 
-ARG SW_PROJECT
-ARG SW_VERSION
-ARG SW_BUILD_ID
-ARG SW_BUILD_IDENTITY
-ARG SW_GIT_COMMIT
-ARG SW_GIT_DESCRIBE
-ARG SW_DIRTY_TREE
-ARG SW_BUILD_SOURCE_TIMESTAMP
-ARG SW_SOURCE_DATE_EPOCH
-ARG SW_IMAGE_PROFILE
-ARG SW_TARGET_PLATFORM
-ARG SW_PYTHON_VERSION
-ARG SW_SWWP_PROTOCOL_VERSIONS
-ARG SW_JOB_PAYLOAD_SCHEMA_VERSIONS
-ARG SW_JOB_RESULT_SCHEMA_VERSIONS
-ARG SW_VALIDATION_PROTOCOL_VERSIONS
-ARG SW_CONFIG_SCHEMA_MIN
-ARG SW_CONFIG_SCHEMA_MAX
-ARG SW_DIAGNOSTIC_SCHEMA_VERSION
-ARG SW_DIAGNOSTIC_CATALOG_VERSION
-ARG SW_CAPABILITY_MANIFEST_VERSION
-ARG TARGETARCH
-ARG DECTALK_SOURCE_URL="https://github.com/dectalk/dectalk/archive/refs/tags/2023-10-30.tar.gz"
-ARG DECTALK_SOURCE_SHA256="511c845e453917eea3a353cdbe8e0401360d8992dcfadfe2e9b4b83fde168f7e"
-ARG VOICETEXT_ARCHIVE_URL="https://cdn.dondaplayer.com/WeatherRadioSuite-LIB.zip"
-ARG VOICETEXT_ARCHIVE_SHA256="441ac30ea4bf899f81896f374b330860c5e9022601ca2b3e3c8cbf89e33fa8f5"
-ARG SPEECHIFY_RELEASE_URL="https://github.com/wagwan-piffting-blud/Speechify/releases/download/2026.09.06/spfy-linux-x86_64-2026.09.06.tar.gz"
-ARG SPEECHIFY_RELEASE_SHA256="b932f76874be06e9545fbd677bb050d0d603d93519a4710a4d474db16784a6c5"
-ARG SPEECHIFY_COMMIT="698c6e137cde17815272e7090be05442bed995e9"
-ARG SPEECHIFY_RAW_BASE_URL="https://raw.githubusercontent.com/wagwan-piffting-blud/Speechify"
-
-RUN case "${SW_IMAGE_PROFILE}" in \
-        routine-worker|espeak|piper|festival|dectalk|legacy-tts|voicetext-paul|spfy|maintenance|development) ;; \
-        *) echo "unsupported worker image profile: ${SW_IMAGE_PROFILE}" >&2; exit 1 ;; \
-    esac
+ARG SW_WORKER_DEPENDENCY_SET="standard"
 
 ENV PATH="/opt/venv/bin:${PATH}" \
     UV_PROJECT_ENVIRONMENT="/opt/venv" \
-    SETUPTOOLS_SCM_PRETEND_VERSION_FOR_SEASONALWEATHER="${SW_VERSION}" \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    SW_PROJECT="${SW_PROJECT}" \
-    SW_VERSION="${SW_VERSION}" \
-    SW_BUILD_ID="${SW_BUILD_ID}" \
-    SW_BUILD_IDENTITY="${SW_BUILD_IDENTITY}" \
-    SW_GIT_COMMIT="${SW_GIT_COMMIT}" \
-    SW_GIT_DESCRIBE="${SW_GIT_DESCRIBE}" \
-    SW_DIRTY_TREE="${SW_DIRTY_TREE}" \
-    SW_BUILD_SOURCE_TIMESTAMP="${SW_BUILD_SOURCE_TIMESTAMP}" \
-    SW_SOURCE_DATE_EPOCH="${SW_SOURCE_DATE_EPOCH}" \
-    SW_IMAGE_PROFILE="${SW_IMAGE_PROFILE}" \
-    SW_TARGET_PLATFORM="${SW_TARGET_PLATFORM}" \
-    SW_PYTHON_VERSION="${SW_PYTHON_VERSION}" \
-    SW_SWWP_PROTOCOL_VERSIONS="${SW_SWWP_PROTOCOL_VERSIONS}" \
-    SW_JOB_PAYLOAD_SCHEMA_VERSIONS="${SW_JOB_PAYLOAD_SCHEMA_VERSIONS}" \
-    SW_JOB_RESULT_SCHEMA_VERSIONS="${SW_JOB_RESULT_SCHEMA_VERSIONS}" \
-    SW_VALIDATION_PROTOCOL_VERSIONS="${SW_VALIDATION_PROTOCOL_VERSIONS}" \
-    SW_CONFIG_SCHEMA_MIN="${SW_CONFIG_SCHEMA_MIN}" \
-    SW_CONFIG_SCHEMA_MAX="${SW_CONFIG_SCHEMA_MAX}" \
-    SW_DIAGNOSTIC_SCHEMA_VERSION="${SW_DIAGNOSTIC_SCHEMA_VERSION}" \
-    SW_DIAGNOSTIC_CATALOG_VERSION="${SW_DIAGNOSTIC_CATALOG_VERSION}" \
-    SW_CAPABILITY_MANIFEST_VERSION="${SW_CAPABILITY_MANIFEST_VERSION}"
+    PYTHONUNBUFFERED=1
 
 WORKDIR /build
 RUN apt-get update \
@@ -78,18 +22,29 @@ RUN apt-get update \
 RUN python -m venv /opt/venv
 
 COPY --from=uv /uv /uvx /usr/local/bin/
-COPY pyproject.toml uv.lock README.md ./
-RUN case "${SW_IMAGE_PROFILE}" in \
+COPY pyproject.toml uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    case "${SW_WORKER_DEPENDENCY_SET}" in \
         piper) uv sync --frozen --no-dev --group worker-runtime --group piper --no-install-project ;; \
-        routine-worker|espeak|festival|dectalk|legacy-tts|voicetext-paul|spfy|maintenance|development) uv sync --frozen --no-dev --group worker-runtime --no-install-project ;; \
-        *) echo "unsupported worker image profile: ${SW_IMAGE_PROFILE}" >&2; exit 1 ;; \
+        standard) uv sync --frozen --no-dev --group worker-runtime --no-install-project ;; \
+        *) echo "unsupported worker dependency set: ${SW_WORKER_DEPENDENCY_SET}" >&2; exit 1 ;; \
     esac
 
+ARG TARGETARCH
+ARG SW_ENGINE_PAYLOAD="none"
+ARG DECTALK_SOURCE_URL="https://github.com/dectalk/dectalk/archive/refs/tags/2023-10-30.tar.gz"
+ARG DECTALK_SOURCE_SHA256="511c845e453917eea3a353cdbe8e0401360d8992dcfadfe2e9b4b83fde168f7e"
+ARG VOICETEXT_ARCHIVE_URL="https://cdn.dondaplayer.com/WeatherRadioSuite-LIB.zip"
+ARG VOICETEXT_ARCHIVE_SHA256="441ac30ea4bf899f81896f374b330860c5e9022601ca2b3e3c8cbf89e33fa8f5"
+ARG SPEECHIFY_RELEASE_URL="https://github.com/wagwan-piffting-blud/Speechify/releases/download/2026.09.06/spfy-linux-x86_64-2026.09.06.tar.gz"
+ARG SPEECHIFY_RELEASE_SHA256="b932f76874be06e9545fbd677bb050d0d603d93519a4710a4d474db16784a6c5"
+ARG SPEECHIFY_COMMIT="698c6e137cde17815272e7090be05442bed995e9"
+ARG SPEECHIFY_RAW_BASE_URL="https://raw.githubusercontent.com/wagwan-piffting-blud/Speechify"
 COPY docker/spfy/voice-manifest.txt /tmp/spfy-voice-manifest.txt
 COPY docker/dectalk/gcc14-compat.patch /tmp/dectalk-gcc14-compat.patch
 RUN set -eux; \
     mkdir -p /var/lib/seasonalweather/voices/voicetext_paul/WeatherRadioSuite-LIB /opt/spfy /opt/dectalk/dectalk/dist; \
-    case "${SW_IMAGE_PROFILE}" in \
+    case "${SW_ENGINE_PAYLOAD}" in \
       dectalk) \
         apt-get update; \
         apt-get install --yes --no-install-recommends autoconf automake build-essential ca-certificates curl git \
@@ -165,8 +120,14 @@ RUN set -eux; \
     esac
 RUN rm -f /tmp/spfy-voice-manifest.txt /tmp/dectalk-gcc14-compat.patch
 
+ARG SW_VERSION
+COPY README.md ./
 COPY seasonalweather ./seasonalweather
-RUN uv pip install --python /opt/venv/bin/python --no-deps .
+RUN --mount=type=cache,target=/root/.cache/uv \
+    SETUPTOOLS_SCM_PRETEND_VERSION_FOR_SEASONALWEATHER="${SW_VERSION}" \
+    uv pip install --python /opt/venv/bin/python --no-deps .
+
+ARG SW_IMAGE_PROFILE
 
 # Every worker must be able to use the pinned SWWP WebSocket runtime before
 # controller-only modules are pruned from the installed package.
@@ -305,6 +266,52 @@ PY
 RUN mkdir -p /usr/share/seasonalweather/diagnostics \
     && seasonalweather diagnostics export --output /usr/share/seasonalweather/diagnostics
 
+RUN case "${SW_IMAGE_PROFILE}" in \
+        routine-worker|espeak|piper|festival|dectalk|legacy-tts|voicetext-paul|spfy|maintenance|development) ;; \
+        *) echo "unsupported worker image profile: ${SW_IMAGE_PROFILE}" >&2; exit 1 ;; \
+    esac
+
+ARG SW_PROJECT
+ARG SW_BUILD_ID
+ARG SW_BUILD_IDENTITY
+ARG SW_GIT_COMMIT
+ARG SW_GIT_DESCRIBE
+ARG SW_DIRTY_TREE
+ARG SW_BUILD_SOURCE_TIMESTAMP
+ARG SW_SOURCE_DATE_EPOCH
+ARG SW_TARGET_PLATFORM
+ARG SW_PYTHON_VERSION
+ARG SW_SWWP_PROTOCOL_VERSIONS
+ARG SW_JOB_PAYLOAD_SCHEMA_VERSIONS
+ARG SW_JOB_RESULT_SCHEMA_VERSIONS
+ARG SW_VALIDATION_PROTOCOL_VERSIONS
+ARG SW_CONFIG_SCHEMA_MIN
+ARG SW_CONFIG_SCHEMA_MAX
+ARG SW_DIAGNOSTIC_SCHEMA_VERSION
+ARG SW_DIAGNOSTIC_CATALOG_VERSION
+ARG SW_CAPABILITY_MANIFEST_VERSION
+ENV SW_PROJECT="${SW_PROJECT}" \
+    SW_VERSION="${SW_VERSION}" \
+    SW_BUILD_ID="${SW_BUILD_ID}" \
+    SW_BUILD_IDENTITY="${SW_BUILD_IDENTITY}" \
+    SW_GIT_COMMIT="${SW_GIT_COMMIT}" \
+    SW_GIT_DESCRIBE="${SW_GIT_DESCRIBE}" \
+    SW_DIRTY_TREE="${SW_DIRTY_TREE}" \
+    SW_BUILD_SOURCE_TIMESTAMP="${SW_BUILD_SOURCE_TIMESTAMP}" \
+    SW_SOURCE_DATE_EPOCH="${SW_SOURCE_DATE_EPOCH}" \
+    SW_IMAGE_PROFILE="${SW_IMAGE_PROFILE}" \
+    SW_TARGET_PLATFORM="${SW_TARGET_PLATFORM}" \
+    SW_PYTHON_VERSION="${SW_PYTHON_VERSION}" \
+    SW_SWWP_PROTOCOL_VERSIONS="${SW_SWWP_PROTOCOL_VERSIONS}" \
+    SW_JOB_PAYLOAD_SCHEMA_VERSIONS="${SW_JOB_PAYLOAD_SCHEMA_VERSIONS}" \
+    SW_JOB_RESULT_SCHEMA_VERSIONS="${SW_JOB_RESULT_SCHEMA_VERSIONS}" \
+    SW_VALIDATION_PROTOCOL_VERSIONS="${SW_VALIDATION_PROTOCOL_VERSIONS}" \
+    SW_CONFIG_SCHEMA_MIN="${SW_CONFIG_SCHEMA_MIN}" \
+    SW_CONFIG_SCHEMA_MAX="${SW_CONFIG_SCHEMA_MAX}" \
+    SW_DIAGNOSTIC_SCHEMA_VERSION="${SW_DIAGNOSTIC_SCHEMA_VERSION}" \
+    SW_DIAGNOSTIC_CATALOG_VERSION="${SW_DIAGNOSTIC_CATALOG_VERSION}" \
+    SW_CAPABILITY_MANIFEST_VERSION="${SW_CAPABILITY_MANIFEST_VERSION}"
+
 RUN mkdir -p /usr/share/seasonalweather \
     && python - <<'PY'
 import os
@@ -345,8 +352,8 @@ PY
 
 FROM ${PYTHON_BASE} AS worker
 
-ARG SW_IMAGE_PROFILE
 ARG TARGETARCH
+ARG SW_RUNTIME_FAMILY="none"
 ARG DECTALK_SOURCE_URL="https://github.com/dectalk/dectalk/archive/refs/tags/2023-10-30.tar.gz"
 ARG DECTALK_SOURCE_SHA256="511c845e453917eea3a353cdbe8e0401360d8992dcfadfe2e9b4b83fde168f7e"
 ARG VOICETEXT_ARCHIVE_URL="https://cdn.dondaplayer.com/WeatherRadioSuite-LIB.zip"
@@ -354,10 +361,6 @@ ARG VOICETEXT_ARCHIVE_SHA256="441ac30ea4bf899f81896f374b330860c5e9022601ca2b3e3c
 ARG SPEECHIFY_RELEASE_URL="https://github.com/wagwan-piffting-blud/Speechify/releases/download/2026.09.06/spfy-linux-x86_64-2026.09.06.tar.gz"
 ARG SPEECHIFY_RELEASE_SHA256="b932f76874be06e9545fbd677bb050d0d603d93519a4710a4d474db16784a6c5"
 ARG SPEECHIFY_COMMIT="698c6e137cde17815272e7090be05442bed995e9"
-RUN case "${SW_IMAGE_PROFILE}" in \
-        routine-worker|espeak|piper|festival|dectalk|legacy-tts|voicetext-paul|spfy|maintenance|development) ;; \
-        *) exit 1 ;; \
-    esac
 
 LABEL io.seasonalweather.security.profile="worker" \
       io.seasonalweather.security.user="seasonalweather:10001:10001" \
@@ -381,10 +384,9 @@ ENV PATH="/opt/venv/bin:${PATH}" \
     PYTHONUNBUFFERED=1
 
 RUN set -eux; \
-    case "${SW_IMAGE_PROFILE}" in \
-      routine-worker|espeak) packages="ffmpeg espeak-ng" ;; \
-      piper) packages="ffmpeg espeak-ng" ;; \
-      festival|legacy-tts) packages="ffmpeg festival festvox-kallpc16k" ;; \
+    case "${SW_RUNTIME_FAMILY}" in \
+      espeak) packages="ffmpeg espeak-ng" ;; \
+      festival) packages="ffmpeg festival festvox-kallpc16k" ;; \
       dectalk) packages="ffmpeg libasound2 libpulse0" ;; \
       voicetext-paul) \
         case "${TARGETARCH:-amd64}" in amd64) ;; *) echo "VoiceText Paul worker supports only linux/amd64" >&2; exit 1 ;; esac; \
@@ -396,8 +398,8 @@ RUN set -eux; \
       spfy) \
         case "${TARGETARCH:-amd64}" in amd64) ;; *) echo "spfy worker supports only linux/amd64" >&2; exit 1 ;; esac; \
         packages="ffmpeg" ;; \
-      development) packages="ffmpeg espeak-ng" ;; \
-      *) packages="" ;; \
+      none) packages="" ;; \
+      *) echo "unsupported worker runtime family: ${SW_RUNTIME_FAMILY}" >&2; exit 1 ;; \
     esac; \
     if [ -n "${packages:-}" ]; then apt-get update && apt-get install --yes --no-install-recommends ${packages} && rm -rf /var/lib/apt/lists/*; fi
 
@@ -417,6 +419,11 @@ RUN groupadd --gid 10001 seasonalweather \
         /var/lib/seasonalweather/artifacts/worker-artifacts/staging \
     && install -d -o 10001 -g 10001 /opt/piper/models
 
+ARG SW_IMAGE_PROFILE
+RUN case "${SW_IMAGE_PROFILE}" in \
+        routine-worker|espeak|piper|festival|dectalk|legacy-tts|voicetext-paul|spfy|maintenance|development) ;; \
+        *) exit 1 ;; \
+    esac
 RUN case "${SW_IMAGE_PROFILE}" in \
       dectalk) \
         chmod 0755 /usr/local/bin/dectalk-env /usr/local/bin/dectalk-text2wav; \

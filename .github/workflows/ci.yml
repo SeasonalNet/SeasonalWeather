@@ -10,8 +10,51 @@ on:
   workflow_dispatch:
   workflow_call:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  scope:
+    runs-on: ubuntu-latest
+    outputs:
+      run_checks: ${{ steps.classify.outputs.run_checks }}
+      run_images: ${{ steps.classify.outputs.run_images }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}
+      - name: Classify changed paths
+        id: classify
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
+          REF: ${{ github.ref }}
+        run: |
+          set -eu
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] || [ "${REF#refs/tags/}" != "$REF" ]; then
+            printf 'run_checks=true\nrun_images=true\n' >> "$GITHUB_OUTPUT"
+          else
+            if [ "$EVENT_NAME" = "pull_request" ]; then
+              base="$PR_BASE"
+            elif [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+              base="$BEFORE"
+            else
+              base="HEAD^"
+            fi
+            if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+              base="HEAD^"
+              git cat-file -e "${base}^{commit}"
+            fi
+            python3 tools/ci/image_changes.py --base "$base" >> "$GITHUB_OUTPUT"
+            git diff --check "$base" HEAD
+          fi
+
   python:
+    needs: scope
+    if: needs.scope.outputs.run_checks == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,9 +70,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-uv-
       - name: Expose GitHub cache runtime
+        if: needs.scope.outputs.run_images == 'true'
         uses: crazy-max/ghaction-github-runtime@v3
         continue-on-error: true
       - name: Enable GitHub BuildKit cache
+        if: needs.scope.outputs.run_images == 'true'
         run: |
           if [ -z "${ACTIONS_RUNTIME_TOKEN:-}" ] || [ -z "${ACTIONS_CACHE_URL:-}${ACTIONS_RESULTS_URL:-}" ]; then
             echo "GitHub BuildKit cache runtime is unavailable; continuing without a remote build cache."
@@ -73,8 +118,14 @@ jobs:
       - name: Audit locked Python dependencies
         run: .venv-bootstrap/bin/uv audit --locked --preview-features audit-command
       - name: Set up Docker Buildx
+        if: needs.scope.outputs.run_images == 'true'
         uses: docker/setup-buildx-action@v3
-      - name: Run the Phase 2 exit gate and real TTS image smokes
+      - name: Run the repository check interface
         run: |
           . .venv/bin/activate
-          make phase2-gate PYTEST_XDIST_ARGS="-n 4 --dist=loadfile"
+          make check PYTEST_XDIST_ARGS="-n 4 --dist=loadfile"
+      - name: Build, inspect, and synthesize with the Phase 2 image matrix
+        if: needs.scope.outputs.run_images == 'true'
+        run: |
+          . .venv/bin/activate
+          make phase2-images

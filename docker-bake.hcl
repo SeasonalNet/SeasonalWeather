@@ -19,6 +19,7 @@ variable "SW_TARGET_PLATFORM" { default = "unknown" }
 variable "SW_PYTHON_VERSION" { default = "unknown" }
 variable "SW_PIPER_PYTHON_VERSION" { default = "3.14.9" }
 variable "SW_PIPER_PYTHON_BASE" { default = "python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8" }
+variable "SW_VOICETEXT_PYTHON_BASE" { default = "python:3.15.1-slim-bookworm@sha256:575f8bc12ec26542e0678bc6b60e385218248019d433157ec327264a78c3a853" }
 variable "SW_SWWP_PROTOCOL_VERSIONS" { default = "1" }
 variable "SW_JOB_PAYLOAD_SCHEMA_VERSIONS" { default = "1" }
 variable "SW_JOB_RESULT_SCHEMA_VERSIONS" { default = "1" }
@@ -96,7 +97,10 @@ target "controller" {
 target "routine-worker" {
   inherits = ["common"]
   dockerfile = "Dockerfile.worker"
-  args = { SW_IMAGE_PROFILE = "routine-worker" }
+  args = {
+    SW_IMAGE_PROFILE = "routine-worker"
+    SW_RUNTIME_FAMILY = "espeak"
+  }
   labels = { "io.seasonalweather.build.profile" = "routine-worker" }
   tags = ["seasonalweather-worker:standard"]
 }
@@ -106,6 +110,8 @@ target "piper" {
   dockerfile = "Dockerfile.worker"
   args = {
     SW_IMAGE_PROFILE = "piper"
+    SW_WORKER_DEPENDENCY_SET = "piper"
+    SW_RUNTIME_FAMILY = "espeak"
     SW_PYTHON_VERSION = SW_PIPER_PYTHON_VERSION
     PYTHON_BASE = SW_PIPER_PYTHON_BASE
   }
@@ -116,7 +122,10 @@ target "piper" {
 target "espeak" {
   inherits = ["common"]
   dockerfile = "Dockerfile.worker"
-  args = { SW_IMAGE_PROFILE = "espeak" }
+  args = {
+    SW_IMAGE_PROFILE = "espeak"
+    SW_RUNTIME_FAMILY = "espeak"
+  }
   labels = { "io.seasonalweather.build.profile" = "espeak" }
   tags = ["seasonalweather-worker:espeak"]
 }
@@ -124,7 +133,10 @@ target "espeak" {
 target "festival" {
   inherits = ["common"]
   dockerfile = "Dockerfile.worker"
-  args = { SW_IMAGE_PROFILE = "festival" }
+  args = {
+    SW_IMAGE_PROFILE = "festival"
+    SW_RUNTIME_FAMILY = "festival"
+  }
   labels = { "io.seasonalweather.build.profile" = "festival" }
   tags = ["seasonalweather-worker:festival"]
 }
@@ -132,7 +144,11 @@ target "festival" {
 target "dectalk" {
   inherits = ["common"]
   dockerfile = "Dockerfile.worker"
-  args = { SW_IMAGE_PROFILE = "dectalk" }
+  args = {
+    SW_IMAGE_PROFILE = "dectalk"
+    SW_ENGINE_PAYLOAD = "dectalk"
+    SW_RUNTIME_FAMILY = "dectalk"
+  }
   labels = { "io.seasonalweather.build.profile" = "dectalk" }
   tags = ["seasonalweather-worker:dectalk"]
 }
@@ -140,7 +156,10 @@ target "dectalk" {
 target "legacy-tts" {
   inherits = ["common"]
   dockerfile = "Dockerfile.worker"
-  args = { SW_IMAGE_PROFILE = "legacy-tts" }
+  args = {
+    SW_IMAGE_PROFILE = "legacy-tts"
+    SW_RUNTIME_FAMILY = "festival"
+  }
   labels = { "io.seasonalweather.build.profile" = "legacy-tts" }
   tags = ["seasonalweather-worker:legacy-tts"]
 }
@@ -148,7 +167,12 @@ target "legacy-tts" {
 target "voicetext-paul" {
   inherits = ["common"]
   dockerfile = "Dockerfile.worker"
-  args = { SW_IMAGE_PROFILE = "voicetext-paul" }
+  args = {
+    SW_IMAGE_PROFILE = "voicetext-paul"
+    SW_ENGINE_PAYLOAD = "voicetext-paul"
+    SW_RUNTIME_FAMILY = "voicetext-paul"
+    PYTHON_BASE = SW_VOICETEXT_PYTHON_BASE
+  }
   labels = { "io.seasonalweather.build.profile" = "voicetext-paul" }
   tags = ["seasonalweather-worker:voicetext-paul"]
 }
@@ -156,7 +180,11 @@ target "voicetext-paul" {
 target "spfy" {
   inherits = ["common"]
   dockerfile = "Dockerfile.worker"
-  args = { SW_IMAGE_PROFILE = "spfy" }
+  args = {
+    SW_IMAGE_PROFILE = "spfy"
+    SW_ENGINE_PAYLOAD = "spfy"
+    SW_RUNTIME_FAMILY = "spfy"
+  }
   labels = { "io.seasonalweather.build.profile" = "spfy" }
   tags = ["seasonalweather-worker:spfy"]
 }
@@ -172,7 +200,10 @@ target "maintenance" {
 target "development" {
   inherits = ["common"]
   dockerfile = "Dockerfile.worker"
-  args = { SW_IMAGE_PROFILE = "development" }
+  args = {
+    SW_IMAGE_PROFILE = "development"
+    SW_RUNTIME_FAMILY = "espeak"
+  }
   labels = { "io.seasonalweather.build.profile" = "development" }
   tags = ["seasonalweather:development"]
 }

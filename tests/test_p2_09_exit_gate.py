@@ -34,15 +34,23 @@ def test_p2_09_forgejo_confines_docker_to_dedicated_builder() -> None:
     assert "runs-on: [docker, slate]" in python_job
     assert "make check" in python_job
     assert "bootstrap_docker.sh" not in python_job
-    assert "needs: python" in image_job
+    assert "needs: [scope, python]" in image_job
+    assert "if: needs.scope.outputs.run_images == 'true'" in image_job
     assert "runs-on: [docker, slate-builder]" in image_job
     assert "bash ./tools/ci/bootstrap_docker.sh" in image_job
     assert "make phase2-images" in image_job
+    assert "tools/ci/image_changes.py" in python_job.split("  images:\n", maxsplit=1)[0]
+    assert "steps.image-scope.outputs.required" not in image_job
     assert image_job.index("bootstrap_docker.sh") < image_job.index("Install Python tooling")
 
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
     assert "phase2-gate: check\n\t$(MAKE) phase2-images" in makefile
     assert "phase2-images:\n\t$(MAKE) images" in makefile
+    assert '--build-info "$(BUILD_INFO)" --all' in makefile
+    assert (
+        "for profile in controller"
+        not in makefile.split("images:", maxsplit=1)[1].split("compose-check:", maxsplit=1)[0]
+    )
     assert "\t$(MAKE) tts-image-smoke" in makefile
 
     bootstrap = (ROOT / "tools/ci/bootstrap_docker.sh").read_text(encoding="utf-8")
@@ -98,7 +106,12 @@ def test_p2_09_forgejo_docker_preflight_rejects_missing_endpoint(tmp_path: Path)
 
 def test_p2_09_github_keeps_the_native_docker_path() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    assert "make phase2-gate" in workflow
+    assert "make check" in workflow
+    assert "make phase2-images" in workflow
+    assert "tools/ci/image_changes.py" in workflow
+    assert "needs: scope" in workflow
+    assert "needs.scope.outputs.run_images == 'true'" in workflow
+    assert "steps.image-scope.outputs.required" not in workflow
     assert "bootstrap_docker.sh" not in workflow
 
 
