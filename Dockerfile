@@ -16,7 +16,10 @@ WORKDIR /build
 # release. The controller is the only image that needs these binaries.
 COPY tools/samegen/Cargo.toml tools/samegen/Cargo.lock ./samegen/
 COPY tools/samegen/src ./samegen/src
-RUN cargo build --locked --manifest-path /build/samegen/Cargo.toml --release \
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/build/samegen/target \
+    cargo build --locked --manifest-path /build/samegen/Cargo.toml --release \
     && install -D -m 0755 /build/samegen/target/release/samegen /out/usr/local/bin/samegen \
     && cargo install --locked --root /tmp/samedec-root --version "${SAMEDEC_VERSION}" samedec \
     && install -D -m 0755 /tmp/samedec-root/bin/samedec /out/usr/local/bin/samedec
@@ -24,58 +27,12 @@ RUN cargo build --locked --manifest-path /build/samegen/Cargo.toml --release \
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 FROM ${PYTHON_BASE} AS builder
 
-ARG SW_PROJECT
-ARG SW_VERSION
-ARG SW_BUILD_ID
-ARG SW_BUILD_IDENTITY
-ARG SW_GIT_COMMIT
-ARG SW_GIT_DESCRIBE
-ARG SW_DIRTY_TREE
-ARG SW_BUILD_SOURCE_TIMESTAMP
-ARG SW_SOURCE_DATE_EPOCH
-ARG SW_IMAGE_PROFILE
-ARG SW_TARGET_PLATFORM
-ARG SW_PYTHON_VERSION
-ARG SW_SWWP_PROTOCOL_VERSIONS
-ARG SW_JOB_PAYLOAD_SCHEMA_VERSIONS
-ARG SW_JOB_RESULT_SCHEMA_VERSIONS
-ARG SW_VALIDATION_PROTOCOL_VERSIONS
-ARG SW_CONFIG_SCHEMA_MIN
-ARG SW_CONFIG_SCHEMA_MAX
-ARG SW_DIAGNOSTIC_SCHEMA_VERSION
-ARG SW_DIAGNOSTIC_CATALOG_VERSION
-ARG SW_CAPABILITY_MANIFEST_VERSION
-
-RUN test "${SW_IMAGE_PROFILE}" = "controller"
-
 ENV PATH="/opt/venv/bin:${PATH}" \
     UV_PROJECT_ENVIRONMENT="/opt/venv" \
-    SETUPTOOLS_SCM_PRETEND_VERSION_FOR_SEASONALWEATHER="${SW_VERSION}" \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    SW_PROJECT="${SW_PROJECT}" \
-    SW_VERSION="${SW_VERSION}" \
-    SW_BUILD_ID="${SW_BUILD_ID}" \
-    SW_BUILD_IDENTITY="${SW_BUILD_IDENTITY}" \
-    SW_GIT_COMMIT="${SW_GIT_COMMIT}" \
-    SW_GIT_DESCRIBE="${SW_GIT_DESCRIBE}" \
-    SW_DIRTY_TREE="${SW_DIRTY_TREE}" \
-    SW_BUILD_SOURCE_TIMESTAMP="${SW_BUILD_SOURCE_TIMESTAMP}" \
-    SW_SOURCE_DATE_EPOCH="${SW_SOURCE_DATE_EPOCH}" \
-    SW_IMAGE_PROFILE="${SW_IMAGE_PROFILE}" \
-    SW_TARGET_PLATFORM="${SW_TARGET_PLATFORM}" \
-    SW_PYTHON_VERSION="${SW_PYTHON_VERSION}" \
-    SW_SWWP_PROTOCOL_VERSIONS="${SW_SWWP_PROTOCOL_VERSIONS}" \
-    SW_JOB_PAYLOAD_SCHEMA_VERSIONS="${SW_JOB_PAYLOAD_SCHEMA_VERSIONS}" \
-    SW_JOB_RESULT_SCHEMA_VERSIONS="${SW_JOB_RESULT_SCHEMA_VERSIONS}" \
-    SW_VALIDATION_PROTOCOL_VERSIONS="${SW_VALIDATION_PROTOCOL_VERSIONS}" \
-    SW_CONFIG_SCHEMA_MIN="${SW_CONFIG_SCHEMA_MIN}" \
-    SW_CONFIG_SCHEMA_MAX="${SW_CONFIG_SCHEMA_MAX}" \
-    SW_DIAGNOSTIC_SCHEMA_VERSION="${SW_DIAGNOSTIC_SCHEMA_VERSION}" \
-    SW_DIAGNOSTIC_CATALOG_VERSION="${SW_DIAGNOSTIC_CATALOG_VERSION}" \
-    SW_CAPABILITY_MANIFEST_VERSION="${SW_CAPABILITY_MANIFEST_VERSION}"
+    PYTHONUNBUFFERED=1
 
 WORKDIR /build
 RUN apt-get update \
@@ -84,11 +41,15 @@ RUN apt-get update \
 RUN python -m venv /opt/venv
 
 COPY --from=uv /uv /uvx /usr/local/bin/
-COPY pyproject.toml uv.lock README.md ./
-RUN uv sync --frozen --no-dev --group controller --no-install-project
+COPY pyproject.toml uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --group controller --no-install-project
 
+ARG SW_VERSION
+COPY README.md ./
 COPY seasonalweather ./seasonalweather
-RUN uv pip install --python /opt/venv/bin/python --no-deps .
+RUN --mount=type=cache,target=/root/.cache/uv \
+    SETUPTOOLS_SCM_PRETEND_VERSION_FOR_SEASONALWEATHER="${SW_VERSION}" \
+    uv pip install --python /opt/venv/bin/python --no-deps .
 
 # Keep the controller artifact safe when later worker packages are added to the
 # shared source tree. P2-03 owns those packages and their image profiles.
@@ -110,6 +71,50 @@ PY
 
 RUN mkdir -p /usr/share/seasonalweather/diagnostics \
     && seasonalweather diagnostics export --output /usr/share/seasonalweather/diagnostics
+
+ARG SW_PROJECT
+ARG SW_BUILD_ID
+ARG SW_BUILD_IDENTITY
+ARG SW_GIT_COMMIT
+ARG SW_GIT_DESCRIBE
+ARG SW_DIRTY_TREE
+ARG SW_BUILD_SOURCE_TIMESTAMP
+ARG SW_SOURCE_DATE_EPOCH
+ARG SW_IMAGE_PROFILE
+ARG SW_TARGET_PLATFORM
+ARG SW_PYTHON_VERSION
+ARG SW_SWWP_PROTOCOL_VERSIONS
+ARG SW_JOB_PAYLOAD_SCHEMA_VERSIONS
+ARG SW_JOB_RESULT_SCHEMA_VERSIONS
+ARG SW_VALIDATION_PROTOCOL_VERSIONS
+ARG SW_CONFIG_SCHEMA_MIN
+ARG SW_CONFIG_SCHEMA_MAX
+ARG SW_DIAGNOSTIC_SCHEMA_VERSION
+ARG SW_DIAGNOSTIC_CATALOG_VERSION
+ARG SW_CAPABILITY_MANIFEST_VERSION
+RUN test "${SW_IMAGE_PROFILE}" = "controller"
+
+ENV SW_PROJECT="${SW_PROJECT}" \
+    SW_VERSION="${SW_VERSION}" \
+    SW_BUILD_ID="${SW_BUILD_ID}" \
+    SW_BUILD_IDENTITY="${SW_BUILD_IDENTITY}" \
+    SW_GIT_COMMIT="${SW_GIT_COMMIT}" \
+    SW_GIT_DESCRIBE="${SW_GIT_DESCRIBE}" \
+    SW_DIRTY_TREE="${SW_DIRTY_TREE}" \
+    SW_BUILD_SOURCE_TIMESTAMP="${SW_BUILD_SOURCE_TIMESTAMP}" \
+    SW_SOURCE_DATE_EPOCH="${SW_SOURCE_DATE_EPOCH}" \
+    SW_IMAGE_PROFILE="${SW_IMAGE_PROFILE}" \
+    SW_TARGET_PLATFORM="${SW_TARGET_PLATFORM}" \
+    SW_PYTHON_VERSION="${SW_PYTHON_VERSION}" \
+    SW_SWWP_PROTOCOL_VERSIONS="${SW_SWWP_PROTOCOL_VERSIONS}" \
+    SW_JOB_PAYLOAD_SCHEMA_VERSIONS="${SW_JOB_PAYLOAD_SCHEMA_VERSIONS}" \
+    SW_JOB_RESULT_SCHEMA_VERSIONS="${SW_JOB_RESULT_SCHEMA_VERSIONS}" \
+    SW_VALIDATION_PROTOCOL_VERSIONS="${SW_VALIDATION_PROTOCOL_VERSIONS}" \
+    SW_CONFIG_SCHEMA_MIN="${SW_CONFIG_SCHEMA_MIN}" \
+    SW_CONFIG_SCHEMA_MAX="${SW_CONFIG_SCHEMA_MAX}" \
+    SW_DIAGNOSTIC_SCHEMA_VERSION="${SW_DIAGNOSTIC_SCHEMA_VERSION}" \
+    SW_DIAGNOSTIC_CATALOG_VERSION="${SW_DIAGNOSTIC_CATALOG_VERSION}" \
+    SW_CAPABILITY_MANIFEST_VERSION="${SW_CAPABILITY_MANIFEST_VERSION}"
 
 RUN mkdir -p /usr/share/seasonalweather \
     && python - <<'PY'

@@ -10,6 +10,8 @@ points to the detailed contracts.
   Compose commands, workers, TTS, logs, diagnostics, and recovery.
 - [Build and provenance](build-and-provenance.md) — image targets, build
   records, compatibility, and native SAME tool compilation.
+- [CI image performance](ci-performance.md) — shared image cache boundaries,
+  changed-path gating, and timing measurement.
 - [Production migration and Phase 3 gate](p3-08-production-migration.md) —
   reversible cutover, persistence, rollback, and acceptance evidence.
 - [Staging operation](p3-07-staging.md) — isolated staging project and

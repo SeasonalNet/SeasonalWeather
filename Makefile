@@ -102,11 +102,8 @@ image:
 	$(PYTHON) -m tools.build_interface image --build-info "$(BUILD_INFO)" --target controller
 
 images:
-	@set -e; \
-	for profile in controller routine-worker piper espeak festival dectalk legacy-tts voicetext-paul spfy maintenance development; do \
-		$(MAKE) BUILD_PROFILE="$$profile" build-info; \
-		$(PYTHON) -m tools.build_interface image --build-info "$(BUILD_INFO)" --target "$$profile"; \
-	done
+	$(MAKE) BUILD_PROFILE=controller build-info
+	$(PYTHON) -m tools.build_interface image --build-info "$(BUILD_INFO)" --all
 
 compose-check:
 	$(PYTHON) -m tools.build_interface compose-check

@@ -11,7 +11,46 @@ on:
   workflow_call:
 
 jobs:
+  scope:
+    runs-on: [docker, slate]
+    outputs:
+      run_checks: ${{ steps.classify.outputs.run_checks }}
+      run_images: ${{ steps.classify.outputs.run_images }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}
+      - name: Classify changed paths
+        id: classify
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
+          REF: ${{ github.ref }}
+        run: |
+          set -eu
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] || [ "${REF#refs/tags/}" != "$REF" ]; then
+            printf 'run_checks=true\nrun_images=true\n' >> "$FORGEJO_OUTPUT"
+          else
+            if [ "$EVENT_NAME" = "pull_request" ]; then
+              base="$PR_BASE"
+            elif [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+              base="$BEFORE"
+            else
+              base="HEAD^"
+            fi
+            if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+              base="HEAD^"
+              git cat-file -e "${base}^{commit}"
+            fi
+            python3 tools/ci/image_changes.py --base "$base" >> "$FORGEJO_OUTPUT"
+            git diff --check "$base" HEAD
+          fi
+
   python:
+    needs: scope
+    if: needs.scope.outputs.run_checks == 'true'
     runs-on: [docker, slate]
     steps:
       - uses: actions/checkout@v6
@@ -65,7 +104,8 @@ jobs:
           make check
 
   images:
-    needs: python
+    needs: [scope, python]
+    if: needs.scope.outputs.run_images == 'true'
     runs-on: [docker, slate-builder]
     steps:
       - uses: actions/checkout@v6

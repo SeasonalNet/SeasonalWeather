@@ -116,6 +116,10 @@ daemon only causes a slower uncached build; it does not affect build
 correctness. A missing or unavailable cache does not replace the normal
 dependency installation or image build. The cache is an acceleration mechanism
 only; quality, test, image inspection, and release publication gates still run.
+The complete CI matrix is submitted as one Bake graph so shared dependency and
+engine stages can be reused within a run. Volatile provenance is added after
+those expensive stages. See [`ci-performance.md`](ci-performance.md) for the
+cache families, changed-path gate, and measurement procedure.
 
 Forgejo's automatic workflow token is sufficient for creating the Forgejo
 release assets. The release workflow uses the `HARBOR_CI_USERNAME` and

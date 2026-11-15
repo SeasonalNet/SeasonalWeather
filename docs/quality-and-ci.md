@@ -65,6 +65,9 @@ Forgejo is the canonical SeasonalWeather CI authority:
   dedicated `slate-builder` Docker lane. The image gate also synthesizes a
   representative utterance through the built Speechify and VoiceText Paul
   images and rejects invalid or effectively silent WAV output.
+  Image inputs are submitted as one shared Bake solve; non-image changes skip
+  only the Docker lane as documented in
+  [`ci-performance.md`](ci-performance.md).
 - `.forgejo/workflows/security.yml` runs the repository Gitleaks contract.
 - `.forgejo/workflows/semver.yml` validates PEP 440 working versions and
   SemVer release tags.
