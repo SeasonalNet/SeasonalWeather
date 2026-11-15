@@ -75,8 +75,10 @@ Forgejo is the canonical SeasonalWeather CI authority:
   can claim them.
 
 GitHub parity is maintained in the corresponding `.github/workflows/` files.
-GitHub uses `ubuntu-latest` and the equivalent hosted-runner package setup;
-the repository phase gate, suppression base selection, security scan, and
+GitHub CI is pinned to `ubuntu-24.04` because Ubuntu 26.04's hosted Docker
+seccomp profile rejects the 32-bit socket path required by Wine 8. Other
+GitHub workflows use `ubuntu-latest`; all use the equivalent hosted-runner package setup.
+The repository phase gate, suppression base selection, security scan, and
 SemVer guardrails remain the same. The Release workflow calls all three
 workflows as reusable jobs and publishes only after all three pass. GitHub uses
 its native Docker support.

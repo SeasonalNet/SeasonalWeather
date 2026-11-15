@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   scope:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       run_checks: ${{ steps.classify.outputs.run_checks }}
       run_images: ${{ steps.classify.outputs.run_images }}
@@ -55,7 +55,7 @@ jobs:
   python:
     needs: scope
     if: needs.scope.outputs.run_checks == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
