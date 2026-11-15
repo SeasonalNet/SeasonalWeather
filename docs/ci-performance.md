@@ -39,7 +39,8 @@ The classifier uses these categories:
 | --- | --- | --- |
 | `docs` | `docs/`, Markdown, `README.md`, `LICENSE` | diff check only |
 | `tests` / `quality` | `tests/`, `quality/`, quality tooling | Python checks |
-| `config` / `ci` | deployment config, workflow files | Python checks |
+| `config` | deployment config | Python checks |
+| `ci` | workflow files | Python checks and images |
 | `runtime` | `seasonalweather/` | Python checks and images |
 | `image` | Dockerfiles, Bake, engine assets, image tooling | Python checks and images |
 | `unknown` | newly unclassified paths | Python checks and images |

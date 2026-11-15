@@ -65,7 +65,7 @@ def gate_for_paths(paths: list[str], *, force: bool = False) -> tuple[bool, bool
     categories = classify_paths(paths)
     if categories == {"docs"} or not categories:
         return False, False
-    return True, bool(categories & {"image", "runtime", "unknown"})
+    return True, bool(categories & {"ci", "image", "runtime", "unknown"})
 
 
 def requires_image_gate(paths: list[str]) -> bool:
