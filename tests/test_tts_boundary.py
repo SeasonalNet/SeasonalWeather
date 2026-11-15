@@ -927,6 +927,19 @@ def test_subprocess_uses_deadline_and_reaps_timeout(tmp_path: Path) -> None:
     assert error.value.classification == "timed_out"
 
 
+def test_subprocess_failure_preserves_bounded_stderr() -> None:
+    with pytest.raises(ProcessFailure) as error:
+        run_bounded(
+            [sys.executable, "-c", "import sys; print('wineboot failed', file=sys.stderr); raise SystemExit(53)"],
+            input_bytes=None,
+            deadline=__import__("time").monotonic() + 5.0,
+        )
+
+    assert error.value.classification == "nonzero_exit"
+    assert error.value.returncode == 53
+    assert error.value.stderr == "wineboot failed\n"
+
+
 def test_content_identity_is_controller_derived_and_preprocessed() -> None:
     first = request(text="A 700 PM update.")
     second = request(text="A 7:00 PM update.")

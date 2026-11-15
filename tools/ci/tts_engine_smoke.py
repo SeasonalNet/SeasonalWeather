@@ -12,6 +12,7 @@ import wave
 from array import array
 from pathlib import Path
 
+from seasonalweather.tts.failures import ProcessFailure
 from seasonalweather.tts.local import DecTalkHandler, SpfyHandler, VoiceTextPaulHandler
 from seasonalweather.tts.models import LocalEngineOptions
 from seasonalweather.tts.subprocess import run_bounded
@@ -114,7 +115,17 @@ def main() -> int:
     parser.add_argument("--profile", required=True, choices=("spfy", "voicetext-paul", "dectalk"))
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix=f"{args.profile}-smoke-", dir="/tmp") as temporary:
-        result = _inspect_audio(args.profile, _synthesize(args.profile, Path(temporary)))
+        try:
+            output_path = _synthesize(args.profile, Path(temporary))
+        except ProcessFailure as error:
+            if error.stderr:
+                print(
+                    f"[tts-image-smoke] subprocess exit={error.returncode} stderr:",
+                    file=sys.stderr,
+                )
+                print(error.stderr, file=sys.stderr, end="" if error.stderr.endswith("\n") else "\n")
+            raise
+        result = _inspect_audio(args.profile, output_path)
     print(json.dumps(result, sort_keys=True))
     return 0
 
