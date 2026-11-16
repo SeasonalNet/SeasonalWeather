@@ -20,7 +20,7 @@ Create and activate a virtual environment, then install runtime and development
 dependencies:
 
 ```bash
-uv venv --python 3.15.1 .venv
+uv venv --python 3.15.2 .venv
 uv sync --group controller --group worker-runtime --group dev
 ```
 

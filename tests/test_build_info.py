@@ -284,8 +284,8 @@ def test_image_matrix_declares_all_revision_profiles() -> None:
     assert '"io.seasonalweather.build.identity"' in matrix
     assert (
         'variable "SW_VOICETEXT_PYTHON_BASE" { default = '
-        '"python:3.15.1-slim-bookworm@sha256:'
-        '575f8bc12ec26542e0678bc6b60e385218248019d433157ec327264a78c3a853" }'
+        '"python:3.15.2-slim-bookworm@sha256:'
+        '96599df822d0e1c6bb700014a05c7f3c8cabc6e0f7ff3c4f9f69cee033b4b5d9" }'
     ) in matrix
     voicetext_target = matrix.split('target "voicetext-paul"', maxsplit=1)[1].split('target "spfy"', maxsplit=1)[0]
     assert "PYTHON_BASE = SW_VOICETEXT_PYTHON_BASE" in voicetext_target

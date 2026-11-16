@@ -3,7 +3,7 @@
 
 variable "SW_PROJECT" { default = "seasonalweather" }
 variable "SW_VERSION" { default = "0.0.0+unknown" }
-variable "RUST_IMAGE" { default = "rust:1.85-bookworm" }
+variable "RUST_IMAGE" { default = "rust:1.100-bookworm" }
 variable "SAMEDEC_VERSION" { default = "0.4.2" }
 variable "DECTALK_SOURCE_URL" { default = "https://github.com/dectalk/dectalk/archive/refs/tags/2023-10-30.tar.gz" }
 variable "DECTALK_SOURCE_SHA256" { default = "511c845e453917eea3a353cdbe8e0401360d8992dcfadfe2e9b4b83fde168f7e" }
@@ -17,9 +17,9 @@ variable "SW_SOURCE_DATE_EPOCH" { default = "" }
 variable "SW_IMAGE_PROFILE" { default = "source" }
 variable "SW_TARGET_PLATFORM" { default = "unknown" }
 variable "SW_PYTHON_VERSION" { default = "unknown" }
-variable "SW_PIPER_PYTHON_VERSION" { default = "3.14.9" }
-variable "SW_PIPER_PYTHON_BASE" { default = "python:3.14-slim@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8" }
-variable "SW_VOICETEXT_PYTHON_BASE" { default = "python:3.15.1-slim-bookworm@sha256:575f8bc12ec26542e0678bc6b60e385218248019d433157ec327264a78c3a853" }
+variable "SW_PIPER_PYTHON_VERSION" { default = "3.14.10" }
+variable "SW_PIPER_PYTHON_BASE" { default = "python:3.14-slim@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f" }
+variable "SW_VOICETEXT_PYTHON_BASE" { default = "python:3.15.2-slim-bookworm@sha256:96599df822d0e1c6bb700014a05c7f3c8cabc6e0f7ff3c4f9f69cee033b4b5d9" }
 variable "SW_SWWP_PROTOCOL_VERSIONS" { default = "1" }
 variable "SW_JOB_PAYLOAD_SCHEMA_VERSIONS" { default = "1" }
 variable "SW_JOB_RESULT_SCHEMA_VERSIONS" { default = "1" }

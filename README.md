@@ -15,11 +15,11 @@ It is hobbyist-developed, and under [SeasonalNet](https://www.seasonalnet.org).
 
 ## Runtime and dependency tooling
 
-The controller and standard workers use CPython 3.15.1 and uv 0.13.5. The
-optional Piper worker remains on CPython 3.14.9 because its ONNX Runtime
+The controller and standard workers use CPython 3.15.2 and uv 0.13.8. The
+optional Piper worker remains on CPython 3.14.10 because its ONNX Runtime
 dependency does not yet publish Python 3.15 wheels. Set `SEASONAL_PIPER=1` for
 the source installer; the `piper` image target uses the compatible 3.14 image.
-The VoiceText Paul worker uses CPython 3.15.1 on the digest-pinned Bookworm
+The VoiceText Paul worker uses CPython 3.15.2 on the digest-pinned Bookworm
 variant because Wine 10 on Trixie cannot initialize its required 32-bit prefix.
 
 ## Overview

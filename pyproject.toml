@@ -105,5 +105,5 @@ exclude_dirs = ["tests", ".venv", ".venv-ci"]
 recursive = true
 
 [tool.uv]
-required-version = "==0.13.5"
+required-version = "==0.13.8"
 extra-build-dependencies = { pycares = ["cmake==4.4.4"] }
