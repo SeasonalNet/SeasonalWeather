@@ -163,7 +163,7 @@ def test_p2_09_image_record_rejects_incorrect_embedded_python_version() -> None:
     spec = IMAGE_SPECS[2]
     info = {
         "image_profile": "piper",
-        "python_version": "3.15.1",
+        "python_version": "3.15.2",
         "configuration_schema": {"minimum": 1, "maximum": 1},
     }
     inspect = {
@@ -175,15 +175,15 @@ def test_p2_09_image_record_rejects_incorrect_embedded_python_version() -> None:
         }
     }
 
-    errors = validate_image_record(spec, inspect, info, {}, "3.14.9")
+    errors = validate_image_record(spec, inspect, info, {}, "3.14.10")
 
     assert any("embedded Python version" in error for error in errors)
 
 
 def test_p2_09_shared_identity_allows_profile_specific_python_version() -> None:
     spec = IMAGE_SPECS[2]
-    controller = {"project": "seasonalweather", "python_version": "3.15.1"}
-    piper = {"project": "seasonalweather", "python_version": "3.14.9"}
+    controller = {"project": "seasonalweather", "python_version": "3.15.2"}
+    piper = {"project": "seasonalweather", "python_version": "3.14.10"}
 
     assert validate_shared_build_identity(spec, controller, piper) == []
 

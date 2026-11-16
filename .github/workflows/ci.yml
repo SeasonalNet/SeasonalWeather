@@ -110,9 +110,9 @@ jobs:
           sudo apt-get install -y --no-install-recommends build-essential cmake make python3 python3-venv python3-pip
           python3 -m venv .venv-bootstrap
           . .venv-bootstrap/bin/activate
-          python -m pip install --upgrade pip uv==0.13.5
-          .venv-bootstrap/bin/uv python install 3.15.1
-          .venv-bootstrap/bin/uv venv --clear --python 3.15.1 .venv
+          python -m pip install --upgrade pip uv==0.13.8
+          .venv-bootstrap/bin/uv python install 3.15.2
+          .venv-bootstrap/bin/uv venv --clear --python 3.15.2 .venv
           . .venv/bin/activate
           .venv-bootstrap/bin/uv sync --frozen --active --group controller --group worker-runtime --group dev
       - name: Audit locked Python dependencies
