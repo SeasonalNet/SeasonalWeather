@@ -4,6 +4,7 @@ import asyncio
 import datetime as dt
 import json
 import logging
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ from ..diagnostics.bindings import FOUNDATION_CODES
 from .assets import AudioAssetRepository
 from .commands import CommandRepository
 from .core import SeasonalDatabase
+from .publications import PublicationLeaseRepository
 from .segments import SegmentRepository
 
 log = logging.getLogger("seasonalweather.database.housekeeping")
@@ -51,13 +53,23 @@ def _safe_unlink(path: Path) -> bool:
 
 
 class DatabaseHousekeeper:
-    def __init__(self, cfg: Any, db: SeasonalDatabase, diagnostic_sink: object | None = None) -> None:
+    def __init__(
+        self,
+        cfg: Any,
+        db: SeasonalDatabase,
+        diagnostic_sink: object | None = None,
+        publication_probe: Callable[[set[int]], Mapping[str, object] | None] | None = None,
+        publication_finished: Callable[[dict[str, object]], None] | None = None,
+    ) -> None:
         self.cfg = cfg
         self.db = db
         self._diagnostic_sink = diagnostic_sink
         self._assets = AudioAssetRepository(db)
         self._commands = CommandRepository(db)
         self._segments = SegmentRepository(db)
+        self._publications = PublicationLeaseRepository(db)
+        self._publication_probe = publication_probe
+        self._publication_finished = publication_finished
         self._stop = asyncio.Event()
         artifact_root = str(getattr(cfg.paths, "artifact_dir", "") or "").strip() or cfg.paths.work_dir
         temporary_root = str(getattr(cfg.paths, "temporary_dir", "") or "").strip()
@@ -125,7 +137,14 @@ class DatabaseHousekeeper:
 
         while not self._stop.is_set():
             try:
-                stats = self.run_once()
+                publication_snapshot: Mapping[str, object] | None = None
+                if self._publication_probe is not None:
+                    try:
+                        request_ids = self._publications.active_request_ids()
+                        publication_snapshot = await asyncio.to_thread(self._publication_probe, request_ids)
+                    except Exception:
+                        log.exception("database housekeeping: failed to probe Liquidsoap publication")
+                stats = self._run_once(publication_snapshot)
                 if any(v for v in stats.values()):
                     log.info("Database housekeeping: %s", ", ".join(f"{k}={v}" for k, v in sorted(stats.items()) if v))
                 if stats.get("segment_placeholders_marked", 0):
@@ -163,8 +182,17 @@ class DatabaseHousekeeper:
         )
 
     def run_once(self) -> dict[str, int]:
+        publication_snapshot = (
+            self._publication_probe(self._publications.active_request_ids())
+            if self._publication_probe is not None
+            else None
+        )
+        return self._run_once(publication_snapshot)
+
+    def _run_once(self, publication_snapshot: Mapping[str, object] | None) -> dict[str, int]:
         now = _utc_now()
         stats: dict[str, int] = {}
+        stats["publications_reconciled"] = self._reconcile_publications(now, publication_snapshot)
         stats["api_commands_pruned"] = self._prune_api_commands(now)
         asset_stats = self._prune_audio_assets(now)
         stats.update(asset_stats)
@@ -175,6 +203,35 @@ class DatabaseHousekeeper:
         if self._wal_checkpoint_enabled():
             stats["wal_checkpointed"] = self._wal_checkpoint()
         return stats
+
+    def _reconcile_publications(self, now: dt.datetime, publication_snapshot: Mapping[str, object] | None) -> int:
+        if publication_snapshot is None:
+            return 0
+        try:
+            updated_at = _to_utc_iso(now)
+            reconciled = 0
+            last_publication = str(publication_snapshot.get("last") or "").strip()
+            if last_publication:
+                observed = self._publications.reconcile_output(last_publication, updated_at)
+                if self._publication_finished is not None:
+                    for item in observed:
+                        self._publication_finished(item)
+                reconciled += len(observed)
+            prior_epoch = self._publications.runtime_epoch()
+            current_epoch = str(publication_snapshot.get("epoch") or "").strip()
+            inventory_reconciled = self._publications.reconcile_inventory(publication_snapshot, updated_at)
+            self._diagnose_publication_restart(prior_epoch, current_epoch)
+            return reconciled + inventory_reconciled
+        except Exception:
+            log.exception("database housekeeping: failed to reconcile Liquidsoap publication")
+            return 0
+
+    def _diagnose_publication_restart(self, prior_epoch: str | None, current_epoch: str) -> None:
+        if prior_epoch and current_epoch and prior_epoch != current_epoch:
+            self._diagnose(
+                FOUNDATION_CODES["liquidsoap.publication_reconciliation"],
+                "Liquidsoap restarted; active publication leases were retained as unknown for reconciliation.",
+            )
 
     def _prune_api_commands(self, now: dt.datetime) -> int:
         cutoff = _to_utc_iso(now - dt.timedelta(days=self._api_command_retention_days()))
@@ -301,6 +358,13 @@ class DatabaseHousekeeper:
     def _protected_audio_paths(self, now: dt.datetime) -> set[str]:
         keep: set[str] = set()
         now_iso = _to_utc_iso(now)
+
+        publication_paths = self._publications.protected_paths(
+            now=now_iso,
+            grace_cutoff=_to_utc_iso(now - dt.timedelta(seconds=self._generated_audio_retention_seconds())),
+        )
+        for path in publication_paths:
+            self._add_audio_path(keep, path)
 
         for item in self._segments.load_entries():
             self._add_audio_path(keep, item.get("audio_path"))

@@ -120,12 +120,18 @@ cp config/config.yaml seasonalweather.config.yaml
 
 Edit `seasonalweather.config.yaml` for station identity, timezone,
 service-area FIPS/UGC settings, enabled sources, TTS policy, and API mode.
-Create these files with mode `0400` and fill them with deployment secrets:
+Create these files with mode `0400`, owned by the runtime identity `10001:10001`, and fill them with deployment secrets. Ordinary file-backed Compose secrets bind-mount the source file; their `uid`, `gid`, and `mode` service fields do not rewrite host ownership or permissions:
 
 ```text
 secrets/ICECAST_SOURCE_PASSWORD
 secrets/SEASONAL_API_TOKEN
 secrets/SEASONAL_WORKER_TOKEN
+```
+
+For example:
+
+```sh
+install -o 10001 -g 10001 -m 0400 /path/to/value secrets/SEASONAL_API_TOKEN
 ```
 
 The Compose defaults mount persistent state, jobs, artifacts, staging, logs,

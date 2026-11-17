@@ -319,7 +319,7 @@ class CapRuntime:
                     str(getattr(ev, "expires", "") or "")
                 ),
             )
-            _station_feed_note_cap(ev, mode="FULL", same_locations=(same_locs if same_locs else same_locs_raw), out_wav=str(out_wav), same_code=same_code, vtec=vtec)
+            await _station_feed_note_cap(ev, mode="FULL", same_locations=(same_locs if same_locs else same_locs_raw), out_wav=str(out_wav), same_code=same_code, vtec=vtec)
             _discord_audit(
                 o.discord,
                 "station_feed_update",
@@ -517,7 +517,7 @@ class CapRuntime:
                 )
             except Exception:
                 log.exception("AlertTracker: failed to register CAP VOICE event=%s", ev.event)
-            _station_feed_note_cap(
+            await _station_feed_note_cap(
                 ev,
                 mode="VOICE",
                 same_locations=(same_locs if same_locs else same_locs_raw),
@@ -715,7 +715,7 @@ class CapRuntime:
                     area=getattr(ev, "area_desc", "") or "",
                     vtec=vtec[:2],
                 )
-            _station_feed_note_cap(ev, mode="VOICE", same_locations=(same_locs if same_locs else same_locs_raw),
+            await _station_feed_note_cap(ev, mode="VOICE", same_locations=(same_locs if same_locs else same_locs_raw),
                                    out_wav=str(out_wav), same_code=same_code, vtec=vtec)
             _discord_audit(
                 o.discord,

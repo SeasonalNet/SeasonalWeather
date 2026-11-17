@@ -4,6 +4,7 @@ import datetime as dt
 import logging
 import os
 import tempfile
+import uuid
 import wave
 from collections.abc import Callable
 from pathlib import Path
@@ -24,6 +25,10 @@ except Exception:  # pragma: no cover
 
 
 log = logging.getLogger("seasonalweather")
+
+
+def _artifact_stamp(tz: ZoneInfo) -> str:
+    return f"{dt.datetime.now(tz=tz):%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:12]}"
 
 
 def safe_event_code(raw: str | None) -> str:
@@ -77,7 +82,7 @@ class AudioOriginator:
 
     async def render_voice_only_audio(self, script_text: str, *, prefix: str = "capvoice") -> Path:
         _, audio_dir, _, _ = self._paths()
-        ts = dt.datetime.now(tz=self.local_tz).strftime("%Y%m%d-%H%M%S")
+        ts = _artifact_stamp(self.local_tz)
         safe_prefix = "".join(ch for ch in prefix if ch.isalnum() or ch in {"_", "-"}).strip() or "voice"
 
         out = audio_dir / f"{safe_prefix}_{ts}.wav"
@@ -102,7 +107,7 @@ class AudioOriginator:
         same_locations: list[str] | None = None,
     ) -> Path:
         _, audio_dir, _, _ = self._paths()
-        ts = dt.datetime.now(tz=self.local_tz).strftime("%Y%m%d-%H%M%S")
+        ts = _artifact_stamp(self.local_tz)
 
         out = audio_dir / f"alert_{ts}.wav"
         with tempfile.TemporaryDirectory(prefix=".alert-", dir=str(audio_dir)) as root:
@@ -164,7 +169,7 @@ class AudioOriginator:
     ) -> Path:
         self.assert_station_wav_format(source_wav)
         _, audio_dir, _, _ = self._paths()
-        ts = dt.datetime.now(tz=self.local_tz).strftime("%Y%m%d-%H%M%S")
+        ts = _artifact_stamp(self.local_tz)
 
         tone = audio_dir / f"api_audio_alert_{ts}_tone.wav"
         gap = audio_dir / f"api_audio_alert_{ts}_gap.wav"

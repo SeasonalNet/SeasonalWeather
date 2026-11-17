@@ -13,7 +13,7 @@ def _wire_fake_send(tn: LiquidsoapTelnet, help_text: str):
             return help_text
         return "OK\nEND\n"
 
-    tn._send = fake_send  # type: ignore[method-assign]
+    object.__setattr__(tn, "_send", fake_send)
     return commands
 
 
@@ -54,6 +54,34 @@ END
     assert "sw.cycle.reset" in commands
     assert "sw.full_alert.skip" in commands
     assert "sw.voice_alert.skip" in commands
+
+
+def test_liquidsoap_telnet_publication_sink_is_called_once(tmp_path: Path) -> None:
+    wav = tmp_path / "cycle.wav"
+    wav.write_bytes(b"RIFFfakeWAVE")
+    tn = LiquidsoapTelnet("127.0.0.1", 1234)
+    commands = _wire_fake_send(
+        tn,
+        """
+| sw.cycle.push_b64 <base64-uri>
+| sw.cycle.push <uri>
+| sw.voice_alert.push_b64 <base64-uri>
+| sw.voice_alert.push <uri>
+| sw.full_alert.push_b64 <base64-uri>
+| sw.full_alert.push <uri>
+END
+""",
+    )
+    publications: list[tuple[str, int | None, dict[str, str]]] = []
+    tn.set_publication_sink(lambda path, request_id, meta: publications.append((path, request_id, meta)))
+
+    tn.push_cycle(str(wav))
+
+    assert len(publications) == 1
+    assert publications[0][0] == str(wav)
+    assert publications[0][1] is None
+    assert publications[0][2]["sw_plane"] == "cycle"
+    assert any(command.startswith("sw.cycle.push_b64 ") for command in commands)
 
 
 def test_liquidsoap_telnet_uses_split_alert_planes(tmp_path: Path) -> None:
@@ -308,3 +336,41 @@ END
     assert tn.interrupt_active() is True
     assert tn.interrupt_active() is False
     assert commands.count("sw.interrupt.status") == 2
+
+
+def test_liquidsoap_telnet_reads_full_publication_inventory() -> None:
+    tn = LiquidsoapTelnet("127.0.0.1", 1234)
+    commands: list[str] = []
+
+    def fake_send(command: str, *, read_deadline=None):
+        commands.append(command)
+        if command == "help":
+            return """
+├─ sw.cycle.push <uri>
+├─ sw.voice_alert.push <uri>
+├─ sw.full_alert.push <uri>
+├─ sw.publication.last
+├─ sw.publication.epoch
+├─ sw.publication.inventory
+END
+"""
+        if command == "sw.publication.epoch":
+            return "epoch-1\nEND\n"
+        if command == "sw.publication.last":
+            return "pub-1\nEND\n"
+        if command == "sw.publication.inventory":
+            return "7=playing\n8=ready\n9=resolving\nEND\n"
+        return "OK\nEND\n"
+
+    object.__setattr__(tn, "_send", fake_send)
+
+    assert tn.publication_snapshot({7, 8, 9}) == {
+        "epoch": "epoch-1",
+        "last": "pub-1",
+        "all": {7, 8, 9},
+        "alive": {7, 8, 9},
+        "resolving": {9},
+        "on_air": {7},
+        "statuses": {7: "playing", 8: "ready", 9: "resolving"},
+    }
+    assert commands[-1] == "sw.publication.inventory"

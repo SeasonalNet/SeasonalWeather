@@ -278,6 +278,16 @@ class WorkerSession(SessionMachine):
             ),
         )
 
+    def drained(self) -> Envelope:
+        if self.state is not WorkerState.DRAINING:
+            raise ValueError("worker is not draining")
+        return self._out(
+            Drained(
+                active=tuple(item.lease for item in self.assignments.values()),
+                unacknowledged_completions=tuple(result.completion_id for result in self.completions.values()),
+            )
+        )
+
     def _result_committed(self, payload: ResultCommitted) -> tuple[Envelope, ...]:
         key = self._key(payload.lease)
         retained = self.completions.get(key)

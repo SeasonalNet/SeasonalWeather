@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 14
 
 MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: (
@@ -367,6 +367,32 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
             command_id TEXT NOT NULL,
             target_path TEXT NOT NULL,
             PRIMARY KEY (segment_key, command_id)
+        )
+        """,
+    ),
+    12: (
+        """
+        CREATE TABLE IF NOT EXISTS publication_leases (
+            publication_id TEXT PRIMARY KEY,
+            artifact_path TEXT NOT NULL,
+            plane TEXT NOT NULL,
+            request_id INTEGER,
+            state TEXT NOT NULL CHECK (state IN ('submitted', 'queued', 'ready', 'on_air', 'finished', 'cancelled', 'failed', 'unknown')),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            released_at TEXT
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_publication_leases_artifact ON publication_leases (artifact_path)",
+        "CREATE INDEX IF NOT EXISTS idx_publication_leases_state ON publication_leases (state, updated_at)",
+    ),
+    13: ("ALTER TABLE publication_leases ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'",),
+    14: (
+        """
+        CREATE TABLE IF NOT EXISTS publication_runtime (
+            runtime_id INTEGER PRIMARY KEY CHECK (runtime_id = 1),
+            player_epoch TEXT NOT NULL,
+            updated_at TEXT NOT NULL
         )
         """,
     ),

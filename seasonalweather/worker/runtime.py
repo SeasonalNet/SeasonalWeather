@@ -57,7 +57,9 @@ class WorkerRuntime:
         self.health = WorkerHealthStore(health_path(health_file), clock=self.clock)
         self._send_lock = asyncio.Lock()
         self._stop = asyncio.Event()
+        self._settlement_changed = asyncio.Event()
         self._registered = asyncio.Event()
+        self._drain_task: asyncio.Task[None] | None = None
         self._heartbeat_interval = 30
         self._connection: WorkerConnection | None = None
         self._assignment_tasks: dict[tuple[str, str, str, int], asyncio.Task[None]] = {}
@@ -161,6 +163,13 @@ class WorkerRuntime:
                 heartbeat.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await heartbeat
+                drain_task = self._drain_task
+                self._drain_task = None
+                if drain_task is not None and not drain_task.done():
+                    drain_task.cancel()
+                if drain_task is not None:
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await drain_task
         finally:
             with contextlib.suppress(Exception):
                 await connection.close()
@@ -174,9 +183,21 @@ class WorkerRuntime:
 
     async def stop(self) -> None:
         self._shutdown_requested = True
-        self._set_draining("shutdown_requested")
+        self._set_draining("shutdown_requested", stop_receiving=False)
         for cancellation in self._cancellations.values():
             cancellation.set()
+        loop = asyncio.get_running_loop()
+        monotonic_deadline = loop.time() + 30.0
+        while self._connection is not None and (self._assignment_tasks or self.session.completions):
+            remaining = monotonic_deadline - loop.time()
+            if remaining <= 0:
+                break
+            self._settlement_changed.clear()
+            try:
+                await asyncio.wait_for(self._settlement_changed.wait(), timeout=remaining)
+            except TimeoutError:
+                break
+        self._stop.set()
         connection = self._connection
         if connection is not None:
             with contextlib.suppress(Exception):
@@ -219,9 +240,16 @@ class WorkerRuntime:
             if active_cancellation is not None:
                 active_cancellation.set()
         elif isinstance(payload, Drain):
-            self._handle_drain()
+            self._schedule_drain(payload)
         elif isinstance(payload, ResultCommitted):
             self._handle_result_committed(payload)
+
+    def _schedule_drain(self, payload: Drain) -> None:
+        if self._drain_task is None or self._drain_task.done():
+            self._drain_task = asyncio.create_task(
+                self._handle_drain(payload),
+                name="seasonalweather-worker-drain",
+            )
 
     def _handle_registered(self, payload: Registered) -> None:
         self._heartbeat_interval = payload.heartbeat_interval_seconds
@@ -269,14 +297,27 @@ class WorkerRuntime:
             reason="job_started",
         )
 
-    def _handle_drain(self) -> None:
+    async def _handle_drain(self, payload: Drain) -> None:
         self._set_draining("controller_drain", stop_receiving=False)
-        if not self._assignment_tasks:
-            self._stop.set()
+        loop = asyncio.get_running_loop()
+        monotonic_deadline = loop.time() + max(0.0, (payload.deadline_at - self.clock()).total_seconds())
+        while self._assignment_tasks or self.session.completions:
+            remaining = monotonic_deadline - loop.time()
+            if remaining <= 0:
+                break
+            self._settlement_changed.clear()
+            try:
+                await asyncio.wait_for(self._settlement_changed.wait(), timeout=remaining)
+            except TimeoutError:
+                break
+        with contextlib.suppress(Exception):
+            await self._send(self.session.drained())
+        self._stop.set()
 
     def _handle_result_committed(self, payload: ResultCommitted) -> None:
         self._assignment_tasks.pop(self._lease_key(payload.lease), None)
         self._cancellations.pop(self._lease_key(payload.lease), None)
+        self._settlement_changed.set()
         self._publish_health(
             state=self.session.readiness_state.value,
             ready=self.session.ready,
@@ -288,6 +329,7 @@ class WorkerRuntime:
 
     async def _execute(self, assignment: JobAssignmentPayload, cancellation: asyncio.Event) -> None:
         key = self._lease_key(assignment.lease)
+        retain_until_commit = False
         try:
             trace = TraceContext.parse(assignment.traceparent)
             with (
@@ -322,6 +364,8 @@ class WorkerRuntime:
                     summary=exc.summary,
                 )
             )
+            self._assignment_tasks.pop(key, None)
+            self._cancellations.pop(key, None)
         else:
             completion_id = self.session.id_factory("completion")
             await self._send(
@@ -333,8 +377,12 @@ class WorkerRuntime:
                     completion_id=completion_id,
                 )
             )
+            retain_until_commit = True
         finally:
-            self._assignment_tasks.pop(key, None)
+            if not retain_until_commit:
+                self._assignment_tasks.pop(key, None)
+                self._cancellations.pop(key, None)
+            self._settlement_changed.set()
 
     async def _heartbeat_loop(self) -> None:
         await self._registered.wait()
