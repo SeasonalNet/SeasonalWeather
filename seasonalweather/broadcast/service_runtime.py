@@ -15,6 +15,8 @@ from ..nwws.source import (
 )
 from .station_feed_runtime import hydrate_persisted_alerts as _sf_hydrate_persisted_alerts
 from .station_feed_runtime import purge_legacy_synthetic_alerts as _sf_purge_legacy_synthetic_alerts
+from .station_feed_runtime import station_feed_housekeeping_run as _sf_station_feed_housekeeping_run
+from .station_feed_runtime import station_feed_housekeeping_stop as _sf_station_feed_housekeeping_stop
 
 
 # Optional CAP (api.weather.gov/alerts/active)
@@ -431,6 +433,13 @@ class SeasonalWeatherServiceRuntime:
                 required=False,
                 stop=o.db_housekeeper.stop,
             )
+
+        supervisor.create_task(
+            _sf_station_feed_housekeeping_run(),
+            name="station_feed_housekeeping",
+            required=False,
+            stop=_sf_station_feed_housekeeping_stop,
+        )
 
         supervisor.create_task(
             o.discord.start(),

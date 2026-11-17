@@ -30,8 +30,10 @@ import asyncio
 import datetime as dt
 import logging
 import os
+import shutil
 import tempfile
 import time
+import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,10 +59,6 @@ _TICK_S: float = 4.0
 
 # Silence padding each side of the live time segment.
 _SEG_GAP_S: float = 0.45
-
-# Number of time WAV buffers to rotate through (avoids overwriting a
-# file that Liquidsoap may still have queued).
-_TIME_BUF_COUNT: int = 2
 
 # Maximum segments to push in a single tick (safety valve).
 _MAX_PUSHES_PER_TICK: int = 30
@@ -261,10 +259,7 @@ class CycleConductor:
         self._last_pushed_at: dict[str, float] = {}
         self._focus_mode_active: bool = False
 
-        # Double-buffer for live time WAV (prevents overwriting while queued)
         self._audio_dir.mkdir(parents=True, exist_ok=True)
-        self._time_bufs: list[Path] = [self._audio_dir / f"cycle_time_{i}.wav" for i in range(_TIME_BUF_COUNT)]
-        self._time_buf_idx: int = 0
 
         # Flush notification event (set by notify_flush to wake the loop early)
         self._flush_event: asyncio.Event = asyncio.Event()
@@ -842,6 +837,11 @@ class CycleConductor:
     #  Push helpers
     # ------------------------------------------------------------------
 
+    def _copy_for_publication(self, source: Path) -> Path:
+        target = self._audio_dir / f"cycle_pub_{uuid.uuid4().hex}.wav"
+        shutil.copyfile(source, target)
+        return target
+
     def _push_scheduled_insert(self, key: str) -> float:
         item = self._insert_cache.get(key) or {}
         insert_id = str(item.get("insert_id") or key[len("_insert_") :])
@@ -864,11 +864,12 @@ class CycleConductor:
             extra={
                 "sw_cycle_key": "insert",
                 "sw_insert_id": insert_id,
+                "sw_rotation_count": str(self._rotation_count),
                 "sw_insert_kind": str(((item.get("meta") or {}).get("source_type")) or item.get("kind") or ""),
             },
         )
         try:
-            self._telnet.push_cycle(str(audio), meta=meta)
+            self._telnet.push_cycle(str(self._copy_for_publication(audio)), meta=meta)
         except Exception as exc:
             log.exception("CycleConductor: telnet push_cycle failed for scheduled insert id=%s", insert_id)
             self._diagnose_liquidsoap(
@@ -879,11 +880,6 @@ class CycleConductor:
             return 0.0
 
         self._rotation_seg_count += 1
-        if self._mark_insert_aired_fn:
-            try:
-                self._mark_insert_aired_fn(insert_id, self._rotation_count)
-            except Exception:
-                log.exception("CycleConductor: failed to mark scheduled insert aired id=%s", insert_id)
         log.info("CycleConductor: → insert_%s (%.1fs) %s", insert_id, duration, title)
         return max(0.1, duration)
 
@@ -909,7 +905,7 @@ class CycleConductor:
             extra={"sw_cycle_key": key},
         )
         try:
-            self._telnet.push_cycle(str(audio), meta=meta)
+            self._telnet.push_cycle(str(self._copy_for_publication(audio)), meta=meta)
         except Exception as exc:
             log.exception("CycleConductor: telnet push_cycle failed key=%s", key)
             self._diagnose_liquidsoap(
@@ -921,11 +917,6 @@ class CycleConductor:
 
         self._rotation_seg_count += 1
         self._last_pushed_at[key] = time.time()
-        if self._mark_segment_aired_fn is not None:
-            try:
-                self._mark_segment_aired_fn(key)
-            except Exception:
-                log.exception("CycleConductor: failed to persist airing evidence key=%s", key)
         log.info("CycleConductor: → %s (%.1fs)", key, entry.duration_s)
         return entry.duration_s
 
@@ -960,7 +951,7 @@ class CycleConductor:
                 kind="cycle",
                 extra={"sw_cycle_key": "alert", "sw_alert_id": alert_id},
             )
-            self._telnet.push_cycle(str(audio), meta=meta)
+            self._telnet.push_cycle(str(self._copy_for_publication(audio)), meta=meta)
         except Exception as exc:
             log.exception(
                 "CycleConductor: failed pushing tracker alert id=%s",
@@ -989,17 +980,13 @@ class CycleConductor:
         time is always within a few seconds of accurate when it plays — no
         drift from cache age or queue depth.
 
-        Double-buffering (cycle_time_0.wav / cycle_time_1.wav) ensures we
-        never overwrite a file Liquidsoap has already queued but not yet played.
-        The cycle is ~15-30 minutes; the two buffers are always stale before
-        reuse.
+        Each publication gets a unique path so queued requests never observe
+        later content written over the same pathname.
         """
         now = dt.datetime.now(tz=self._tz)
         text = f"The current time is, {_fmt_time(now)}, {_short_tz(now)}."
 
-        # Rotate to the next buffer slot
-        wav = self._time_bufs[self._time_buf_idx]
-        self._time_buf_idx = (self._time_buf_idx + 1) % _TIME_BUF_COUNT
+        wav = self._audio_dir / f"cycle_time_{uuid.uuid4().hex}.wav"
 
         try:
             with tempfile.TemporaryDirectory(prefix=".cycle-time-", dir=str(self._audio_dir)) as root:

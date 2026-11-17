@@ -10,6 +10,7 @@ x-seasonal-security: &seasonal-security
   tmpfs:
     - /tmp:rw,nosuid,nodev,noexec
     - /run:rw,nosuid,nodev,noexec
+  stop_grace_period: 35s
 
 services:
   controller:
@@ -586,8 +587,9 @@ services:
       retries: 3
 
   liquidsoap:
-    image: ${SEASONALWEATHER_LIQUIDSOAP_IMAGE:-savonet/liquidsoap:v2.3.3}
+    image: ${SEASONALWEATHER_LIQUIDSOAP_IMAGE:-savonet/liquidsoap:v2.4.6}
     <<: *seasonal-security
+    user: "10001:10001"
     command:
       - /etc/seasonalweather/radio.liq
     environment:

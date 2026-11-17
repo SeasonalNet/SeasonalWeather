@@ -87,6 +87,7 @@ from .broadcast.tests_runtime import RequiredTestRuntime
 from .database.bootstrap import bootstrap_database_from_config
 from .database.housekeeping import DatabaseHousekeeper
 from .database.inserts import CycleInsertRepository
+from .database.publications import PublicationLeaseRepository
 from .database.station_feed import StationFeedRepository
 from .capabilities.registry import CapabilityRegistry
 from .capabilities.service import declared_capability_names
@@ -114,10 +115,10 @@ from .broadcast.station_feed_runtime import (
     set_app_config as _sf_set_app_config,
 )
 from .broadcast.station_feed_runtime import (
-    set_repository as _sf_set_repository,
+    set_nws_api as _sf_set_nws_api,
 )
 from .broadcast.station_feed_runtime import (
-    station_feed_housekeeping_start as _sf_station_feed_hk_start,
+    set_repository as _sf_set_repository,
 )
 
 # _VTEC_FIND_RE and _VTEC_PARSE_RE are now imported from .alerts.vtec above.
@@ -167,6 +168,7 @@ class Orchestrator:
             allowed_capabilities=declared_capability_names()
         )
         self.api = NWSApi()
+        _sf_set_nws_api(self.api)
         self.telnet = LiquidsoapTelnet(
             host=cfg.network.liquidsoap.host,
             port=cfg.network.liquidsoap.port,
@@ -224,6 +226,9 @@ class Orchestrator:
         # restart-surviving cache.  Durable state must not silently fall back
         # to files when the database is enabled.
         self.database = bootstrap_database_from_config(cfg) if getattr(cfg.database, "enabled", True) else None
+        self.publication_repo = PublicationLeaseRepository(self.database)
+        self.telnet.set_publication_sink(self._record_publication)
+        self.telnet.set_publication_cancel_sink(self._cancel_publications)
         self.postgresql_preflight = PostgresPreflight(
             configuration=cfg.database.postgres,
             network=cfg.network.postgresql,
@@ -299,13 +304,18 @@ class Orchestrator:
 
         # --- Embedded SQLite runtime state ---
         self.cycle_insert_repo = CycleInsertRepository(self.database) if self.database is not None else None
-        self.db_housekeeper = DatabaseHousekeeper(cfg, self.database) if self.database is not None else None
+        self.db_housekeeper = (
+            DatabaseHousekeeper(
+                cfg,
+                self.database,
+                publication_probe=self.telnet.publication_snapshot,
+                publication_finished=self._publication_finished,
+            )
+            if self.database is not None
+            else None
+        )
         self.station_feed_repo = StationFeedRepository(self.database) if self.database is not None else None
         _sf_set_repository(self.station_feed_repo)
-
-        # Start StationFeed housekeeping after SQLite is ready so the public
-        # /v1/handled-alerts read model stays tidy.
-        _sf_station_feed_hk_start()
 
         # --- Persistent active alert tracker ---
         # Survives restarts: active watches/warnings are re-queued as cycle segments.
@@ -403,6 +413,39 @@ class Orchestrator:
     def _utc_iso(self, value: dt.datetime | None = None) -> str:
         when = value or dt.datetime.now(dt.UTC)
         return when.astimezone(dt.UTC).replace(microsecond=0).isoformat()
+
+    def _record_publication(self, artifact_path: str, request_id: int | None, meta: dict[str, str]) -> None:
+        self.publication_repo.create(
+            publication_id=str(meta.get("sw_pub_id") or "").strip(),
+            artifact_path=artifact_path,
+            plane=str(meta.get("sw_plane") or "unknown"),
+            request_id=request_id,
+            created_at=self._utc_iso(),
+            metadata=meta,
+        )
+
+    def _cancel_publications(self, plane: str) -> None:
+        request_ids = self.publication_repo.active_request_ids(plane=plane)
+        self.telnet.destroy_requests(request_ids)
+        self.publication_repo.cancel_plane(plane, self._utc_iso())
+
+    def _publication_finished(self, publication: dict[str, object]) -> None:
+        metadata = publication.get("metadata")
+        if not isinstance(metadata, dict):
+            return
+        insert_id = str(metadata.get("sw_insert_id") or "").strip()
+        if insert_id:
+            try:
+                self._mark_cycle_insert_aired(
+                    insert_id,
+                    int(str(metadata.get("sw_rotation_count") or "0")),
+                )
+            except Exception:
+                log.exception("Failed to settle scheduled insert publication id=%s", insert_id)
+            return
+        key = str(metadata.get("sw_cycle_key") or "").strip()
+        if key and key not in {"insert", "alert"}:
+            self._mark_segment_aired(key)
 
     def _cycle_due_inserts(
         self, placement: str, rotation_count: int, focus: bool, now_iso: str | None = None

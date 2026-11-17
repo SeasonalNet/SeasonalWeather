@@ -6,6 +6,8 @@ import re
 import socket
 import threading
 import time
+import uuid
+from collections.abc import Callable, Collection
 from pathlib import Path
 from typing import Optional
 
@@ -64,7 +66,21 @@ class LiquidsoapTelnet:
         # are exactly what can poison an empty request source on Liquidsoap
         # 2.3.x.
         self._cycle_reset_cmd: Optional[str] = None
+        self._voice_alert_reset_cmd: str | None = None
+        self._full_alert_reset_cmd: str | None = None
         self._interrupt_status_cmd: Optional[str] = None
+        self._publication_last_cmd: Optional[str] = None
+        self._publication_epoch_cmd: Optional[str] = None
+        self._publication_inventory_cmd: str | None = None
+        self._request_destroy_cmd: Optional[str] = None
+        self._publication_sink: Callable[[str, int | None, dict[str, str]], None] | None = None
+        self._publication_cancel_sink: Callable[[str], None] | None = None
+
+    def set_publication_sink(self, sink: Callable[[str, int | None, dict[str, str]], None] | None) -> None:
+        self._publication_sink = sink
+
+    def set_publication_cancel_sink(self, sink: Callable[[str], None] | None) -> None:
+        self._publication_cancel_sink = sink
 
     def _to_uri(self, wav_path: str) -> str:
         s = str(wav_path).strip()
@@ -95,8 +111,6 @@ class LiquidsoapTelnet:
 
         parts: list[str] = []
         for k, v in meta.items():
-            if v is None:
-                continue
             ks = self._ANN_KEY_SAFE_RE.sub("_", str(k).strip())
             if not ks:
                 continue
@@ -138,11 +152,7 @@ class LiquidsoapTelnet:
         if not cmd:
             return ""
 
-        timeout = (
-            self.timeout
-            if connect_timeout is None
-            else max(0.05, min(float(connect_timeout), self.timeout))
-        )
+        timeout = self.timeout if connect_timeout is None else max(0.05, min(float(connect_timeout), self.timeout))
         with socket.create_connection((self.host, self.port), timeout=timeout) as s:
             # banner/prompt might exist; ignore
             _ = self._recv_until_end(s, deadline=0.6)
@@ -197,8 +207,12 @@ class LiquidsoapTelnet:
                 continue
 
             # Fallback: accept non-empty non-header lines that look like commands.
-            stripped = ln.strip()
-            if stripped and not stripped.lower().startswith(("available commands", "type ")) and not stripped.startswith("END"):
+            stripped = re.sub(r"^[^A-Za-z0-9_.-]+", "", ln.strip())
+            if (
+                stripped
+                and not stripped.lower().startswith(("available commands", "type "))
+                and not stripped.startswith("END")
+            ):
                 if re.match(r"^[A-Za-z0-9_.-]+(?:\s+.*)?$", stripped):
                     add_payload(stripped)
 
@@ -224,21 +238,27 @@ class LiquidsoapTelnet:
         # 1) Prefer SeasonalWeather's explicit command aliases.  These are
         # registered by liquidsoap/radio.liq specifically to avoid relying on
         # Liquidsoap-generated request_queue/request_queue.N names.
-        if all(self._has_help_command(cmds, name) for name in (
-            "sw.cycle.push",
-            "sw.voice_alert.push",
-            "sw.full_alert.push",
-        )):
+        if all(
+            self._has_help_command(cmds, name)
+            for name in (
+                "sw.cycle.push",
+                "sw.voice_alert.push",
+                "sw.full_alert.push",
+            )
+        ):
             self._cycle_prefix = "sw.cycle"
             self._voice_alert_prefix = "sw.voice_alert"
             self._full_alert_prefix = "sw.full_alert"
 
         # 2) Older explicit queue IDs from repository liquidsoap scripts.
-        elif all(self._has_help_command(cmds, name) for name in (
-            "cycle.push",
-            "voice_alert.push",
-            "full_alert.push",
-        )):
+        elif all(
+            self._has_help_command(cmds, name)
+            for name in (
+                "cycle.push",
+                "voice_alert.push",
+                "full_alert.push",
+            )
+        ):
             self._cycle_prefix = "cycle"
             self._voice_alert_prefix = "voice_alert"
             self._full_alert_prefix = "full_alert"
@@ -330,8 +350,21 @@ class LiquidsoapTelnet:
         self._full_alert_skip_cmd = pick_skip(self._full_alert_prefix, self._full_alert_flush_cmd)
         if self._has_help_command(cmds, "sw.cycle.reset"):
             self._cycle_reset_cmd = "sw.cycle.reset"
+        if self._has_help_command(cmds, "sw.voice_alert.reset"):
+            self._voice_alert_reset_cmd = "sw.voice_alert.reset"
+        if self._has_help_command(cmds, "sw.full_alert.reset"):
+            self._full_alert_reset_cmd = "sw.full_alert.reset"
         if self._has_help_command(cmds, "sw.interrupt.status"):
             self._interrupt_status_cmd = "sw.interrupt.status"
+        if self._has_help_command(cmds, "sw.publication.last"):
+            self._publication_last_cmd = "sw.publication.last"
+        self._publication_epoch_cmd = (
+            "sw.publication.epoch" if self._has_help_command(cmds, "sw.publication.epoch") else None
+        )
+        self._publication_inventory_cmd = (
+            "sw.publication.inventory" if self._has_help_command(cmds, "sw.publication.inventory") else None
+        )
+        self._request_destroy_cmd = "request.destroy" if self._has_help_command(cmds, "request.destroy") else None
 
         self._discovered = True
         log.info(
@@ -356,51 +389,66 @@ class LiquidsoapTelnet:
             if not self._discovered:
                 self._discover()
 
-    def _push_to_command(self, command: str, wav_path: str, *, meta: dict[str, str] | None = None) -> None:
+    def _push_to_command(self, command: str, wav_path: str, *, meta: dict[str, str] | None = None) -> int | None:
+        publication_meta = dict(meta or {})
+        publication_meta.setdefault("sw_pub_id", uuid.uuid4().hex)
         uri = self._to_uri(wav_path)
-        annotated_uri = self._annotate_uri(uri, meta)
+        annotated_uri = self._annotate_uri(uri, publication_meta)
 
         if command.endswith(".push_b64"):
             payload = base64.b64encode(annotated_uri.encode("utf-8")).decode("ascii")
-            self._send(f"{command} {payload}")
-            return
+            response = self._send(f"{command} {payload}")
+        else:
+            # Built-in request.queue commands accept annotate: URIs directly.
+            # Older sw.* aliases do not have the safe base64 transport, so retain
+            # the v0.14.3 bare-URI fallback rather than risking alert truncation.
+            if command.startswith("sw."):
+                annotated_uri = uri
+            response = self._send(f"{command} {annotated_uri}")
 
-        # Built-in request.queue commands accept annotate: URIs directly.
-        # Older sw.* aliases do not have the safe base64 transport, so retain
-        # the v0.14.3 bare-URI fallback rather than risking alert truncation.
-        if command.startswith("sw."):
-            annotated_uri = uri
-        self._send(f"{command} {annotated_uri}")
+        request_id = next(
+            (int(line.strip()) for line in response.splitlines() if line.strip().isdigit()),
+            None,
+        )
+        if self._publication_sink is not None:
+            self._publication_sink(str(wav_path), request_id, publication_meta)
+        return request_id
 
     # -------- Public API --------
 
-    def push_full_alert(self, wav_path: str, *, meta: dict[str, str] | None = None) -> None:
+    def push_full_alert(self, wav_path: str, *, meta: dict[str, str] | None = None) -> int | None:
         self._ensure_discovered()
         assert self._full_alert_push_cmd is not None
-        self._push_to_command(self._full_alert_push_cmd, wav_path, meta=meta)
+        return self._push_to_command(
+            self._full_alert_push_cmd, wav_path, meta={**(meta or {}), "sw_plane": "full_alert"}
+        )
 
-    def push_voice_alert(self, wav_path: str, *, meta: dict[str, str] | None = None) -> None:
+    def push_voice_alert(self, wav_path: str, *, meta: dict[str, str] | None = None) -> int | None:
         self._ensure_discovered()
         assert self._voice_alert_push_cmd is not None
-        self._push_to_command(self._voice_alert_push_cmd, wav_path, meta=meta)
+        return self._push_to_command(
+            self._voice_alert_push_cmd, wav_path, meta={**(meta or {}), "sw_plane": "voice_alert"}
+        )
 
-    def push_alert(self, wav_path: str, *, meta: dict[str, str] | None = None) -> None:
+    def push_alert(self, wav_path: str, *, meta: dict[str, str] | None = None) -> int | None:
         """Compatibility wrapper for older callers; use the VOICE interrupt plane."""
-        self.push_voice_alert(wav_path, meta=meta)
+        return self.push_voice_alert(wav_path, meta=meta)
 
-    def push_cycle(self, wav_path: str, *, meta: dict[str, str] | None = None) -> None:
+    def push_cycle(self, wav_path: str, *, meta: dict[str, str] | None = None) -> int | None:
         self._ensure_discovered()
         assert self._cycle_push_cmd is not None
-        self._push_to_command(self._cycle_push_cmd, wav_path, meta=meta)
+        return self._push_to_command(self._cycle_push_cmd, wav_path, meta={**(meta or {}), "sw_plane": "cycle"})
 
     def flush_cycle(self) -> None:
         """Clear routine cycle audio, preferring the guarded reset alias."""
         self._ensure_discovered()
         if self._cycle_reset_cmd is not None:
             self._send(self._cycle_reset_cmd)
+            self._notify_publication_cancelled("cycle")
             return
         assert self._cycle_flush_cmd is not None
         self._send(self._cycle_flush_cmd)
+        self._notify_publication_cancelled("cycle")
 
     def reset_cycle_safely(self) -> bool:
         """Clear only the cycle plane with the guarded repository alias.
@@ -414,6 +462,7 @@ class LiquidsoapTelnet:
         if self._cycle_reset_cmd is None:
             return False
         self._send(self._cycle_reset_cmd)
+        self._notify_publication_cancelled("cycle")
         return True
 
     def interrupt_active(self) -> Optional[bool]:
@@ -422,26 +471,100 @@ class LiquidsoapTelnet:
         if self._interrupt_status_cmd is None:
             return None
         out = self._send(self._interrupt_status_cmd)
-        tokens = {
-            line.strip().upper()
-            for line in out.replace("\r", "").split("\n")
-            if line.strip()
-        }
+        tokens = {line.strip().upper() for line in out.replace("\r", "").split("\n") if line.strip()}
         if "ACTIVE" in tokens:
             return True
         if "IDLE" in tokens:
             return False
         raise RuntimeError(f"Unexpected Liquidsoap interrupt status response: {out.strip()!r}")
 
+    def last_publication_id(self) -> str | None:
+        self._ensure_discovered()
+        if self._publication_last_cmd is None:
+            return None
+        output = self._send(self._publication_last_cmd)
+        return next((line.strip() for line in output.splitlines() if line.strip() and line.strip() != "END"), None)
+
+    @staticmethod
+    def _first_response_line(output: str) -> str:
+        return next((line.strip() for line in output.splitlines() if line.strip() and line.strip() != "END"), "")
+
+    @staticmethod
+    def _parse_publication_inventory(output: str) -> dict[int, str]:
+        statuses: dict[int, str] = {}
+        for line in output.splitlines():
+            raw_id, separator, raw_status = line.partition("=")
+            if not separator:
+                continue
+            try:
+                request_id = int(raw_id.strip())
+            except ValueError:
+                continue
+            status = raw_status.strip().lower()
+            if status:
+                statuses[request_id] = status
+        return statuses
+
+    def _publication_commands_available(self) -> bool:
+        return all(
+            command is not None
+            for command in (self._publication_epoch_cmd, self._publication_last_cmd, self._publication_inventory_cmd)
+        )
+
+    def publication_snapshot(self, request_ids: Collection[int]) -> dict[str, object] | None:
+        """Return a fail-closed snapshot of Liquidsoap's request inventory."""
+        self._ensure_discovered()
+        if not self._publication_commands_available():
+            return None
+        epoch = self._first_response_line(self._send(self._publication_epoch_cmd or ""))
+        last_publication = self._first_response_line(self._send(self._publication_last_cmd or ""))
+        statuses = self._parse_publication_inventory(self._send(self._publication_inventory_cmd or ""))
+        if not epoch:
+            return None
+        all_ids = set(statuses)
+        return {
+            "epoch": epoch,
+            "last": last_publication,
+            "all": all_ids,
+            "alive": all_ids,
+            "resolving": {request_id for request_id, status in statuses.items() if status == "resolving"},
+            "on_air": {request_id for request_id, status in statuses.items() if status == "playing"},
+            "statuses": statuses,
+        }
+
+    def _notify_publication_cancelled(self, plane: str) -> None:
+        if self._publication_cancel_sink is not None:
+            self._publication_cancel_sink(plane)
+
+    def destroy_requests(self, request_ids: Collection[int]) -> None:
+        self._ensure_discovered()
+        if self._request_destroy_cmd is None:
+            return
+        for request_id in sorted(set(request_ids)):
+            try:
+                self._send(f"{self._request_destroy_cmd} {request_id}")
+            except Exception:
+                log.debug("Liquidsoap request %s was already terminal", request_id, exc_info=True)
+
     def flush_voice_alert(self) -> None:
         self._ensure_discovered()
+        if self._voice_alert_reset_cmd is not None:
+            self._send(self._voice_alert_reset_cmd)
+            self._notify_publication_cancelled("voice_alert")
+            return
         assert self._voice_alert_flush_cmd is not None
         self._send(self._voice_alert_flush_cmd)
+        self._notify_publication_cancelled("voice_alert")
 
     def flush_full_alert(self) -> None:
         self._ensure_discovered()
+        if self._full_alert_reset_cmd is not None:
+            self._send(self._full_alert_reset_cmd)
+            self._notify_publication_cancelled("full_alert")
+            return
         assert self._full_alert_flush_cmd is not None
         self._send(self._full_alert_flush_cmd)
+        self._notify_publication_cancelled("full_alert")
 
     def flush_alert(self) -> None:
         """Compatibility wrapper: clear both interrupt planes when available."""
@@ -455,7 +578,7 @@ class LiquidsoapTelnet:
         try:
             self._send(self._voice_alert_skip_cmd)
         except Exception:
-            pass
+            log.debug("Liquidsoap voice alert skip failed", exc_info=True)
 
     def skip_full_alert(self) -> None:
         self._ensure_discovered()
@@ -463,7 +586,7 @@ class LiquidsoapTelnet:
         try:
             self._send(self._full_alert_skip_cmd)
         except Exception:
-            pass
+            log.debug("Liquidsoap full alert skip failed", exc_info=True)
 
     def skip_alert(self) -> None:
         """Compatibility wrapper: skip both interrupt planes when available."""
@@ -474,11 +597,7 @@ class LiquidsoapTelnet:
     def ping(self, *, timeout_seconds: float | None = None) -> bool:
         try:
             # Short response, good liveness probe
-            timeout = (
-                2.0
-                if timeout_seconds is None
-                else max(0.05, min(float(timeout_seconds), 2.0))
-            )
+            timeout = 2.0 if timeout_seconds is None else max(0.05, min(float(timeout_seconds), 2.0))
             self._send(
                 "version",
                 read_deadline=timeout,

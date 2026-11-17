@@ -133,6 +133,13 @@ class LiveWorkerSession:
         if self.session.state is not ControllerState.ACTIVE:
             return
         await self._send(self.session.request_drain(deadline_at=deadline_at, reason=reason))
+        loop = asyncio.get_running_loop()
+        monotonic_deadline = loop.time() + max(0.0, (deadline_at - self.clock()).total_seconds())
+        while self.session.state is ControllerState.DRAINING:
+            remaining = monotonic_deadline - loop.time()
+            if remaining <= 0:
+                return
+            await asyncio.sleep(min(0.05, remaining))
 
     async def _receive_loop(self) -> None:
         while not self._stop.is_set():

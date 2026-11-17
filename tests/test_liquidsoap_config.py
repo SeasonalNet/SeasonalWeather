@@ -20,7 +20,10 @@ def test_radio_liq_uses_flat_priority_fallback_with_compatible_queue_syntax():
     assert 'server.register(namespace="sw.cycle", usage="reset"' in script
     assert 'server.register(namespace="sw.voice_alert", usage="skip"' in script
     assert 'server.register(namespace="sw.full_alert", usage="skip"' in script
+    assert 'server.register(namespace="sw.voice_alert", usage="reset"' in script
+    assert 'server.register(namespace="sw.full_alert", usage="reset"' in script
     assert 'server.register(namespace="sw.interrupt", usage="status"' in script
+    assert 'server.register(namespace="sw.publication", usage="inventory"' in script
     assert 'usage="<uri>"' not in script
     assert 'usage=""' not in script
     assert 'description="Push voice alert audio and nudge cycle playback."' not in script
@@ -48,7 +51,7 @@ def test_radio_liq_uses_flat_priority_fallback_with_compatible_queue_syntax():
 def test_radio_liq_has_container_endpoint_and_secret_overrides():
     script = Path("liquidsoap/radio.liq").read_text()
 
-    assert 'getenv("SEASONALWEATHER_CONTAINER")' in script
+    assert 'environment.get("SEASONALWEATHER_CONTAINER")' in script
     assert "SEASONALWEATHER_LIQUIDSOAP_TELNET_BIND_ADDR" in script
     assert "SEASONALWEATHER_ICECAST_HOST" in script
     assert "SEASONALWEATHER_ICECAST_PORT" in script

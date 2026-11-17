@@ -42,13 +42,22 @@ class NWSApi:
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    async def _get_json(self, url: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def _get_json(
+        self,
+        url: str,
+        params: Optional[Dict[str, Any]] = None,
+        *,
+        attempts: int = 4,
+        max_response_bytes: int | None = None,
+    ) -> Dict[str, Any]:
         # simple retry loop
         last_exc: Exception | None = None
-        for attempt in range(4):
+        for attempt in range(max(1, attempts)):
             try:
                 r = await self._client.get(url, params=params)
                 r.raise_for_status()
+                if max_response_bytes is not None and len(r.content) > max_response_bytes:
+                    raise ValueError("NWS response exceeded the bounded response size")
                 return r.json()
             except Exception as e:
                 last_exc = e
@@ -154,6 +163,10 @@ class NWSApi:
         data = await self._get_json("https://api.weather.gov/alerts/active", params=params)
         feats = data.get("features")
         return list(feats) if isinstance(feats, list) else []
+
+    async def get_alert(self, url: str) -> Dict[str, Any]:
+        """Fetch one alert through the controller's bounded async HTTP client."""
+        return await self._get_json(url, attempts=1, max_response_bytes=1_000_000)
 
     async def zone_forecast_periods(self, zone_id: str) -> List[Dict[str, Any]]:
         # Fetch ZFP forecast periods for a public forecast zone (e.g. 'MDZ010').

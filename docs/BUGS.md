@@ -1,9 +1,10 @@
 # Known bugs and operational risks
 
-This page records confirmed defects and concrete operational failure paths. It
-is a design and follow-up plan, not a claim that the fixes below are already
-implemented. Potential defects that still require a scenario-driven review are
-tracked separately in [`REVIEW.md`](REVIEW.md).
+This page records confirmed defects and concrete operational failure paths.
+The publication-lease repair below is implemented in the current tree; its
+remaining operational gap is P3 staging validation. Potential defects that
+still require a scenario-driven review are tracked separately in
+[`REVIEW.md`](REVIEW.md).
 
 ## Scope
 
@@ -12,21 +13,21 @@ queues, and Liquidsoap encodes the selected source to Icecast. Icecast receives
 the stream; Liquidsoap owns the request queue and is the authority for whether
 an individual file is queued, prepared, on air, or finished.
 
-The current Compose image is Liquidsoap 2.3.3. The P3 Compose topology shares
+The current Compose image is Liquidsoap 2.4.6. The P3 Compose topology shares
 the same controller publication and cleanup code, so these risks apply to both
 the Phase 4 integration line and the Phase 3 runtime-fixes line.
 
-## Confirmed failure modes
+## Confirmed publication failure modes addressed below
 
 ### Queue admission is not playback completion
 
-The controller currently treats a successful `push` command as enough evidence
-to update its own airing state. Liquidsoap's request queues have a
-user-controlled queue and an internal prefetched queue. A request can therefore
-be accepted by the telnet command while it is still resolving, prepared but not
-on air, or waiting behind another request.
+Before the publication-lease repair, the controller treated a successful
+`push` command as enough evidence to update its own airing state. Liquidsoap's
+request queues have a user-controlled queue and an internal prefetched queue. A
+request can therefore be accepted by the telnet command while it is still
+resolving, prepared but not on air, or waiting behind another request.
 
-The current path is visible in:
+The pre-repair path was visible in:
 
 - `seasonalweather/broadcast/conductor.py`, where scheduled inserts are pushed
   and immediately marked aired;
@@ -44,7 +45,8 @@ from the controller read model before Liquidsoap has started it.
 
 ### Superseded segment generations are not queue-pinned
 
-`SegmentStore` writes immutable, versioned `cycle_seg_*.wav` generations, but
+Before publication leases, `SegmentStore` wrote immutable, versioned
+`cycle_seg_*.wav` generations, but
 its cleanup knows only about controller metadata and recovery journals. It
 keeps two unreferenced generations and removes older ones. Liquidsoap request
 IDs are not part of that reference inventory.
@@ -76,23 +78,22 @@ renders in one second can target the same pathname.
 
 ### Queue reset is not automatically proof of an empty request pipeline
 
-The current `sw.cycle.reset` handler clears the user-visible queue and skips
-the current source. Newer Liquidsoap documentation describes a separate
+Resetting a request source clears the user-visible queue and may skip the
+current source. Newer Liquidsoap documentation describes a separate
 internal prefetched queue. Reset success must therefore not be treated as proof
 that every request associated with the old cycle has reached a terminal state.
 
-## Planned fix: Liquidsoap-aware publication leases
+## Implemented fix: Liquidsoap-aware publication leases
 
-The smallest safe design is a publication lease shared by the publisher,
+The current tree uses a publication lease shared by the publisher,
 reconciler, and housekeeping:
 
 1. **Immutable artifact identity.** Give every pushed audio artifact a unique
    pathname. Do not reuse live-time buffers or second-resolution alert names.
-2. **Request identity.** Add a `sw_pub_id` metadata value and make each
-   `sw.*.push` alias return the Liquidsoap request ID (RID) as well as accepting
-   the request. Liquidsoap exposes `request.id`, `request.status`,
-   `request.filename`, and request inventories such as `request.alive` and
-   `request.on_air`.
+2. **Request identity.** Each `sw.*.push` alias records the Liquidsoap request
+   ID (RID) and `sw_pub_id` metadata. The 2.4.6 script registers
+   `sw.publication.inventory`, which polls Liquidsoap's `request.all()` and
+   `request.status(req)` APIs for the complete RID inventory and status map.
 3. **Separate lifecycle states.** Track `submitted`, `queued`, `ready`,
    `on_air`, `finished`, `cancelled`, and `failed`. `submitted` or `queued` is
    never equivalent to `on_air`.
@@ -103,10 +104,10 @@ reconciler, and housekeeping:
 5. **Fail-closed cleanup.** Housekeeping protects a file while its RID is alive
    or its lease has not expired. Unknown Liquidsoap state retains the file for
    reconciliation instead of deleting it.
-6. **Explicit cancellation.** On cycle reset or alert cancellation, remove the
-   known request where supported, record the cancellation, and retain the file
-   until Liquidsoap reports the request terminal. Queue removal is a control
-   operation, not by itself a filesystem-deletion proof.
+6. **Explicit cancellation.** On cycle reset or alert cancellation, record the
+   cancellation, reset the relevant Liquidsoap request source, and retain the
+   file until inventory polling reports the RID gone. Queue removal is a
+   control operation, not by itself a filesystem-deletion proof.
 7. **Restart reconciliation.** On controller or Liquidsoap restart, rebuild the
    lease inventory from durable publication records and the current Liquidsoap
    request/status commands. Keep recent ambiguous files until reconciliation is
@@ -114,16 +115,17 @@ reconciler, and housekeeping:
 
 ## Version and rollout plan
 
-1. Stage the upgrade from Liquidsoap 2.3.3 to the current stable 2.4.x image
-   (`savonet/liquidsoap:v2.4.6`). Do not use the 2.5 release-candidate line for
+1. **Implemented:** the Compose default is
+   `savonet/liquidsoap:v2.4.6`; do not use the 2.5 release-candidate line for
    the first production migration.
-2. Add RID-returning push aliases, metadata correlation, status polling, and
-   output `on_track` telemetry without changing deletion policy.
-3. Add the durable publication-lease record and make housekeeping and segment
-   generation cleanup honor it.
-4. Replace fixed/reused output names with immutable unique names.
-5. Exercise queue backlog, prefetch, interruption, cancellation, restart, and
-   cleanup races in the P3 staging stack before enabling aggressive pruning.
+2. **Implemented:** RID-returning publication aliases, metadata correlation,
+   complete inventory/status polling, and output `on_track` telemetry.
+3. **Implemented:** durable publication leases are honored by housekeeping and
+   segment-generation cleanup.
+4. **Implemented:** pushed audio uses immutable unique pathnames.
+5. **Remaining:** exercise queue backlog, prefetch, interruption, cancellation,
+   restart, and cleanup races in the P3 staging stack before enabling aggressive
+   pruning in production.
 
 ## Acceptance criteria
 
@@ -139,7 +141,8 @@ reconciler, and housekeeping:
   reconciliation diagnostic rather than deleting them.
 - Two pushes cannot overwrite one another's pathname.
 - P3 staging proves the same behavior on the shared Phase 3 publication and
-  housekeeping path.
+  housekeeping path. This is the remaining acceptance item; it is not claimed
+  by the unit and container checks in this repository.
 
 ## Upstream references
 

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import hashlib
 import logging
 import re
 import time
-from typing import Any
+from typing import Any, Protocol
 
 from ..alerts.active import _vtec_track_id
 from .formatters import strip_nws_product_headers
@@ -37,12 +38,24 @@ _NWS_HEADER_ISSUED_RE = re.compile(
 )
 
 _APP_CFG: AppConfig | None = None
+
+
+class _NwsAlertApi(Protocol):
+    async def get_alert(self, url: str) -> dict[str, Any]: ...
+
+
+_NWS_API: _NwsAlertApi | None = None
 _station_feed_diagnostic_sink: object | None = None
 
 
 def set_app_config(cfg: AppConfig | None) -> None:
     global _APP_CFG
     _APP_CFG = cfg
+
+
+def set_nws_api(api: _NwsAlertApi | None) -> None:
+    global _NWS_API
+    _NWS_API = api
 
 
 def set_diagnostic_sink(sink: object | None) -> None:
@@ -403,7 +416,6 @@ def _sf_emit(alert, *, expires_at=None) -> None:
         return
     try:
         _station_id, _source, max_items, ttl_s = _sf_cfg()
-        _sf_station_feed_hk_start()
         now_ts = time.time()
         exp_dt = _sf_parse_dt(expires_at)
         exp_ts = exp_dt.timestamp() if exp_dt else (now_ts + ttl_s)
@@ -548,18 +560,13 @@ def _sf_bad_nws_alert_link_track(value) -> str | None:
     return target if _sf_is_vtec_track_id(target) else None
 
 
-def _sf_active_alerts_for_link_repair() -> list[dict]:
+async def _sf_active_alerts_for_link_repair() -> list[dict]:
+    if _NWS_API is None:
+        return []
     try:
-        import requests  # type: ignore
-        r = requests.get(
-            "https://api.weather.gov/alerts/active",
-            headers={"User-Agent": "(seasonalnet.org, info@seasonalnet.org)"},
-            timeout=10,
-        )
-        if not r.ok:
-            return []
-        feats = (r.json() or {}).get("features") or []
-        return [f for f in feats if isinstance(f, dict)]
+        data = await _NWS_API.get_alert("https://api.weather.gov/alerts/active")
+        feats = data.get("features") if isinstance(data, dict) else []
+        return [feature for feature in feats if isinstance(feature, dict)] if isinstance(feats, list) else []
     except Exception:
         return []
 
@@ -1010,7 +1017,7 @@ def _sf_hk_grace_s() -> int:
 
 
 # Periodic station-feed housekeeping for the SQLite read model and in-memory cache.
-_STATION_FEED_HK_STARTED = False
+_STATION_FEED_HK_STOP: asyncio.Event | None = None
 
 def _sf_station_feed_housekeeping_once():
     """
@@ -1031,44 +1038,32 @@ def _sf_station_feed_housekeeping_once():
         log.exception("Station feed housekeeping: tick failed")
         _sf_diagnose(exc, "Station-feed housekeeping tick failed.")
 
-def _sf_station_feed_hk_loop():
-    while True:
+async def _sf_station_feed_hk_loop() -> None:
+    stop = _STATION_FEED_HK_STOP
+    if stop is None:
+        return
+    while not stop.is_set():
         try:
             _sf_station_feed_housekeeping_once()
         except Exception:
             log.exception("Station feed housekeeping: loop error")
-        time.sleep(_sf_hk_interval_s())
-
-def _sf_station_feed_hk_start():
-    global _STATION_FEED_HK_STARTED
-    if _STATION_FEED_HK_STARTED:
-        return
-    if not _sf_enabled():
-        return
-
-    try:
-        import threading
-
-        t = threading.Thread(
-            target=_sf_station_feed_hk_loop,
-            name="station-feed-housekeeping",
-            daemon=True,
-        )
-        t.start()
-        _STATION_FEED_HK_STARTED = True
-
         try:
-            log.info(
-                "Station feed housekeeping enabled (interval=%ss)",
-                _sf_hk_interval_s(),
-            )
-        except Exception:
-            pass
-    except Exception:
-        try:
-            log.exception("Station feed housekeeping: failed to start")
-        except Exception:
-            pass
+            await asyncio.wait_for(stop.wait(), timeout=float(_sf_hk_interval_s()))
+        except TimeoutError:
+            continue
+
+async def _sf_station_feed_housekeeping_run() -> None:
+    global _STATION_FEED_HK_STOP
+    if not _sf_enabled() or (_APP_CFG is not None and not _APP_CFG.station_feed.housekeeping.enabled):
+        return
+    _STATION_FEED_HK_STOP = asyncio.Event()
+    log.info("Station feed housekeeping enabled (interval=%ss)", _sf_hk_interval_s())
+    await _sf_station_feed_hk_loop()
+
+
+def _sf_station_feed_housekeeping_stop() -> None:
+    if _STATION_FEED_HK_STOP is not None:
+        _STATION_FEED_HK_STOP.set()
 
 # Housekeeping is started by Orchestrator.__init__ after cfg is loaded.
 
@@ -1092,7 +1087,7 @@ def _sf_is_non_alert_station_item(*, alert_id=None, source=None, event=None, hea
 
 
 
-def _station_feed_note_cap(ev, *, mode: str, same_locations, out_wav: str, same_code=None, vtec=None) -> None:
+async def _station_feed_note_cap(ev, *, mode: str, same_locations, out_wav: str, same_code=None, vtec=None) -> None:
     if not _sf_enabled():
         return
     try:
@@ -1168,22 +1163,16 @@ def _station_feed_note_cap(ev, *, mode: str, same_locations, out_wav: str, same_
             effective_raw = effective_raw or sent_raw  # best-effort
 
         # Optional: backfill from NWS alert detail endpoint (handles urn:oid IDs)
-        if (_APP_CFG.station_feed.fetch_nws if _APP_CFG else False) and nws_alert_url:
+        if (_APP_CFG.station_feed.fetch_nws if _APP_CFG else False) and nws_alert_url and _NWS_API is not None:
             try:
-                import requests  # type: ignore
-                r = requests.get(
-                    nws_alert_url,
-                    headers={"User-Agent": "(seasonalnet.org, info@seasonalnet.org)"},
-                    timeout=8,
-                )
-                if r.ok:
-                    props = (r.json() or {}).get("properties", {}) or {}
-                    sent_raw = sent_raw or props.get("sent")
-                    effective_raw = effective_raw or props.get("effective")
-                    ends_raw = ends_raw or props.get("ends") or props.get("eventEndingTime")
-                    expires_raw = expires_raw or props.get("expires")
+                data = await _NWS_API.get_alert(nws_alert_url)
+                props = (data.get("properties", {}) or {}) if isinstance(data, dict) else {}
+                sent_raw = sent_raw or props.get("sent")
+                effective_raw = effective_raw or props.get("effective")
+                ends_raw = ends_raw or props.get("ends") or props.get("eventEndingTime")
+                expires_raw = expires_raw or props.get("expires")
             except Exception:
-                pass
+                log.info("Station feed: bounded NWS alert-detail lookup failed", exc_info=True)
 
 
         # Final safety fallback so station-feed entries don't end up immortal/blank
@@ -1429,7 +1418,8 @@ iso = _sf_iso
 sha1_12 = _sf_sha1_12
 repo_upsert = _sf_repo_upsert
 prune = _sf_prune
-station_feed_housekeeping_start = _sf_station_feed_hk_start
+station_feed_housekeeping_run = _sf_station_feed_housekeeping_run
+station_feed_housekeeping_stop = _sf_station_feed_housekeeping_stop
 purge_legacy_synthetic_alerts = _sf_purge_legacy_synthetic_alerts
 hydrate_persisted_alerts = _sf_hydrate_persisted_alerts
 is_non_alert_station_item = _sf_is_non_alert_station_item

@@ -5,7 +5,7 @@
 # - alert bus: FULL > VOICE, then routine cycle, with non-track-sensitive fallback
 # - output mounts: Ogg/Vorbis and MP3 Icecast streams
 
-container_mode = getenv("SEASONALWEATHER_CONTAINER") == "true"
+container_mode = environment.get("SEASONALWEATHER_CONTAINER") == "true"
 if container_mode then
   set("log.stdout", true)
   set("log.file", false)
@@ -16,17 +16,17 @@ else
 end
 
 def env_or(name, fallback) =
-  value = getenv(name)
+  value = environment.get(name)
   if value == "" then fallback else value end
 end
 
 telnet_bind_addr = env_or("SEASONALWEATHER_LIQUIDSOAP_TELNET_BIND_ADDR", "127.0.0.1")
 icecast_host = env_or("SEASONALWEATHER_ICECAST_HOST", "127.0.0.1")
 icecast_port = int_of_string(env_or("SEASONALWEATHER_ICECAST_PORT", "8000"))
-icecast_password_file = getenv("SEASONALWEATHER_ICECAST_PASSWORD_FILE")
+icecast_password_file = environment.get("SEASONALWEATHER_ICECAST_PASSWORD_FILE")
 icecast_password =
   if icecast_password_file == "" then
-    getenv("ICECAST_SOURCE_PASSWORD")
+    environment.get("ICECAST_SOURCE_PASSWORD")
   else
     secret_reader = file.read(icecast_password_file)
     secret = string.trim(secret_reader())
@@ -49,36 +49,42 @@ full_alert = request.queue(id="full_alert")
 # Explicit, stable command aliases for the Python orchestrator.  These avoid the
 # request_queue/request_queue.N ambiguity seen on Liquidsoap 2.3.x builds.
 def sw_cycle_push(uri) =
-  cycle.push(request.create(uri))
-  "OK"
+  req = request.create(uri)
+  cycle.push(req)
+  string(request.id(req))
 end
 
 def sw_voice_alert_push(uri) =
-  voice_alert.push(request.create(uri))
-  "OK"
+  req = request.create(uri)
+  voice_alert.push(req)
+  string(request.id(req))
 end
 
 def sw_full_alert_push(uri) =
-  full_alert.push(request.create(uri))
-  "OK"
+  req = request.create(uri)
+  full_alert.push(req)
+  string(request.id(req))
 end
 
 # Metadata-bearing requests are transported as base64-encoded complete URIs.
 # This keeps annotate: values, quotes, and spaces out of Liquidsoap's
 # line-oriented server command parser while preserving per-request metadata.
 def sw_cycle_push_b64(payload) =
-  cycle.push(request.create(string.base64.decode(payload)))
-  "OK"
+  req = request.create(string.base64.decode(payload))
+  cycle.push(req)
+  string(request.id(req))
 end
 
 def sw_voice_alert_push_b64(payload) =
-  voice_alert.push(request.create(string.base64.decode(payload)))
-  "OK"
+  req = request.create(string.base64.decode(payload))
+  voice_alert.push(req)
+  string(request.id(req))
 end
 
 def sw_full_alert_push_b64(payload) =
-  full_alert.push(request.create(string.base64.decode(payload)))
-  "OK"
+  req = request.create(string.base64.decode(payload))
+  full_alert.push(req)
+  string(request.id(req))
 end
 
 def sw_cycle_skip(_) =
@@ -122,6 +128,19 @@ def sw_full_alert_skip(_) =
   "OK"
 end
 
+def sw_reset_request_source(source) =
+  queued = source.queue()
+  source.set_queue([])
+  list.iter(request.destroy, queued)
+  if source.current() != null() then
+    source.skip()
+  end
+  "OK"
+end
+
+def sw_voice_alert_reset(_) = sw_reset_request_source(voice_alert) end
+def sw_full_alert_reset(_) = sw_reset_request_source(full_alert) end
+
 server.register(namespace="sw.cycle", usage="push <uri>", description="Push routine cycle audio.", "push", sw_cycle_push)
 server.register(namespace="sw.voice_alert", usage="push <uri>", description="Push voice alert audio.", "push", sw_voice_alert_push)
 server.register(namespace="sw.full_alert", usage="push <uri>", description="Push full alert audio.", "push", sw_full_alert_push)
@@ -132,7 +151,21 @@ server.register(namespace="sw.cycle", usage="skip", description="Skip current cy
 server.register(namespace="sw.cycle", usage="reset", description="Safely clear queued and current routine cycle audio.", "reset", sw_cycle_reset)
 server.register(namespace="sw.voice_alert", usage="skip", description="Skip current voice alert audio.", "skip", sw_voice_alert_skip)
 server.register(namespace="sw.full_alert", usage="skip", description="Skip current full alert audio.", "skip", sw_full_alert_skip)
+server.register(namespace="sw.voice_alert", usage="reset", description="Cancel queued and current voice alert audio.", "reset", sw_voice_alert_reset)
+server.register(namespace="sw.full_alert", usage="reset", description="Cancel queued and current full alert audio.", "reset", sw_full_alert_reset)
 server.register(namespace="sw.interrupt", usage="status", description="Report whether interrupt audio is current or queued.", "status", sw_interrupt_status)
+
+# Keep the last publication identifier observed at the output boundary.  The
+# controller uses this as evidence that a queued request actually reached the
+# broadcast path before releasing its durable publication lease.
+last_publication_id = ref("")
+publication_epoch = string(time())
+def sw_output_track(metadata) =
+  publication_id = metadata["sw_pub_id"]
+  if publication_id != null() then
+    last_publication_id := publication_id
+  end
+end
 
 # Always have something to output (silence) so the mount stays up.
 silence = blank()
@@ -141,6 +174,26 @@ silence = blank()
 # Priority remains explicit: FULL beats VOICE, VOICE beats cycle, and silence
 # keeps Icecast mounted if every request queue is momentarily empty.
 radio = fallback(track_sensitive=false, [full_alert, voice_alert, cycle, silence])
+radio.on_track(synchronous=false, sw_output_track)
+
+def sw_publication_last(_) =
+  !last_publication_id
+end
+
+server.register(namespace="sw.publication", usage="last", description="Return the last publication id observed on output.", "last", sw_publication_last)
+def sw_publication_epoch(_) = publication_epoch end
+server.register(namespace="sw.publication", usage="epoch", description="Return the current Liquidsoap process publication epoch.", "epoch", sw_publication_epoch)
+
+def sw_publication_inventory(_) =
+  string.concat(
+    separator="\n",
+    list.map(
+      fun(req) -> string(request.id(req)) ^ "=" ^ request.status(req),
+      request.all()
+    )
+  )
+end
+server.register(namespace="sw.publication", usage="inventory", description="Return current request RIDs and statuses.", "inventory", sw_publication_inventory)
 
 # Primary low-bandwidth web stream.
 output.icecast(

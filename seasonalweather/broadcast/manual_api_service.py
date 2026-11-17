@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
+import uuid
 from typing import Any
 
 from seasonalweather.api.models import OriginateAudioRequest, OriginateTextRequest, VoiceMode
@@ -74,7 +75,7 @@ class ManualOriginationService:
             same_codes = self._same_codes_in_service_area(same_codes)
         self.assets.load(req.audio_asset_id)
         _work_dir, audio_dir, _cache_dir, _logs_dir = self.orch._paths()
-        timestamp = self._now_local().strftime("%Y%m%d-%H%M%S")
+        timestamp = f"{self._now_local():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:12]}"
         output = audio_dir / f"api_audio_{timestamp}_{req.audio_asset_id}.wav"
         self.assets.copy_to(asset_id=req.audio_asset_id, destination=output)
         try:

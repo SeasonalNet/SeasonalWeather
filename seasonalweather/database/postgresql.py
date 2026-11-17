@@ -109,12 +109,18 @@ class _PsycopgConnector:
             raise PostgresDependencyUnavailable("PostgreSQL client is unavailable") from exc
 
         connect_timeout = max(1, min(30, math.ceil(configuration.connect_timeout_seconds)))
+        query_timeout_ms = max(1_000, min(30_000, connect_timeout * 1_000))
         kwargs: dict[str, Any] = {
             "host": configuration.address,
             "port": configuration.port,
             "dbname": configuration.database,
             "connect_timeout": connect_timeout,
             "sslmode": "require" if configuration.tls else "disable",
+            "options": (
+                f"-c statement_timeout={query_timeout_ms} "
+                f"-c lock_timeout={query_timeout_ms} "
+                f"-c idle_in_transaction_session_timeout={query_timeout_ms}"
+            ),
         }
         # Authentication is deliberately delegated to libpq's deployment
         # credentials (.pgpass, service configuration, or PG* environment).

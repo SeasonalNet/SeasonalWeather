@@ -62,7 +62,9 @@ SEASONAL_API_TOKEN
 SEASONAL_WORKER_TOKEN
 ```
 
-Keep the directory private and each secret file mode `0400`. Do not place
+Keep the directory private and each secret file mode `0400`, owned by
+`10001:10001` because the controller and workers run as that numeric identity.
+Do not place
 credentials in the YAML file, image build arguments, Git, or Compose command
 lines.
 
