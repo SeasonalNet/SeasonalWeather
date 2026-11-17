@@ -1,8 +1,9 @@
-# Known audio publication and cleanup risks
+# Known bugs and operational risks
 
-This page records a confirmed controller/Liquidsoap ownership gap. It is a
-design and follow-up plan, not a claim that the fixes below are already
-implemented.
+This page records confirmed defects and concrete operational failure paths. It
+is a design and follow-up plan, not a claim that the fixes below are already
+implemented. Potential defects that still require a scenario-driven review are
+tracked separately in [`REVIEW.md`](REVIEW.md).
 
 ## Scope
 
@@ -147,3 +148,110 @@ reconciler, and housekeeping:
 - [Liquidsoap request identity and status](https://www.liquidsoap.info/doc-2.4.6/reference/liquidsoap)
 - [Liquidsoap 2.4.5 release notes](https://github.com/savonet/liquidsoap/releases/tag/v2.4.5)
 - [Liquidsoap release matrix](https://github.com/savonet/liquidsoap)
+
+## SWWP shutdown can lose result-settlement evidence
+
+Applies to both the Phase 4 integration line and the Phase 3 runtime-fixes
+line.
+
+Controller shutdown calls `LiveWorkerSessionManager.drain()`, but that method
+only sends `Drain`. It does not wait for `Drained`, active assignments,
+unacknowledged completions, or durable result settlement before supervisor
+teardown can close the WebSocket.
+
+Worker shutdown has the corresponding ordering problem. `WorkerRuntime.stop()`
+closes the SWWP connection before `run()` awaits assignment tasks. A handler
+that finishes during that interval may be unable to send its result or failure.
+`WorkerRuntime._execute()` also removes runtime assignment tracking immediately
+after sending a result, before the controller returns `ResultCommitted`.
+Health and drain logic can therefore report no active work while durable
+acknowledgment is still outstanding.
+
+The smallest complete repair must:
+
+- keep result-sent assignments tracked until `ResultCommitted` or explicit
+  reconciliation;
+- wait for a bounded `Drained`/settlement condition before closing the
+  transport; and
+- preserve replay-safe completion evidence when either side disconnects during
+  shutdown.
+
+Validation must interrupt both controller and worker at every transition from
+assignment through result commitment, including reconnect to a new controller
+epoch.
+
+## Station-feed housekeeping is outside lifecycle supervision
+
+Applies to both modernization lines.
+
+`seasonalweather.broadcast.station_feed_runtime` starts housekeeping in a
+daemon thread with an unconditional loop. It retains neither a stop event nor
+a thread handle and has no join path. The thread can continue pruning the
+in-memory feed and SQLite read model while controller shutdown checkpoints and
+closes persistence resources.
+
+Move the loop under the existing controller lifecycle/supervisor boundary with
+bounded stop and join behavior. Validate shutdown during a housekeeping tick,
+SQLite lock contention, and configuration reload/restart.
+
+## Optional station-feed NWS fetching blocks and can silently be unavailable
+
+Applies to both modernization lines when `station_feed.fetch_nws` is enabled.
+
+Station-feed alert handling calls synchronous `requests.get()` with an
+eight-second timeout in the alert path. `requests` is not a declared runtime
+dependency. A minimal supported installation therefore raises `ImportError`,
+which the broad exception handler silently discards. When `requests` happens to
+be installed, a slow NWS response can block controller event-loop work for the
+request timeout.
+
+Use the controller's existing asynchronous HTTP boundary and emit bounded
+failure evidence instead of silently disabling the option. Validate missing
+dependencies, timeout, malformed JSON, oversized responses, cancellation, and
+normal alert handling while the NWS endpoint is slow.
+
+## File-backed Compose secrets can be unreadable to non-root services
+
+Applies to both modernization lines when using ordinary Docker Compose
+file-backed secrets.
+
+The controller and workers run as UID/GID `10001:10001`, while the operator
+instructions create host secret files with mode `0400`. The `uid`, `gid`, and
+`mode` fields on file-backed Compose secrets are not honored by ordinary
+Compose implementations that bind-mount the source file. A disposable non-root
+probe reproduced a host-owned `uid=1000 gid=1000 mode=400` secret and
+`Permission denied` inside a UID 10001 container. This can prevent the
+controller from reading `ICECAST_SOURCE_PASSWORD` and workers from reading
+`SEASONAL_WORKER_TOKEN`.
+
+The deployment contract must make the mounted files readable by the intended
+service identity without broadening access to other users. Repeat the probe for
+the supported Compose implementation and for every service secret before
+accepting a repair.
+
+## Compose can terminate a valid controller drain early
+
+Applies to both modernization lines.
+
+The application lifecycle permits a bounded shutdown of up to 30 seconds, but
+`compose.yaml` declares no matching `stop_grace_period`. A container runtime
+may send `SIGKILL` before job reconciliation, SQLite checkpointing, executor
+cleanup, worker settlement, or lifecycle-marker finalization completes.
+
+Align the Compose stop grace with the application lifecycle budget and validate
+both normal and forced shutdown with active requests, publications, and worker
+assignments.
+
+## Phase 3 staging omits shipped worker profiles
+
+Applies only to `modernization/phase-3-runtime-fixes`.
+
+The Phase 3 Compose graph defines espeak, Festival, and DECtalk worker
+profiles, but its `tools/staging_interface.py` does not include those profiles
+or their image variables in `OPTIONAL_PROFILES`, `PROFILE_IMAGE_KEYS`, or the
+rollback image allowlist. The staging command therefore rejects profiles that
+the same branch ships, and rollback validation cannot pin their images.
+
+Bring the staging and rollback profile inventories into exact parity with the
+Compose worker graph and add one exhaustive inventory test so later profiles
+cannot drift silently.
