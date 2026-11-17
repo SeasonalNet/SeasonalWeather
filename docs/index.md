@@ -45,6 +45,7 @@ points to the detailed contracts.
 
 ## Runtime and protocol reference
 
+- [Known audio publication and cleanup risks](BUGS.md)
 - [Worker runtime](worker-runtime.md)
 - [SWWP](swwp.md)
 - [Worker capabilities](worker-capabilities.md)
