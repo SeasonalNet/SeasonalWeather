@@ -51,6 +51,26 @@ def test_forgejo_release_publishes_images_to_harbor_and_release_assets() -> None
     assert "PACKAGE_REGISTRY_" not in release
 
 
+def test_release_workflows_use_bootstrap_uv_after_activating_release_venv() -> None:
+    setup = (
+        'export PATH="$PWD/.venv-bootstrap/bin:$PATH"\n'
+        "          uv python install 3.15.2\n"
+        "          uv venv --clear --python 3.15.2 .venv-release\n"
+        "          . .venv-release/bin/activate\n"
+        "          uv sync --frozen --active"
+    )
+    for provider in (".forgejo", ".github"):
+        release = (ROOT / provider / "workflows" / "release.yml").read_text()
+        assert setup in release
+
+
+def test_github_release_exposes_bootstrap_uv_to_artifact_build_step() -> None:
+    release = (ROOT / ".github/workflows/release.yml").read_text()
+    install, artifacts = release.split("- name: Build release artifacts", maxsplit=1)
+    assert 'echo "$PWD/.venv-bootstrap/bin" >> "$GITHUB_PATH"' in install
+    assert "make release-artifacts" in artifacts
+
+
 def test_ci_workflows_enable_best_effort_dependency_and_provider_build_caches() -> None:
     github_ci = (ROOT / ".github/workflows/ci.yml").read_text()
     forgejo_ci = (ROOT / ".forgejo/workflows/ci.yml").read_text()

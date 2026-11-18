@@ -59,10 +59,14 @@ jobs:
           } >> "$GITHUB_ENV"
       - name: Install release tooling
         run: |
-          python3 -m venv .venv-release
+          python3 -m venv .venv-bootstrap
+          .venv-bootstrap/bin/python -m pip install --upgrade pip uv==0.13.8
+          export PATH="$PWD/.venv-bootstrap/bin:$PATH"
+          uv python install 3.15.2
+          uv venv --clear --python 3.15.2 .venv-release
           . .venv-release/bin/activate
-          python -m pip install --upgrade pip uv==0.13.8
           uv sync --frozen --active --group controller --group worker-runtime --group dev
+          echo "$PWD/.venv-bootstrap/bin" >> "$GITHUB_PATH"
       - name: Build release artifacts
         run: |
           . .venv-release/bin/activate
