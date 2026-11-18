@@ -252,20 +252,19 @@ class ArtifactService:
         commit_result: Callable[[], Any],
     ) -> AcceptanceReceipt:
         self._validate_duplicate(result, prior, target_key)
-        blob = self._staging.blob_path(prior.artifact_digest)
-        active = self._promotion.active_identity(target_key)
-        if (
-            not blob.is_file()
-            or hash_file(blob, maximum_bytes=self._staging.maximum_bytes).sha256 != prior.artifact_digest
-        ):
+        identity = ContentIdentity(prior.artifact_digest, prior.artifact_size_bytes)
+        blob = self._recover_blob(identity)
+        if blob is None:
             raise RuntimeError("durable artifact receipt has no trustworthy blob")
-        if active is None or active.sha256 != prior.artifact_digest:
-            self._promotion.promote(
-                blob,
-                ContentIdentity(prior.artifact_digest, prior.artifact_size_bytes),
-                target_key=target_key,
-                authorize=lambda: self._authorize_promotion(result, fence),
-            )
+
+        def authorize() -> None:
+            self._authorize_promotion(result, fence)
+            current = self._promotion.active_identity(target_key)
+            if current != identity and (current.sha256 if current else None) != prior.prior_digest:
+                raise ValueError("artifact publication target was superseded")
+
+        if self._promotion.active_identity(target_key) != identity:
+            self._promotion.promote(blob, identity, target_key=target_key, authorize=authorize)
             self._journal.record_artifact_receipt(
                 job_id=prior.job_id,
                 attempt_id=prior.attempt_id,
@@ -376,10 +375,10 @@ class ArtifactService:
         )
 
     def reconcile(self) -> int:
-        unresolved = sum(
-            self._reconcile_receipt(receipt) for receipt in self._journal.pending_artifact_receipts(limit=256)
-        )
-        self._staging.cleanup_pending(maximum_files=64)
+        receipts = self._journal.pending_artifact_receipts(limit=256)
+        unresolved = sum(self._reconcile_receipt(receipt) for receipt in receipts)
+        if not unresolved and len(receipts) < 256:
+            self._staging.cleanup_pending(maximum_files=64)
         return unresolved
 
     def _reconcile_receipt(self, receipt: ArtifactPublicationReceipt) -> int:
@@ -387,31 +386,9 @@ class ArtifactService:
         active = self._promotion.active_identity(receipt.target_key)
         active_matches = active is not None and active == identity
         job = self._journal.get(receipt.job_id)
-        if receipt.disposition == "prepared":
-            return self._reconcile_prepared(receipt, identity, job, active_matches)
-        if receipt.disposition in {"promoted", "reconciliation_required"} and active_matches:
-            return self._reconcile_published(receipt, job)
-        self._last_reason = "contradictory_reconciliation_evidence"
-        return 1
-
-    def _reconcile_prepared(
-        self,
-        receipt: ArtifactPublicationReceipt,
-        identity: ContentIdentity,
-        job: Any,
-        active_matches: bool,
-    ) -> int:
-        if active_matches:
-            return self._reconcile_published(receipt, job, permit_promoted_transition=True)
-        if receipt.metadata.get("replay_policy") != "idempotent_all_fences":
-            self._last_reason = "revalidation_required"
-            return 1
-        blob = self._recover_blob(identity)
-        if blob is None or job is None or job.status not in {JobStatus.LEASED, JobStatus.RUNNING}:
-            self._last_reason = "contradictory_reconciliation_evidence"
-            return 1
-        self._promotion.promote(blob, identity, target_key=receipt.target_key)
-        self._record_reconciled(receipt, disposition="promoted", promoted_at=self._clock())
+        if active_matches and job is not None and job.attempt_id == receipt.attempt_id:
+            return self._reconcile_published(receipt, job, permit_promoted_transition=receipt.disposition == "prepared")
+        self._last_reason = "revalidation_required"
         return 1
 
     def _recover_blob(self, identity: ContentIdentity):

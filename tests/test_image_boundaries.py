@@ -45,6 +45,11 @@ def test_controller_dockerfile_builds_and_carries_native_same_tools() -> None:
     assert '"io.seasonalweather.build.profile" = "controller"' in bake
 
 
+def test_controller_image_carries_samedec_audio_decoder_dependency() -> None:
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    assert "apt-get install --yes --no-install-recommends ffmpeg" in dockerfile
+
+
 def test_controller_dockerfile_removes_local_tts_implementation() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 

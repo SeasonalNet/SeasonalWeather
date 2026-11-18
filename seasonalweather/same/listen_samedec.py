@@ -14,6 +14,7 @@ from .decode import HEADER_RE, SAME_MAX_LOCS
 
 # ffmpeg emits s16le; samedec expects i16 native-endian. On x86/x64 (little-endian), this matches.
 BYTES_PER_SAMPLE = 2  # int16 mono
+MAX_DECODER_LINE_BYTES = 64 * 1024
 
 # Runtime defaults. The actual values should normally be passed in from ern_gwes.py
 # based on config.yaml's samedec: block.
@@ -201,7 +202,7 @@ def _emit(obj: dict, jsonl: bool) -> None:
 
 def _drain_samedec_stdout(
     sd_fd: int,
-    out_buf: bytes,
+    out_buf: bytes | None,
     *,
     sr: int,
     url: str,
@@ -212,29 +213,38 @@ def _drain_samedec_stdout(
     last_emit_at: dict[tuple[str, str], float],
     jsonl: bool,
     emitted_counter: list[int],
-) -> bytes:
+) -> bytes | None:
     """
     Non-blocking drain of samedec stdout. Updates out_buf and emits any complete lines.
     emitted_counter is a 1-element list so we can mutate it.
     """
-    while True:
+    lines: list[bytes] = []
+    for _ in range(32):
         r, _, _ = select.select([sd_fd], [], [], 0.0)
         if not r:
             break
-
         try:
             chunk = os.read(sd_fd, 4096)
         except BlockingIOError:
             break
-
         if not chunk:
-            # samedec stdout closed
+            if lines:
+                break
             raise RuntimeError("samedec stdout closed")
 
-        out_buf += chunk
+        if out_buf is None:
+            _, newline, chunk = chunk.partition(b"\n")
+            if not newline:
+                continue
+            out_buf = b""
+        parts = (out_buf + chunk).split(b"\n")
+        remainder = parts.pop()
+        lines.extend(parts)
+        out_buf = remainder if len(remainder) <= MAX_DECODER_LINE_BYTES else None
 
-    while b"\n" in out_buf:
-        line_b, out_buf = out_buf.split(b"\n", 1)
+    for line_b in lines:
+        if len(line_b) > MAX_DECODER_LINE_BYTES:
+            continue
         line_b = line_b.strip()
         if not line_b:
             continue
@@ -281,9 +291,9 @@ def _drain_samedec_stdout(
 def listen_stream(
     url: str,
     sr: int = 48000,
-    tail_seconds: float = 10.0,      # compatibility; samedec path does not need it
+    tail_seconds: float = 10.0,  # compatibility; samedec path does not need it
     dedupe_seconds: float = 20.0,
-    trigger_ratio: float = 8.0,      # compatibility; samedec path does not need it
+    trigger_ratio: float = 8.0,  # compatibility; samedec path does not need it
     jsonl: bool = False,
     debug: bool = False,
     idle_bytes_seconds: float = 45.0,
@@ -327,7 +337,7 @@ def listen_stream(
             sd_fd = sd.stdout.fileno()
             os.set_blocking(sd_fd, False)
 
-            out_buf = b""
+            out_buf: bytes | None = b""
             total_samples = 0
             emitted_counter = [0]
 
@@ -437,9 +447,21 @@ def main() -> None:
     ap.add_argument("--trigger-ratio", type=float, default=8.0, help="(compat) Trigger ratio (ignored)")
     ap.add_argument("--jsonl", action="store_true", help="Emit JSON lines (one per decode)")
     ap.add_argument("--debug", action="store_true", help="More stderr logging")
-    ap.add_argument("--idle-bytes", type=float, default=45.0, help="Restart if no PCM bytes arrive for this many seconds")
-    ap.add_argument("--confidence", type=float, default=DEFAULT_CONFIDENCE, help="Synthetic confidence to attach to decoded SAME events")
-    ap.add_argument("--start-delay-s", type=float, default=DEFAULT_START_DELAY_S, help="Backdate the decoded header start time by this many seconds")
+    ap.add_argument(
+        "--idle-bytes", type=float, default=45.0, help="Restart if no PCM bytes arrive for this many seconds"
+    )
+    ap.add_argument(
+        "--confidence",
+        type=float,
+        default=DEFAULT_CONFIDENCE,
+        help="Synthetic confidence to attach to decoded SAME events",
+    )
+    ap.add_argument(
+        "--start-delay-s",
+        type=float,
+        default=DEFAULT_START_DELAY_S,
+        help="Backdate the decoded header start time by this many seconds",
+    )
     ap.add_argument("--samedec-bin", default=DEFAULT_SAMEDEC_BIN, help="Path to the samedec binary")
 
     # Extra test helpers (not used by ern_gwes.py)

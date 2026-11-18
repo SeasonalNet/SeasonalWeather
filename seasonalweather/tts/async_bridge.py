@@ -31,6 +31,9 @@ from .policy import deadline_for
 from .subprocess import ProcessFailure
 from .tts import TTS
 
+# shortcut: one process-wide lock serializes unrelated targets, keyed locks when publication contention is measured
+_PUBLICATION_LOCK = threading.Lock()
+
 DEFAULT_SHUTDOWN_SECONDS = 5.0
 
 
@@ -341,7 +344,6 @@ async def synthesize_async(
     if isinstance(request, SynthesisRequest):
         request = request.model_copy(update={"operation_deadline": operation_deadline})
     stop = SynthesisStop(clock=clock)
-    publication_lock = threading.Lock()
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     workspace = Path(tempfile.mkdtemp(prefix=".tts-async-", dir=output_path.parent))
@@ -431,7 +433,7 @@ async def synthesize_async(
             if not worker_path.is_file() or worker_path.is_symlink():
                 raise ValueError("TTS raw completion evidence is missing or unsafe")
             effective_request, effective_reservation = _effective_finalization_context(token, request, reservation)
-            with publication_lock:
+            with _PUBLICATION_LOCK:
                 finalization_fence(effective_request, effective_reservation)
                 if publication_fence is not None:
                     publication_fence()
@@ -485,7 +487,7 @@ async def synthesize_async(
         # The finalizer has completed every potentially long operation.  This
         # is the only fence preceding the one bounded caller-visible write.
         effective_request, effective_reservation = _effective_finalization_context(token, request, reservation)
-        with publication_lock:
+        with _PUBLICATION_LOCK:
             finalization_fence(effective_request, effective_reservation)
             if publication_fence is not None:
                 publication_fence()

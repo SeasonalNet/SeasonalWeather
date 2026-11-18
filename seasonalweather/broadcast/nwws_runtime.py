@@ -437,18 +437,22 @@ class NwwsRuntime:
                 details={"target_source": src, "policy": _nw_policy.reason},
             )
 
+        mixed_wcn = mixed_wcn and should_full
         keys: list[str] = []
+        terminal_keys: list[str] = []
 
         # Track/action-level dedupe prevents CAP+NWWS double-air for the same
         # lifecycle action while still allowing later CON -> EXP/CAN updates for
         # the same VTEC track.
         for track_id, act in tracks:
             action_mode = "FULL" if act in {"NEW", "UPG", "EXA", "EXB"} else "VOICE"
-            keys.append(f"TRACK{action_mode}:{track_id}:{act or 'UNK'}")
+            portion = terminal_keys if mixed_wcn and act in {"CAN", "EXP"} else keys
+            portion.append(f"TRACK{action_mode}:{track_id}:{act or 'UNK'}")
 
         # Keep VTEC strings too (helps when track parse fails on weird edge cases)
         for v in vtec:
-            keys.append(f"VTEC:{v}")
+            portion = terminal_keys if mixed_wcn and _vtec_action(v) in {"CAN", "EXP"} else keys
+            portion.append(f"VTEC:{v}")
 
         # Functional FULL dedupe is only safe when we do NOT have a concrete
         # VTEC track.  Otherwise, distinct warnings for the same SAME footprint
@@ -464,44 +468,49 @@ class NwwsRuntime:
         )
 
         ok, hit = await self._dedupe_reserve(keys)
-        if not ok:
-            log.info(
-                "NWWS %s skipped (dedupe hit=%s) type=%s awips=%s wfo=%s vtec=%s",
-                "FULL" if should_full else "VOICE",
-                hit,
-                parsed.product_type,
-                parsed.awips_id or "",
-                parsed.wfo,
-                ",".join(vtec[:2]) if vtec else "",
-            )
-            _discord_audit(
-                self.discord,
-                "dedupe_event",
-                source="NWWS-OI",
-                result="hit",
-                key=hit,
-                code=discord_event_code,
-                mode="full" if should_full else "voice",
-            )
-            _discord_audit(
-                self.discord,
-                "alert_decision",
-                source="NWWS-OI",
-                result="skip",
-                reason="dedupe",
-                code=discord_event_code,
-                product_type=parsed.product_type,
-                awips=parsed.awips_id or "",
-                wfo=parsed.wfo,
-                mode="full" if should_full else "voice",
-                same_targets=len(in_area_same or []),
-                zones=len(zones or []),
-                vtec=vtec[:2],
-                details={"hit": hit},
-            )
-            return
-
+        full_reserved = ok
+        terminal_reserved = False
         try:
+            if mixed_wcn:
+                terminal_reserved, terminal_hit = await self._dedupe_reserve(terminal_keys)
+                hit = hit or terminal_hit
+            if not (full_reserved or terminal_reserved):
+                log.info(
+                    "NWWS %s skipped (dedupe hit=%s) type=%s awips=%s wfo=%s vtec=%s",
+                    "FULL" if should_full else "VOICE",
+                    hit,
+                    parsed.product_type,
+                    parsed.awips_id or "",
+                    parsed.wfo,
+                    ",".join(vtec[:2]) if vtec else "",
+                )
+                _discord_audit(
+                    self.discord,
+                    "dedupe_event",
+                    source="NWWS-OI",
+                    result="hit",
+                    key=hit,
+                    code=discord_event_code,
+                    mode="full" if should_full else "voice",
+                )
+                _discord_audit(
+                    self.discord,
+                    "alert_decision",
+                    source="NWWS-OI",
+                    result="skip",
+                    reason="dedupe",
+                    code=discord_event_code,
+                    product_type=parsed.product_type,
+                    awips=parsed.awips_id or "",
+                    wfo=parsed.wfo,
+                    mode="full" if should_full else "voice",
+                    same_targets=len(in_area_same or []),
+                    zones=len(zones or []),
+                    vtec=vtec[:2],
+                    details={"hit": hit},
+                )
+                return
+
             spoken = self._formatters.spoken_alert(parsed, official_text)
 
             sf_issued_dt = _sf_nwws_best_issued_dt(parsed, official_text)
@@ -620,7 +629,7 @@ class NwwsRuntime:
                     "sw_awips": (parsed.awips_id or "").strip(),
                 },
             )
-            if should_full:
+            if should_full and full_reserved:
 
                 async def _render_nwws_full():
                     return await self.audio_originator.render_alert_audio(
@@ -635,29 +644,14 @@ class NwwsRuntime:
                     render=_render_nwws_full,
                     meta=meta,
                 )
-                if mixed_wcn and rendered_terminal_script is not None:
-                    voice_meta = dict(meta)
-                    voice_meta["sw_alert_mode"] = "voice"
-
-                    async def _render_nwws_mixed_voice():
-                        return await self.audio_originator.render_voice_only_audio(
-                            rendered_terminal_script.script,
-                            prefix="nwwsvoice",
-                        )
-
-                    terminal_wav = await self._render_and_push_interrupt_audio(
-                        source="nwws-voice-terminal",
-                        full=False,
-                        render=_render_nwws_mixed_voice,
-                        meta=voice_meta,
-                    )
-                    log.info(
-                        "NWWS mixed WCN: aired active FULL followed by terminal VOICE type=%s full_audio=%s terminal_audio=%s",
-                        parsed.product_type,
-                        out_wav,
-                        terminal_wav,
-                    )
-            else:
+                full_reserved = False
+                self.last_toneout_at = dt.datetime.now(tz=self._tz)
+                self.last_heightened_at = self.last_toneout_at
+                self.heightened_until = self.last_toneout_at + dt.timedelta(
+                    seconds=self.cfg.cycle.min_heightened_seconds
+                )
+                self._update_mode()
+            elif not should_full:
 
                 async def _render_nwws_voice():
                     return await self.audio_originator.render_voice_only_audio(
@@ -671,15 +665,34 @@ class NwwsRuntime:
                     render=_render_nwws_voice,
                     meta=meta,
                 )
+                full_reserved = False
+            else:
+                out_wav = None
 
-            now = dt.datetime.now(tz=self._tz)
+            async def push_terminal_voice() -> None:
+                nonlocal terminal_reserved
+                if not terminal_reserved:
+                    return
+                voice_meta = dict(meta)
+                voice_meta["sw_alert_mode"] = "voice"
+                if rendered_terminal_script is None:
+                    raise RuntimeError("Mixed WCN terminal script was unavailable")
+                terminal_script = rendered_terminal_script.script
 
-            # Only FULL toneouts should push heightened mode + toneout timestamp.
-            if should_full:
-                self.last_toneout_at = now
-                self.last_heightened_at = now
-                self.heightened_until = now + dt.timedelta(seconds=self.cfg.cycle.min_heightened_seconds)
-                self._update_mode()
+                async def _render_nwws_mixed_voice():
+                    return await self.audio_originator.render_voice_only_audio(terminal_script, prefix="nwwsvoice")
+
+                await self._render_and_push_interrupt_audio(
+                    source="nwws-voice-terminal",
+                    full=False,
+                    render=_render_nwws_mixed_voice,
+                    meta=voice_meta,
+                )
+                terminal_reserved = False
+
+            if out_wav is None:
+                await push_terminal_voice()
+                return
 
             self._nwws_acted += 1
             log.info(
@@ -971,6 +984,9 @@ class NwwsRuntime:
             except Exception:
                 log.exception("AlertTracker: failed to register NWWS type=%s", parsed.product_type)
 
-        except Exception:
-            await self._dedupe_release(keys)
-            raise
+            await push_terminal_voice()
+        finally:
+            if full_reserved:
+                await self._dedupe_release(keys)
+            if terminal_reserved:
+                await self._dedupe_release(terminal_keys)

@@ -12,7 +12,12 @@ from pathlib import Path
 from typing import Optional, Sequence, Tuple
 
 from ..diagnostics.bindings import FOUNDATION_CODES
-from ..same.locations import normalize_same_allow_set, same_locations_intersect_service_area
+from ..same.locations import (
+    is_national_same_location,
+    is_national_scope_event_code,
+    normalize_same_allow_set,
+    same_locations_intersect_service_area,
+)
 
 
 log = logging.getLogger("seasonalweather")
@@ -197,10 +202,20 @@ class ErnGwesMonitor:
             source_id=self.name[:128],
         )
 
-    def _service_area_hit(self, locs: Sequence[str]) -> bool:
+    def _service_area_hit(self, locs: Sequence[str], event_code: str | None = None) -> bool:
+        if any(is_national_same_location(location) for location in locs) and not is_national_scope_event_code(event_code):
+            locs = tuple(location for location in locs if not is_national_same_location(location))
+        if not locs:
+            return False
         if not self.same_fips_allow:
             return True  # if you ever run without config, don't hard-drop everything
-        return same_locations_intersect_service_area(locs, self.same_fips_allow)
+        # A decoded national SAME header is applicable regardless of local FIPS.
+        return same_locations_intersect_service_area(
+            locs,
+            self.same_fips_allow,
+            allow_national=True,
+            event_code=event_code,
+        )
 
     def _parse_jsonl_line(self, line: str) -> Optional[ErnSameEvent]:
         try:
@@ -330,7 +345,7 @@ class ErnGwesMonitor:
 
                     # Only headers are service-area-filtered; EOM is informational.
                     # IMPORTANT: log out-of-area headers so it doesn't look like decoding failed.
-                    if ev.kind == "header" and not self._service_area_hit(ev.locations):
+                    if ev.kind == "header" and not self._service_area_hit(ev.locations, ev.event):
                         log.info(
                             "ERN SAME header out-of-area (dropped): org=%s event=%s sender=%s conf=%.3f same=%s text=%s",
                             ev.org,

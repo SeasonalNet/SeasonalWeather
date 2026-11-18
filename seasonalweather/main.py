@@ -694,7 +694,11 @@ class Orchestrator:
         """
         code_u = _safe_event_code(event_code).strip().upper()
         locs_in = [str(x).strip() for x in (same_locs or []) if str(x).strip()]
-        locs = self.target_resolver._filter_same_locations_to_service_area(locs_in)
+        locs = self.target_resolver._filter_same_locations_to_service_area(
+            locs_in,
+            allow_national=True,
+            event_code=event_code,
+        )
         if not locs:
             return None
         locs_norm = sorted(set(locs))

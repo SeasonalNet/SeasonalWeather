@@ -151,14 +151,18 @@ def test_swwp_artifact_result_promotes_then_commits_and_replays(tmp_path) -> Non
     assert not thread.is_alive()
     assert len(failure) == 1 and isinstance(failure[0], RuntimeError)
     assert observed_activities == [frozenset({PUBLICATION, WORKER_RESULT})]
-    assert repository.get(admitted.job.job_id).status.value == "succeeded"
-    assert (
-        repository.artifact_receipt(admitted.job.job_id, assignment.attempt_id).disposition == "reconciliation_required"
-    )
+    job = repository.get(admitted.job.job_id)
+    assert job is not None and job.status.value == "succeeded"
+    pending = repository.artifact_receipt(admitted.job.job_id, assignment.attempt_id)
+    assert pending is not None and pending.disposition == "reconciliation_required"
     active_files = tuple((tmp_path / "worker-artifacts" / "active").iterdir())
     assert len(active_files) == 1 and active_files[0].read_bytes() == data
+    restarted = build_controller_artifact_composition(orch, repository, work_root=tmp_path, maximum_bytes=8192)
+    assert restarted.service.reconcile() == 0
+    recovered = repository.artifact_receipt(admitted.job.job_id, assignment.attempt_id)
+    assert recovered is not None and recovered.disposition == "committed"
     receipt = adapter.result(message)
-    assert repository.artifact_receipt(admitted.job.job_id, assignment.attempt_id).disposition == "committed"
+    assert receipt.result_hash == recovered.result_hash
     assert adapter.result(message).result_hash == receipt.result_hash
 
     async def new_result_waits_for_commit_gate() -> None:

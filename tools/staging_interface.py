@@ -25,6 +25,9 @@ ROLLBACK_IMAGE_KEYS = (
     "SEASONALWEATHER_ROUTINE_WORKER_IMAGE",
     "SEASONALWEATHER_MAINTENANCE_WORKER_IMAGE",
     "SEASONALWEATHER_PIPER_WORKER_IMAGE",
+    "SEASONALWEATHER_ESPEAK_WORKER_IMAGE",
+    "SEASONALWEATHER_FESTIVAL_WORKER_IMAGE",
+    "SEASONALWEATHER_DECTALK_WORKER_IMAGE",
     "SEASONALWEATHER_LEGACY_TTS_WORKER_IMAGE",
     "SEASONALWEATHER_VOICETEXT_PAUL_WORKER_IMAGE",
     "SEASONALWEATHER_SPFY_WORKER_IMAGE",
@@ -37,10 +40,13 @@ REQUIRED_ROLLBACK_IMAGE_KEYS = (
     "SEASONALWEATHER_LIQUIDSOAP_IMAGE",
     "SEASONALWEATHER_ICECAST_IMAGE",
 )
-OPTIONAL_PROFILES = ("maintenance", "piper", "legacy-tts", "voicetext-paul", "spfy")
+OPTIONAL_PROFILES = ("maintenance", "espeak", "piper", "festival", "dectalk", "legacy-tts", "voicetext-paul", "spfy")
 PROFILE_IMAGE_KEYS = {
     "maintenance": "SEASONALWEATHER_MAINTENANCE_WORKER_IMAGE",
+    "espeak": "SEASONALWEATHER_ESPEAK_WORKER_IMAGE",
     "piper": "SEASONALWEATHER_PIPER_WORKER_IMAGE",
+    "festival": "SEASONALWEATHER_FESTIVAL_WORKER_IMAGE",
+    "dectalk": "SEASONALWEATHER_DECTALK_WORKER_IMAGE",
     "legacy-tts": "SEASONALWEATHER_LEGACY_TTS_WORKER_IMAGE",
     "voicetext-paul": "SEASONALWEATHER_VOICETEXT_PAUL_WORKER_IMAGE",
     "spfy": "SEASONALWEATHER_SPFY_WORKER_IMAGE",
@@ -143,7 +149,7 @@ def compose_command(
     return command
 
 
-def _service_snapshot_is_healthy(raw_output: str) -> bool:
+def _service_snapshot_is_healthy(raw_output: str, profiles: tuple[str, ...] = ()) -> bool:
     """Return false for empty, malformed, stopped, or unhealthy Compose output."""
 
     try:
@@ -162,14 +168,21 @@ def _service_snapshot_is_healthy(raw_output: str) -> bool:
     for value in values:
         raw_row = cast(dict[object, object], value)
         rows.append({key: item for key, item in raw_row.items() if isinstance(key, str)})
+    checked = {"controller", "routine-worker", *(f"{profile}-worker" for profile in profiles)}
+    expected = checked | {"liquidsoap", "icecast"}
+    observed: set[str] = set()
     for row in rows:
+        service = row.get("Service", row.get("service"))
+        if not isinstance(service, str):
+            return False
+        observed.add(service)
         state = row.get("State", row.get("state"))
         if not isinstance(state, str) or state.lower() != "running":
             return False
         health = row.get("Health", row.get("health"))
-        if isinstance(health, str) and health.lower() == "unhealthy":
+        if health != "healthy" and (service in checked or health not in (None, "")):
             return False
-    return True
+    return expected <= observed
 
 
 def _run(
@@ -190,7 +203,7 @@ def _run(
         )
         if capture_output and completed.returncode == 0:
             stdout = completed.stdout or ""
-            if not _service_snapshot_is_healthy(stdout):
+            if not _service_snapshot_is_healthy(stdout, profiles):
                 return 1
         return completed.returncode
     except OSError as exc:
@@ -209,7 +222,7 @@ def _soak(*, duration: int, interval: int, profiles: tuple[str, ...] = ()) -> in
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
-        result = _run(("ps", "--format", "json"), profiles=profiles, capture_output=True)
+        result = _run(("ps", "--all", "--format", "json"), profiles=profiles, capture_output=True)
         snapshots += 1
         if result:
             return result

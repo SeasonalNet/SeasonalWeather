@@ -63,12 +63,13 @@ def test_worker_secret_isolated_and_runtime_hardening_is_declared() -> None:
     assert {item["gid"] for item in controller["secrets"]} == {"10001"}
     assert {item["mode"] for item in controller["secrets"]} == {"0400"}
     assert [item["target"] for item in liquidsoap["secrets"]] == ["ICECAST_SOURCE_PASSWORD"]
-    assert liquidsoap["secrets"][0]["uid"] == "1000"
-    assert liquidsoap["secrets"][0]["gid"] == "1000"
+    assert liquidsoap["secrets"][0]["uid"] == "10001"
+    assert liquidsoap["secrets"][0]["gid"] == "10001"
     assert liquidsoap["secrets"][0]["mode"] == "0400"
 
     for service in (controller, routine, maintenance, liquidsoap):
         assert service["read_only"] is True
+        assert service["restart"] == "unless-stopped"
         assert service["cap_drop"] == ["ALL"]
         assert service["security_opt"] == ["no-new-privileges:true"]
         assert service["tmpfs"] == [

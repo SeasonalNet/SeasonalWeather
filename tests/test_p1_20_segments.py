@@ -47,6 +47,18 @@ def _config() -> SimpleNamespace:
     )
 
 
+async def _wait_for_command_status(
+    command_store: CommandStore,
+    command_id: str,
+    expected: CommandStatus,
+) -> None:
+    async def poll() -> None:
+        while (await command_store.get(command_id)).status is not expected:
+            await asyncio.sleep(0.001)
+
+    await asyncio.wait_for(poll(), timeout=1.0)
+
+
 def _real_segment_refresher(store: SegmentStore, tmp_path: Path) -> SegmentRefresher:
     """Use production refresher/store/TTS/service/async-bridge seams."""
 
@@ -2111,7 +2123,7 @@ def test_refresh_command_cancellation_before_publication_cannot_commit(tmp_path:
         )
         assert not replayed
         await command_store.request_cancellation(record.command_id)
-        await asyncio.sleep(0.05)
+        await _wait_for_command_status(command_store, record.command_id, CommandStatus.CANCELLED)
         result = await command_store.get(record.command_id)
         assert result.status is CommandStatus.CANCELLED
         assert store.get("obs") is None
@@ -2164,7 +2176,7 @@ def test_refresh_command_late_cancellation_preserves_success_after_commit(tmp_pa
         await asyncio.wait_for(committed.wait(), timeout=1)
         await command_store.request_cancellation(record.command_id)
         release.set()
-        await asyncio.sleep(0.05)
+        await _wait_for_command_status(command_store, record.command_id, CommandStatus.SUCCEEDED)
         result = await command_store.get(record.command_id)
         assert result.status is CommandStatus.SUCCEEDED
 
@@ -2217,7 +2229,7 @@ def test_refresh_persistence_failure_cannot_publish_new_wav_or_command_success(t
             idempotency_key="persistence-failure",
             command_store=command_store,
         )
-        await asyncio.sleep(0.05)
+        await _wait_for_command_status(command_store, record.command_id, CommandStatus.FAILED)
         result = await command_store.get(record.command_id)
         assert result.status is CommandStatus.FAILED
         assert store.get("obs").text == "old"
@@ -3254,7 +3266,7 @@ def test_successful_refresh_acknowledges_receipt_and_three_successes_do_not_accu
                 command_store=command_store,
             )
             assert not replayed
-            await asyncio.sleep(0.05)
+            await _wait_for_command_status(command_store, record.command_id, CommandStatus.SUCCEEDED)
             assert (await command_store.get(record.command_id)).status is CommandStatus.SUCCEEDED
             assert store.committed_refresh_receipts() == ()
             assert list((tmp_path / "work").glob(".segment-commit-receipt-*.json")) == []
@@ -3718,7 +3730,7 @@ def test_receipt_write_failure_does_not_fail_the_refresh_command(tmp_path: Path,
             idempotency_key="receipt-command-truth",
             command_store=command_store,
         )
-        await asyncio.sleep(0.05)
+        await _wait_for_command_status(command_store, record.command_id, CommandStatus.SUCCEEDED)
         assert (await command_store.get(record.command_id)).status is CommandStatus.SUCCEEDED
         assert store.get("obs").text == "committed"
         assert store.committed_refresh_receipts() == ()
@@ -4006,7 +4018,7 @@ def test_live_refresh_replay_does_not_duplicate_in_process_execution(tmp_path: P
         assert replay.command_id == command.command_id
         assert calls == 1
         release.set()
-        await asyncio.sleep(0.05)
+        await _wait_for_command_status(command_store, command.command_id, CommandStatus.FAILED)
 
     asyncio.run(scenario())
 

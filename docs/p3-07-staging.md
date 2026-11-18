@@ -29,8 +29,8 @@ SEASONALWEATHER_STAGING_SECRET_DIR=/absolute/path/to/staging-secrets
 ```
 
 The secret directory must contain `ICECAST_SOURCE_PASSWORD`,
-`SEASONAL_API_TOKEN`, and `SEASONAL_WORKER_TOKEN`, each inaccessible to group
-and other users. Secret contents are never committed or printed by the
+`SEASONAL_API_TOKEN`, and `SEASONAL_WORKER_TOKEN`, each with mode `0400` and ownership that maps to container UID/GID
+`10001:10001`. See the [Compose secret provisioning instructions](../README.md#1-prepare-a-deployment-directory). Secret contents are never committed or printed by the
 staging interface. The staging configuration must disable production inputs
 or point them at an explicitly approved alternate/test source. Do not point
 it at `/etc/seasonalweather/config.yaml` or the repository's default config.
@@ -47,7 +47,8 @@ SEASONALWEATHER_STAGING_SECRET_DIR=/absolute/path/to/staging-secrets \
 ```
 
 Available operations are `config`, `up`, `down`, `restart`, `recreate`, `ps`,
-`logs`, `rollback`, and `soak`. Add `--profile piper`, `--profile legacy-tts`,
+`logs`, `rollback`, and `soak`. Add `--profile espeak`, `--profile piper`,
+`--profile festival`, `--profile dectalk`, `--profile legacy-tts`,
 `--profile voicetext-paul`, `--profile spfy`, or `--profile maintenance` to
 operate the corresponding optional worker; repeat `--profile` to select more
 than one. `down` never removes named volumes. `recreate` therefore exercises
@@ -102,9 +103,10 @@ Run a bounded soak after the failure matrix and rollback test, for example:
   --duration-seconds 3600 --interval-seconds 30
 ```
 
-The interface checks each captured Compose JSON snapshot for at least one
-running service and rejects stopped, malformed, or unhealthy snapshots before
-continuing. It emits only a bounded service-snapshot count. The operator must
+The interface includes stopped containers in each Compose JSON snapshot.
+Each snapshot must contain a running controller, routine worker, Liquidsoap,
+Icecast, and every selected profile's worker. The controller and workers must
+report `healthy`. The interface emits a bounded service-snapshot count. The operator must
 retain the external evidence needed to assess resource usage, restart counts,
 diagnostic cardinality, reconciliation outcomes, worker capability state,
 audio freshness, and stream continuity. The soak passes only when there is no

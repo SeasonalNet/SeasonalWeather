@@ -62,10 +62,11 @@ SEASONAL_API_TOKEN
 SEASONAL_WORKER_TOKEN
 ```
 
-Keep the directory private and each secret file mode `0400`, owned by
-`10001:10001` because the controller and workers run as that numeric identity.
-Do not place
-credentials in the YAML file, image build arguments, Git, or Compose command
+Keep the directory private. Use mode `0400` and the host ownership that
+maps to container UID/GID `10001:10001` for the controller, workers, and
+Liquidsoap. For rootless Docker and user namespace remapping, use the host
+IDs from the active Docker context's mapping.
+Do not place credentials in the YAML file, image build arguments, Git, or Compose command
 lines.
 
 ## Workers and TTS
@@ -75,6 +76,9 @@ profiles are enabled explicitly:
 
 ```bash
 docker compose --profile piper up -d
+docker compose --profile espeak up -d
+docker compose --profile festival up -d
+docker compose --profile dectalk up -d
 docker compose --profile legacy-tts up -d
 docker compose --profile voicetext-paul up -d
 docker compose --profile spfy up -d
@@ -107,6 +111,11 @@ docker compose logs --tail=100 routine-worker
 curl http://127.0.0.1:9080/healthz
 curl http://127.0.0.1:9080/readyz
 ```
+
+The base Compose services use `restart: unless-stopped`, so Compose owns crash
+and daemon/host-reboot recovery. Healthchecks report readiness and liveness but
+do not restart an unhealthy container that is still running; use the operator
+or an external health supervisor for that case.
 
 The controller API is not published to the host by the base Compose file.
 Expose it only through an intentional loopback or secured reverse-proxy

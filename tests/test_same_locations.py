@@ -34,6 +34,30 @@ def test_national_same_never_matches_even_if_configured() -> None:
     assert filter_same_locations_to_service_area(["000000", "024000"], allow) == ["024000"]
 
 
+def test_national_same_is_opt_in_for_national_source_paths() -> None:
+    allow = {"024031"}
+    assert same_location_matches_service_area("000000", allow, allow_national=True, event_code="NPT")
+    assert same_locations_intersect_service_area(["000000"], allow, allow_national=True, event_code="NPT")
+    assert filter_same_locations_to_service_area(
+        ["000000", "024031"],
+        allow,
+        allow_national=True,
+        event_code="NPT",
+    ) == ["000000"]
+
+
+def test_national_same_does_not_bypass_for_local_event_code() -> None:
+    allow = {"024031"}
+    assert not same_location_matches_service_area("000000", allow, allow_national=True, event_code="TOR")
+    assert not same_locations_intersect_service_area(["000000"], allow, allow_national=True, event_code="TOR")
+    assert filter_same_locations_to_service_area(
+        ["000000", "024031"],
+        allow,
+        allow_national=True,
+        event_code="TOR",
+    ) == ["024031"]
+
+
 def test_configured_statewide_code_does_not_admit_all_counties_when_wildcard_disabled() -> None:
     allow = {"024000"}
     assert same_location_matches_service_area("024000", allow, allow_statewide_input=False)

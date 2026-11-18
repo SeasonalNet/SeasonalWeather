@@ -8,6 +8,7 @@ from typing import Any
 
 from ..alerts.active import ActiveAlert
 from ..same.events import label_or_code as _same_label_or_code
+from ..same.locations import is_national_same_location, is_national_scope_event_code
 from .formatters import FormatterSubsystem
 from .station_feed_runtime import note_ern as _station_feed_note_ern
 
@@ -57,7 +58,11 @@ class ErnRelayRuntime:
                 continue
 
             code = (ev.event or "").strip().upper()
-            if code not in {e.strip().upper() for e in host.cfg.ern.relay.events if e.strip()}:
+            national = (
+                is_national_scope_event_code(code)
+                and any(is_national_same_location(location) for location in (ev.locations or ()))
+            )
+            if not national and code not in {e.strip().upper() for e in host.cfg.ern.relay.events if e.strip()}:
                 continue
 
             conf = float(getattr(ev, "confidence", 0.0) or 0.0)
@@ -82,7 +87,11 @@ class ErnRelayRuntime:
                 log.info("ERN relay: cooldown active; skipping event=%s sender=%s", code, ev.sender)
                 continue
 
-            in_area_locs = host.target_resolver._filter_same_locations_to_service_area(getattr(ev, "locations", None))
+            in_area_locs = host.target_resolver._filter_same_locations_to_service_area(
+                getattr(ev, "locations", None),
+                allow_national=True,
+                event_code=code,
+            )
             if not in_area_locs:
                 log.info(
                     "ERN relay: no in-area SAME locations after filtering; skipping event=%s sender=%s decoded=%s",

@@ -96,6 +96,9 @@ def test_controller_accepts_a_real_websocket_worker_session() -> None:
         websocket.send_bytes(encode(worker.heartbeat()))
         heartbeat_ack = decode(websocket.receive_bytes())
         assert isinstance(heartbeat_ack.payload, HeartbeatAck)
+        websocket.close()
+        closed = websocket.receive()
+        assert closed["type"] == "websocket.close"
 
 
 def test_live_route_rejects_an_unoffered_or_ambiguous_subprotocol() -> None:
