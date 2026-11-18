@@ -46,8 +46,8 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends build-essential ca-certificates cmake make python3 python3-venv python3-pip
           python3 -m venv .venv-bootstrap
-          . .venv-bootstrap/bin/activate
-          python -m pip install --upgrade pip uv==0.13.8
+          .venv-bootstrap/bin/python -m pip install --upgrade pip uv==0.13.8
+          export PATH="$PWD/.venv-bootstrap/bin:$PATH"
           uv python install 3.15.2
           uv venv --clear --python 3.15.2 .venv-release
           . .venv-release/bin/activate
