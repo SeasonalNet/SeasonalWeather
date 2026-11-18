@@ -8,8 +8,12 @@ import os
 import re
 import subprocess
 import time
-from pathlib import Path
+from collections.abc import Mapping
+from pathlib import Path, PurePosixPath
 from typing import cast
+
+from seasonalweather.configuration.source import SourceDocument, SourceReadError
+from seasonalweather.configuration.yaml_parser import parse_document
 
 _IMMUTABLE_IMAGE = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
 
@@ -123,6 +127,25 @@ def validate_environment(*, rollback_env_file: Path | None = None, profiles: tup
     return config, secret_dir
 
 
+def _validate_jobs_config(config: Path) -> None:
+    try:
+        parsed = parse_document(SourceDocument.read(config)).parsed
+    except SourceReadError:
+        raise SystemExit("staging configuration could not be read") from None
+    if parsed is None:
+        raise SystemExit("staging configuration is not valid YAML")
+    jobs = parsed.value.get("jobs")
+    if not isinstance(jobs, Mapping) or jobs.get("enabled") is not True or jobs.get("required") is not True:
+        raise SystemExit("staging configuration requires jobs.enabled and jobs.required to be true")
+    path = jobs.get("path")
+    job_dir = PurePosixPath("/var/lib/seasonalweather/jobs")
+    job_path = PurePosixPath(path.strip()) if isinstance(path, str) else PurePosixPath()
+    if job_dir not in job_path.parents or ".." in job_path.parts:
+        raise SystemExit(
+            "staging configuration requires jobs.path to name a database inside /var/lib/seasonalweather/jobs"
+        )
+
+
 def compose_command(
     *args: str,
     rollback_env_file: Path | None = None,
@@ -192,7 +215,9 @@ def _run(
     profiles: tuple[str, ...] = (),
     capture_output: bool = False,
 ) -> int:
-    _ = validate_environment(rollback_env_file=rollback_env_file, profiles=profiles)
+    config, _secret_dir = validate_environment(rollback_env_file=rollback_env_file, profiles=profiles)
+    if args[0] in {"config", "up", "restart"}:
+        _validate_jobs_config(config)
     try:
         completed = subprocess.run(
             compose_command(*args, rollback_env_file=rollback_env_file, profiles=profiles),

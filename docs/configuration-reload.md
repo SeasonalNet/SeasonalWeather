@@ -42,6 +42,13 @@ The operational SQLite database owns the active-generation record and narrow rel
 
 Important outcomes are `noop`, `dry_run`, `restart_required`, `acknowledgment_required`, `deferred`, `cancelled`, `rolled_back`, `reconciliation_required`, and `committed`. On every startup, reconstruction activates the explicit durable target generation—not an inferred increment—and synchronizes active service state, orchestrator state, job-admission fences, and the durable row to that exact value, even when the configured and durable candidate identities already match. Terminal reload evidence repairs a lost generic command acknowledgment according to the exact outcome. Repair selects only attempts whose generic command still needs finalization, so unrelated historical terminal attempts do not consume the bounded batch. Unfinished retirement/reconciliation work is not treated as terminal evidence. Ambiguous journal evidence is reconciled against the durable active generation and complete identities; no single file or memory reference proves success.
 
+When an image adds or removes schema defaults, startup can restore the durable
+active generation using the current compiler. It verifies the historical
+candidate identity and source bytes, checks that the schema version,
+environment bindings, and other origins still agree, and validates the
+recompiled configuration. The durable generation still references the original
+candidate. Pending and new reload commands require exact candidate identity.
+
 Stable reload diagnostics are `SWCFG0004`, `SWCFG2005`, `SWCFG3003`, `SWCFG4003`, `SWCFG7008`, and `SWCFG8001`. Ordinary validation findings retain their P1-14 codes.
 
 Phase 1 validation executes in deterministic embedded scaffolding through the durable job repository. Real worker execution and transport, backend-neutral or remote TTS, NWWS redesign, segment registries, deployment changes, PostgreSQL, PostGIS, and Redis remain deferred.

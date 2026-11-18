@@ -14,13 +14,14 @@ from pathlib import Path
 from typing import Any, cast
 
 from seasonalweather.configuration.compiler import CompiledConfiguration, compile_source
-from seasonalweather.configuration.origins import ENVIRONMENT_BINDINGS
+from seasonalweather.configuration.origins import ENVIRONMENT_BINDINGS, OriginKind
 from seasonalweather.configuration.source import DEFAULT_LIMITS, SourceDocument
 from seasonalweather.database.core import SeasonalDatabase
 from seasonalweather.database.persistence import ConfigurationCandidateRepository
 from seasonalweather.diagnostics.bindings import RELOAD_CODES, code_for_rule
-from seasonalweather.validation.candidate_identity import canonical_report_sha256
+from seasonalweather.validation.candidate_identity import canonical_report_sha256, complete_candidate_sha256
 from seasonalweather.validation.pipeline import CandidateIdentity, EnvironmentInputIdentity
+from seasonalweather.validation.semantic import validate_semantics
 
 from .models import CandidateRecord
 
@@ -31,6 +32,37 @@ class CandidateStoreError(RuntimeError):
 
 class CandidateIntegrityError(CandidateStoreError):
     diagnostic_code = code_for_rule("validation.report_rejected")
+
+
+def _fixed_origins(manifest: tuple[Mapping[str, object], ...]) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        item
+        for item in manifest
+        if item["kind"] != OriginKind.DEFAULT.value or item["declaration_id"] != f"schema.v1:{item['path']}"
+    )
+
+
+def _captured_identity_digest(record: CandidateRecord) -> str:
+    return complete_candidate_sha256(
+        source_manifest=tuple(dict(item) for item in record.source_manifest),
+        config_schema_version=record.config_schema_version,
+        origin_manifest=tuple(dict(item) for item in record.origin_manifest),
+        environment_inputs=tuple(dict(item) for item in record.environment_inputs),
+    )
+
+
+def _only_default_origins_changed(record: CandidateRecord, identity: CandidateIdentity) -> bool:
+    captured_digest = _captured_identity_digest(record)
+    return (
+        record.reference == f"candidate_{captured_digest[:40]}"
+        and record.candidate_identity_sha256 == captured_digest
+        and identity.sha256 == record.candidate_sha256
+        and identity.config_schema_version == record.config_schema_version
+        and tuple(item.to_dict() for item in identity.source_manifest) == record.source_manifest
+        and tuple(item.to_dict() for item in identity.environment_inputs) == record.environment_inputs
+        and _fixed_origins(tuple(item.to_dict() for item in identity.origin_manifest))
+        == _fixed_origins(record.origin_manifest)
+    )
 
 
 class CandidateStore:
@@ -265,16 +297,20 @@ class CandidateStore:
         if raw != canonical:
             raise CandidateIntegrityError("validation report bytes changed after capture")
 
-    def compile(self, record: CandidateRecord) -> CompiledConfiguration:
+    def compile(self, record: CandidateRecord, *, restoring_active: bool = False) -> CompiledConfiguration:
         data = self.verify(record)
         compiled = compile_source(SourceDocument.from_bytes(data, source_id=record.source_name), environ=self._environ)
         identity = CandidateIdentity.from_compiled(
             compiled,
             environment_inputs=self.environment_identities(),
         )
-        if identity.identity_sha256 != record.candidate_identity_sha256:
-            raise CandidateIntegrityError("complete candidate inputs changed after capture")
-        return compiled
+        if identity.identity_sha256 == record.candidate_identity_sha256:
+            return compiled
+        if restoring_active and compiled.valid and _only_default_origins_changed(record, identity):
+            if any(issue.blocking for issue in validate_semantics(compiled)):
+                raise CandidateIntegrityError("active configuration fails current semantic validation")
+            return compiled
+        raise CandidateIntegrityError("complete candidate inputs changed after capture")
 
     def store_report(self, candidate: CandidateRecord, report: Mapping[str, object]) -> tuple[str, str]:
         self.verify(candidate)

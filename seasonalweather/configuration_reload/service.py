@@ -119,8 +119,14 @@ class ConfigurationReloadService:
         self._startup_reconciliation_required = durable_identity != active_candidate.candidate_identity_sha256
         if self._startup_reconciliation_required:
             active_candidate = self.candidates.load(str(durable["candidate_reference"]))
-            active_compiled = self.candidates.compile(active_candidate)
+            active_compiled = self.candidates.compile(active_candidate, restoring_active=True)
             active_configuration = build_runtime_config(active_compiled, environ=self._environ)
+        if (
+            active_candidate.reference != durable["candidate_reference"]
+            or active_candidate.candidate_identity_sha256 != durable_identity
+            or active_candidate.source_sha256 != durable["source_sha256"]
+        ):
+            raise CandidateIntegrityError("active candidate does not match the durable generation")
         self._active_candidate, self._active_compiled = active_candidate, active_compiled
         self._startup_candidate = startup_candidate
         self._startup_compiled = startup_compiled
