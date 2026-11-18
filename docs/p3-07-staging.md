@@ -34,6 +34,10 @@ The secret directory must contain `ICECAST_SOURCE_PASSWORD`,
 staging interface. The staging configuration must disable production inputs
 or point them at an explicitly approved alternate/test source. Do not point
 it at `/etc/seasonalweather/config.yaml` or the repository's default config.
+Set `jobs.enabled` and `jobs.required` to `true` and point `jobs.path` at a
+database inside the staging jobs volume, for example
+`/var/lib/seasonalweather/jobs/jobs.sqlite3`. The staging interface checks these
+settings before rendering the graph or starting, restarting, or recreating services.
 
 ## Controlled operation
 

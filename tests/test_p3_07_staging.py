@@ -6,6 +6,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from tools.staging_interface import (
     OPTIONAL_PROFILES,
     PROFILE_IMAGE_KEYS,
@@ -13,11 +15,31 @@ from tools.staging_interface import (
     REQUIRED_ROLLBACK_IMAGE_KEYS,
     ROLLBACK_IMAGE_KEYS,
     _service_snapshot_is_healthy,
+    _validate_jobs_config,
     compose_command,
     validate_environment,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.parametrize(
+    ("jobs", "error"),
+    (
+        ("", "jobs.enabled"),
+        ("jobs: {enabled: true, required: false}", "jobs.required"),
+        ("jobs: {enabled: true, required: true}", "jobs.path"),
+        ("jobs: {enabled: true, required: true, path: /var/lib/seasonalweather/jobs/../jobs.sqlite3}", "jobs.path"),
+        ("jobs: {enabled: true, required: true, path: /var/lib/seasonalweather/jobs/jobs.sqlite3}", ""),
+    ),
+)
+def test_staging_jobs_preflight(tmp_path: Path, jobs: str, error: str) -> None:
+    config = tmp_path / "staging.yaml"
+    config.write_text(f"config_schema: 1\n{jobs}\n", encoding="utf-8")
+    if error:
+        _expect_system_exit(lambda: _validate_jobs_config(config), error)
+    else:
+        _validate_jobs_config(config)
 
 
 def _yaml(path: Path) -> dict[str, Any]:

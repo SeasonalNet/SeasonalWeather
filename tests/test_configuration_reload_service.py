@@ -14,6 +14,8 @@ from seasonalweather.api.api import create_app
 from seasonalweather.api.auth import ApiPrincipal, get_api_principal
 from seasonalweather.commands.service import CommandStore, IdempotencyConflictError
 from seasonalweather.configuration import build_runtime_config, compile_path
+from seasonalweather.configuration import schema as configuration_schema
+from seasonalweather.configuration_reload import service as reload_service_module
 from seasonalweather.configuration_reload.candidate_store import CandidateIntegrityError, CandidateStore
 from seasonalweather.configuration_reload.models import (
     ReloadDisposition,
@@ -23,7 +25,6 @@ from seasonalweather.configuration_reload.models import (
     WarningAcknowledgment,
 )
 from seasonalweather.configuration_reload.safe_point import TTS, ActivityRegistry, SafePointCoordinator
-from seasonalweather.configuration_reload import service as reload_service_module
 from seasonalweather.configuration_reload.service import (
     ConfigurationReloadService,
     PostCommitRecoveryRequired,
@@ -952,6 +953,40 @@ def test_startup_synchronizes_identical_durable_generation_without_preparation(t
     assert asyncio.run(restarted.reconcile_startup()) == ()
     assert preparer.holder["generation"] == 1
     assert not preparer.plans
+
+
+@pytest.mark.parametrize("rollback", (False, True))
+def test_startup_restores_active_config_across_schema_default_changes(tmp_path: Path, monkeypatch, rollback) -> None:
+    current = configuration_schema.SCHEMA_V1
+    fields = dict(current.fields or {})
+    audio = fields["audio"]
+    audio_fields = dict(audio.fields or {})
+    del audio_fields["generated_max_duration_seconds"]
+    fields["audio"] = replace(audio, fields=audio_fields)
+    prior = replace(current, fields=fields)
+    config = _write_candidate(tmp_path, "  generated_max_duration_seconds: 900\n", "", name="boot.yaml")
+    candidate = tmp_path / "durable.yaml"
+    candidate.write_text(config.read_text(encoding="utf-8").replace('voice: "9"', 'voice: "8"', 1), encoding="utf-8")
+    monkeypatch.setattr(configuration_schema, "SCHEMA_V1", current if rollback else prior)
+    first, commands, _, _ = _service(tmp_path, monkeypatch, config_path=config)
+    committed, _ = asyncio.run(_execute(first, commands, ReloadRequest(actor="operator", source_path=str(candidate))))
+    assert committed.final_generation == 1
+    durable = first.repository.active()
+
+    monkeypatch.setattr(configuration_schema, "SCHEMA_V1", prior if rollback else current)
+    record = first.candidates.load(str(durable["candidate_reference"]))
+    with pytest.raises(CandidateIntegrityError, match="complete candidate inputs changed"):
+        first.candidates.compile(record)
+
+    restarted, _, preparer, _ = _service(tmp_path, monkeypatch, config_path=config)
+    assert asyncio.run(restarted.reconcile_startup()) == ()
+    assert restarted.repository.active() == durable
+    assert preparer.holder["generation"] == 1
+    assert restarted.active.configuration.tts.voice == "8"
+
+    (first.candidates.root / record.reference / "source.bin").write_bytes(b"changed captured source")
+    with pytest.raises(CandidateIntegrityError, match="candidate bytes changed"):
+        _service(tmp_path, monkeypatch, config_path=config)
 
 
 @pytest.mark.parametrize("durable_generation", (0, 1, 4))
