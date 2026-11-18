@@ -927,6 +927,25 @@ def test_subprocess_uses_deadline_and_reaps_timeout(tmp_path: Path) -> None:
     assert error.value.classification == "timed_out"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="requires a POSIX process group")
+def test_subprocess_deadline_covers_descendant_pipes() -> None:
+    import time
+
+    started = time.monotonic()
+    with pytest.raises(ProcessFailure) as error:
+        run_bounded(
+            [
+                sys.executable,
+                "-c",
+                "import subprocess, sys; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(10)'])",
+            ],
+            input_bytes=b"x" * 65_536,
+            deadline=started + 0.5,
+        )
+    assert error.value.classification == "timed_out"
+    assert time.monotonic() - started < 3
+
+
 def test_subprocess_failure_preserves_bounded_stderr() -> None:
     with pytest.raises(ProcessFailure) as error:
         run_bounded(

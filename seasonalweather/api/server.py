@@ -742,6 +742,8 @@ async def _run_api_server_impl(
             diagnostic_promoter=_reload_diagnostic_promoter(diagnostic_service, context),
         )
         await reload_service.reconcile_startup()
+    if artifact_composition is not None:
+        await asyncio.to_thread(artifact_composition.service.reconcile)
     health_service = build_runtime_health_service(
         orch,
         command_store=command_store,

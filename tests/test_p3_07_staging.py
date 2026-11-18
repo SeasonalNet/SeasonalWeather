@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 import importlib
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from tools.staging_interface import PROJECT, _service_snapshot_is_healthy, compose_command, validate_environment
+from tools.staging_interface import (
+    OPTIONAL_PROFILES,
+    PROFILE_IMAGE_KEYS,
+    PROJECT,
+    REQUIRED_ROLLBACK_IMAGE_KEYS,
+    ROLLBACK_IMAGE_KEYS,
+    _service_snapshot_is_healthy,
+    compose_command,
+    validate_environment,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -86,13 +96,42 @@ def test_staging_command_can_select_optional_worker_profiles() -> None:
     ]
 
 
-def test_staging_soak_snapshot_rejects_empty_stopped_and_unhealthy_output() -> None:
+def test_staging_profile_and_rollback_inventory_matches_compose() -> None:
+    services = _yaml(ROOT / "compose.yaml")["services"]
+    worker_images = {
+        profile: service["image"].removeprefix("${").split(":", 1)[0]
+        for name, service in services.items()
+        if name.endswith("-worker")
+        for profile in service.get("profiles", [])
+    }
+    assert set(OPTIONAL_PROFILES) == set(worker_images)
+    assert worker_images == PROFILE_IMAGE_KEYS
+    assert set(ROLLBACK_IMAGE_KEYS) == set(REQUIRED_ROLLBACK_IMAGE_KEYS) | set(worker_images.values())
+
+
+def test_staging_soak_requires_all_selected_services_to_be_ready() -> None:
+    rows = [
+        {"Service": service, "State": "running", "Health": health}
+        for service, health in (
+            ("controller", "healthy"),
+            ("routine-worker", "healthy"),
+            ("liquidsoap", ""),
+            ("icecast", ""),
+            ("piper-worker", "healthy"),
+        )
+    ]
+    profiles = ("piper",)
     assert not _service_snapshot_is_healthy("")
-    assert not _service_snapshot_is_healthy('[{"State":"running"}, 1]')
-    assert not _service_snapshot_is_healthy('{"State":"exited","Health":""}')
-    assert not _service_snapshot_is_healthy('{"State":"running","Health":"unhealthy"}')
-    assert _service_snapshot_is_healthy('[{"State":"running","Health":"healthy"}]')
-    assert _service_snapshot_is_healthy('{"State":"running"}\n')
+    assert not _service_snapshot_is_healthy(json.dumps([*rows, 1]), profiles)
+    assert not _service_snapshot_is_healthy(json.dumps(rows[1:]), profiles)
+    assert not _service_snapshot_is_healthy(json.dumps(rows[:-1]), profiles)
+    assert _service_snapshot_is_healthy(json.dumps(rows), profiles)
+    assert _service_snapshot_is_healthy("\n".join(map(json.dumps, rows)), profiles)
+    for health in ("", "starting", "unhealthy"):
+        rows[0]["Health"] = health
+        assert not _service_snapshot_is_healthy(json.dumps(rows), profiles)
+    rows[0].update(State="exited", Health="healthy")
+    assert not _service_snapshot_is_healthy(json.dumps(rows), profiles)
 
 
 def test_staging_environment_requires_external_config_and_mode_0400_secrets(tmp_path: Path, monkeypatch) -> None:

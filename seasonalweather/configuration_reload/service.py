@@ -349,11 +349,9 @@ class ConfigurationReloadService:
                 old_candidate,
                 old_compiled,
             )
-        except asyncio.CancelledError as exc:
-            self._record_cancelled_audit(attempt_id, request, old, exc)
-            await self._cancel_command_if_open(command_id)
-            raise
-        except ReloadCancelled as exc:
+        except (asyncio.CancelledError, ReloadCancelled) as exc:
+            if attempt_id in self._pending_retirements:
+                raise
             self._record_cancelled_audit(attempt_id, request, old, exc)
             await self._cancel_command_if_open(command_id)
             raise
@@ -1704,9 +1702,12 @@ class ConfigurationReloadService:
         progress["retirement"] = "running"
         retirement_pending = False
         retirement_diagnostics: tuple[str, ...] = ()
+        cancellation = None
         try:
             await plan.retire()
-        except BaseException as exc:
+        except (Exception, asyncio.CancelledError) as exc:
+            if isinstance(exc, asyncio.CancelledError):
+                cancellation = exc
             retirement_pending = True
             progress["retirement"] = "pending"
             retirement_diagnostics = (RELOAD_CODES["retirement_pending"],)
@@ -1718,7 +1719,7 @@ class ConfigurationReloadService:
             self._pending_retirements[attempt_id] = plan
         else:
             progress["retirement"] = "completed"
-        return self._terminal_result(
+        result = self._terminal_result(
             attempt_id,
             request,
             candidate,
@@ -1740,6 +1741,10 @@ class ConfigurationReloadService:
             lifecycle_states=progress,
             finish=not retirement_pending,
         )
+
+        if cancellation is not None:
+            raise cancellation
+        return result
 
     @staticmethod
     def _successful_safe_point(progress: Mapping[str, object]) -> dict[str, object]:

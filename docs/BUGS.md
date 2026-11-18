@@ -1,9 +1,9 @@
 # Known bugs and operational risks
 
-This page records confirmed defects and concrete operational failure paths.
-The publication-lease repair below is implemented in the current tree; its
-remaining operational gap is P3 staging validation. Potential defects that
-still require a scenario-driven review are tracked separately in
+This page records confirmed defects, residual operational risks, and explicit
+acceptance gaps. Addressed items remain here as audit history, with their
+current status stated in the heading. Potential defects that still require a
+scenario-driven review are tracked separately in
 [`REVIEW.md`](REVIEW.md).
 
 ## Scope
@@ -152,68 +152,39 @@ reconciler, and housekeeping:
 - [Liquidsoap 2.4.5 release notes](https://github.com/savonet/liquidsoap/releases/tag/v2.4.5)
 - [Liquidsoap release matrix](https://github.com/savonet/liquidsoap)
 
-## SWWP shutdown can lose result-settlement evidence
+## SWWP reconnect settlement requires a live transport scenario
 
-Applies to both the Phase 4 integration line and the Phase 3 runtime-fixes
-line.
+The current tree keeps result-sent assignments until `ResultCommitted`, waits
+for bounded drain/settlement conditions, and carries completion evidence into
+reconnect reconciliation. A disconnect between `JobResult` and
+`ResultCommitted` still requires a live controller/worker transport scenario to
+confirm every reconciliation disposition and shutdown interaction.
 
-Controller shutdown calls `LiveWorkerSessionManager.drain()`, but that method
-only sends `Drain`. It does not wait for `Drained`, active assignments,
-unacknowledged completions, or durable result settlement before supervisor
-teardown can close the WebSocket.
+This is therefore an unconfirmed review scenario, not a reproduced defect in
+the current tree. Keep the scenario in [`REVIEW.md`](REVIEW.md) until it can be
+exercised against the supported transport without relying only on static
+inspection or a forced unit-test failure.
 
-Worker shutdown has the corresponding ordering problem. `WorkerRuntime.stop()`
-closes the SWWP connection before `run()` awaits assignment tasks. A handler
-that finishes during that interval may be unable to send its result or failure.
-`WorkerRuntime._execute()` also removes runtime assignment tracking immediately
-after sending a result, before the controller returns `ResultCommitted`.
-Health and drain logic can therefore report no active work while durable
-acknowledgment is still outstanding.
-
-The smallest complete repair must:
-
-- keep result-sent assignments tracked until `ResultCommitted` or explicit
-  reconciliation;
-- wait for a bounded `Drained`/settlement condition before closing the
-  transport; and
-- preserve replay-safe completion evidence when either side disconnects during
-  shutdown.
-
-Validation must interrupt both controller and worker at every transition from
-assignment through result commitment, including reconnect to a new controller
-epoch.
-
-## Station-feed housekeeping is outside lifecycle supervision
+## Station-feed housekeeping lifecycle is addressed
 
 Applies to both modernization lines.
 
-`seasonalweather.broadcast.station_feed_runtime` starts housekeeping in a
-daemon thread with an unconditional loop. It retains neither a stop event nor
-a thread handle and has no join path. The thread can continue pruning the
-in-memory feed and SQLite read model while controller shutdown checkpoints and
-closes persistence resources.
+Housekeeping now runs as a supervised asyncio task with a stop event and
+bounded supervisor cancellation. The remaining work is live/scenario
+validation during a housekeeping tick, SQLite lock contention, and
+configuration reload/restart; the former daemon-thread defect is addressed.
 
-Move the loop under the existing controller lifecycle/supervisor boundary with
-bounded stop and join behavior. Validate shutdown during a housekeeping tick,
-SQLite lock contention, and configuration reload/restart.
-
-## Optional station-feed NWS fetching blocks and can silently be unavailable
+## Optional station-feed NWS fetching blocking/import issue is addressed
 
 Applies to both modernization lines when `station_feed.fetch_nws` is enabled.
 
-Station-feed alert handling calls synchronous `requests.get()` with an
-eight-second timeout in the alert path. `requests` is not a declared runtime
-dependency. A minimal supported installation therefore raises `ImportError`,
-which the broad exception handler silently discards. When `requests` happens to
-be installed, a slow NWS response can block controller event-loop work for the
-request timeout.
+Station-feed alert handling now uses the declared `httpx2` dependency through
+the controller's asynchronous NWS API boundary, so the old missing-`requests`
+and event-loop blocking paths are addressed. Remaining validation covers
+timeouts, malformed or oversized responses, cancellation, and normal alert
+handling while the NWS endpoint is slow.
 
-Use the controller's existing asynchronous HTTP boundary and emit bounded
-failure evidence instead of silently disabling the option. Validate missing
-dependencies, timeout, malformed JSON, oversized responses, cancellation, and
-normal alert handling while the NWS endpoint is slow.
-
-## File-backed Compose secrets can be unreadable to non-root services
+## File-backed Compose secret ownership contract clarified
 
 Applies to both modernization lines when using ordinary Docker Compose
 file-backed secrets.
@@ -227,51 +198,121 @@ probe reproduced a host-owned `uid=1000 gid=1000 mode=400` secret and
 controller from reading `ICECAST_SOURCE_PASSWORD` and workers from reading
 `SEASONAL_WORKER_TOKEN`.
 
-The deployment contract must make the mounted files readable by the intended
-service identity without broadening access to other users. Repeat the probe for
-the supported Compose implementation and for every service secret before
-accepting a repair.
+The deployment instructions require mode `0400` and ownership mapped to
+container UID/GID `10001:10001` for the controller, all workers, and Liquidsoap.
+A disposable Docker Compose v5.7.1 probe confirmed all three mounted files
+were readable with that ownership and mode under rootless Docker.
 
-## Compose can terminate a valid controller drain early
+## Compose stop grace for controller drain is addressed
 
 Applies to both modernization lines.
 
-The application lifecycle permits a bounded shutdown of up to 30 seconds, but
-`compose.yaml` declares no matching `stop_grace_period`. A container runtime
-may send `SIGKILL` before job reconciliation, SQLite checkpointing, executor
-cleanup, worker settlement, or lifecycle-marker finalization completes.
+The application lifecycle permits a bounded shutdown of up to 30 seconds and
+`compose.yaml` now declares a 35-second `stop_grace_period`. The configuration
+gap is addressed; live validation with active requests, publications, and
+worker assignments remains an operator acceptance check.
 
-Align the Compose stop grace with the application lifecycle budget and validate
-both normal and forced shutdown with active requests, publications, and worker
-assignments.
-
-## Phase 3 staging omits shipped worker profiles
+## Phase 3 staging profile inventory is addressed
 
 Applies only to `modernization/phase-3-runtime-fixes`.
 
-The Phase 3 Compose graph defines espeak, Festival, and DECtalk worker
-profiles, but its `tools/staging_interface.py` does not include those profiles
-or their image variables in `OPTIONAL_PROFILES`, `PROFILE_IMAGE_KEYS`, or the
-rollback image allowlist. The staging command therefore rejects profiles that
-the same branch ships, and rollback validation cannot pin their images.
+Staging and rollback now include the espeak, Festival, and DECtalk profiles
+shipped in the Phase 3 Compose graph. An inventory test compares the staging
+profiles and rollback image variables against every Compose worker profile.
 
-Bring the staging and rollback profile inventories into exact parity with the
-Compose worker graph and add one exhaustive inventory test so later profiles
-cannot drift silently.
-
-## PostgreSQL startup and migration waits are not fully bounded
+## PostgreSQL startup and migration cancellation remains a residual risk
 
 Applies only to the Phase 4 integration line.
 
-`PostgresPreflight.run()` wraps synchronous psycopg work in
-`asyncio.wait_for(asyncio.to_thread(...))`. Timing out the await does not stop
-the underlying connection or query. Only connection establishment has a libpq
-timeout; subsequent preflight queries have no statement or transaction timeout.
-The migration runner can likewise wait indefinitely on
-`pg_advisory_xact_lock`.
+The PostgreSQL connector now applies bounded `statement_timeout`,
+`lock_timeout`, and `idle_in_transaction_session_timeout` values, so the old
+claim of unbounded queries and advisory-lock waits is no longer current.
+However, `PostgresPreflight.run()` still wraps synchronous psycopg work in
+`asyncio.wait_for(asyncio.to_thread(...))`. If the outer wait expires, it
+cancels only the asyncio wait; the underlying thread keeps its connection and
+does not reach its `close()` path until the database-side timeout or operation
+returns.
 
-A stalled database operation can continue after startup reports the optional
-archive unavailable and can later delay default-executor shutdown. Apply
-database-side statement, lock, and transaction bounds and validate a server
-that stalls after connection, advisory-lock contention, cancellation, and
-shutdown after an apparent preflight timeout.
+This is a bounded cancellation/resource-retention risk, not an unbounded hang.
+It can temporarily occupy the default executor and retain a database session
+after startup has already reported PostgreSQL unavailable. Validate the
+behavior with a server that stalls after connection, advisory-lock contention,
+cancellation, and shutdown after an apparent preflight timeout.
+
+## Review-pass findings addressed in the current tree
+
+### SAME decoder output could grow without bound
+
+The `samedec` listener accumulated decoder stdout until it saw a newline. A
+decoder or damaged pipe that emitted an unterminated line could therefore grow
+the controller-side listener buffer without a byte bound. The listener now
+discards an overlong unterminated line at 64 KiB and has a regression test.
+
+### Uploaded-audio normalization could block the API event loop
+
+The authenticated audio-upload route called FFmpeg through the synchronous
+`AudioAssetService._normalize()` method from an async request handler. A slow or
+hostile input could therefore block unrelated API requests while normalization
+ran. Normalization now runs through the controller's default worker thread and
+the upload remains bounded before staging.
+
+### Concurrent TTS finalization was only locally serialized
+
+The async TTS bridge created its publication lock inside each invocation. Two
+requests targeting one output path could consequently enter the final replace
+section concurrently. Publication now uses one process-wide short critical
+section, preserving atomic replacement while preventing interleaved finalizers.
+
+### Compose crash and reboot recovery had no declared owner
+
+The supported Compose deployment had healthchecks but no restart policy, so a
+crashed service remained stopped after a host or daemon restart. The shared
+service policy now declares `restart: unless-stopped`, covering crash and
+reboot recovery. Compose healthchecks remain observation-only: an unhealthy
+container that is still running still requires an operator or external health
+supervisor to restart it.
+
+## Aggressive review findings addressed
+
+These fixes apply to both modernization lines. The upload cancellation
+finding applies to Phase 4.
+
+### Mixed NWWS WCN retry preserves FULL admission
+
+The active FULL and terminal VOICE portions have separate deduplication keys.
+A failed terminal render or push releases its reservation. Retrying the same
+product queues the terminal voice while retaining the admitted FULL tone-out.
+
+### Controller reconciles interrupted artifact publications on startup
+
+Startup reconciles receipts using durable job and active-file evidence.
+Unpublished receipts require a current, fenced result before a replacement
+can proceed. The retry checks the prior target digest under the promotion lock
+and refuses to overwrite a different publication.
+
+### TTS deadlines cover descendant-held pipes
+
+The deadline covers subprocess exit and all three pipe owners. On timeout or
+cancellation, cleanup signals the process group even if its leader already
+exited, escalates to kill, and bounds its waits.
+
+### Cancelled audio uploads relinquish unpublished files
+
+The executor owns the staged input until normalization finishes. Cancellation
+schedules deletion of the unpublished output when normalization settles.
+
+### SAME decoder stdout drains are bounded
+
+The read loop caps work per drain and discards an oversized line through its
+newline, including a suffix received during a later drain.
+
+### Staging soak requires every selected service
+
+The soak includes stopped containers in the Compose snapshot and requires
+the controller, routine worker, Liquidsoap, Icecast, and selected workers.
+Services with healthchecks must report healthy.
+
+### Reload retirement propagates cancellation after commit
+
+Cancellation preserves the committed generation and pending retirement evidence
+before propagating. Recovery can finish retirement and finalize the command.

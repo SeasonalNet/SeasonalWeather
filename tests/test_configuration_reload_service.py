@@ -1874,6 +1874,43 @@ def test_retirement_failure_remains_pending_until_retry(tmp_path: Path, monkeypa
     assert asyncio.run(commands.get(command.command_id)).status.value == "succeeded"
 
 
+def test_cancelled_retirement_preserves_commit_and_propagates_cancellation(tmp_path: Path, monkeypatch) -> None:
+    service, commands, _preparer, _jobs = _service(tmp_path, monkeypatch)
+    candidate = _write_candidate(tmp_path, 'voice: "9"', 'voice: "8"')
+    original = FakePlan.retire
+
+    async def scenario() -> None:
+        retiring = asyncio.Event()
+
+        async def retire(_plan: FakePlan) -> None:
+            retiring.set()
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(FakePlan, "retire", retire)
+        command, _, admitted = await service._admit_durable(
+            ReloadRequest(actor="operator", source_path=str(candidate)), idempotency_key="retirement-cancel"
+        )
+        task = asyncio.create_task(service.execute_command(command.command_id, admitted))
+        try:
+            await asyncio.wait_for(retiring.wait(), 5)
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        row = service.repository.get_by_command(command.command_id)
+        assert row is not None and row["phase"] == "retiring" and row["finished_at"] is None
+        assert json.loads(row["audit_json"])["retirement_pending"] is True
+        assert service.active.generation == 1
+        assert (await commands.get(command.command_id)).status.value == "running"
+
+        monkeypatch.setattr(FakePlan, "retire", original)
+        await service.reconcile_startup()
+        assert (await commands.get(command.command_id)).status.value == "succeeded"
+
+    asyncio.run(scenario())
+
+
 def test_restart_proves_process_local_retirement_and_reconciles_audit(tmp_path: Path, monkeypatch) -> None:
     service, commands, preparer, _jobs = _service(tmp_path, monkeypatch)
     preparer.fail_retire = True

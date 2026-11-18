@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import hashlib
 import json
@@ -150,6 +151,27 @@ class AudioAssetService:
             )
         return self._probe(destination)
 
+    async def _normalize_upload(self, source_path: Path, wav_path: Path) -> dict[str, Any]:
+        def normalize() -> dict[str, Any]:
+            try:
+                return self._normalize(source=source_path, destination=wav_path)
+            finally:
+                source_path.unlink(missing_ok=True)
+
+        def discard(future: asyncio.Future[dict[str, Any]]) -> None:
+            _ = future.exception()
+            wav_path.unlink(missing_ok=True)
+
+        normalization = asyncio.get_running_loop().run_in_executor(None, normalize)
+        try:
+            return await asyncio.shield(normalization)
+        except asyncio.CancelledError:
+            normalization.add_done_callback(discard)
+            raise
+        except Exception:
+            wav_path.unlink(missing_ok=True)
+            raise
+
     async def stage_upload(self, *, filename: str, content_type: str, data: bytes, actor: str) -> dict[str, Any]:
         if self._repository is None:
             raise ControlError(
@@ -178,10 +200,8 @@ class AudioAssetService:
         source_path = asset_dir / f"{asset_id}.upload.wav"
         wav_path = asset_dir / f"{asset_id}.wav"
         source_path.write_bytes(data)
-        try:
-            probe = self._normalize(source=source_path, destination=wav_path)
-        finally:
-            source_path.unlink(missing_ok=True)
+
+        probe = await self._normalize_upload(source_path, wav_path)
 
         uploaded_at = self._now_utc().replace(microsecond=0)
         expires_at = uploaded_at + dt.timedelta(seconds=self._expiry_seconds())

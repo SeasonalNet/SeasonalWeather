@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from ..alerts.active import ActiveAlert
+from ..same.locations import is_national_same_location, is_national_scope_event_code
 from .formatters import FormatterSubsystem
 
 log = logging.getLogger("seasonalweather")
@@ -31,7 +32,8 @@ class IpawsRuntime:
         Dispatch loop for IPAWS CAP events.
 
         Routing:
-          event_code in ipaws.full_events  -> _air_full  (SAME tones)
+          a national-scope event code with SAME 000000, or an event code in
+          ipaws.full_events -> _air_full (SAME tones)
           event_code in ipaws.voice_events -> _air_voice (no tones)
           anything else                    -> silently logged and dropped
 
@@ -57,7 +59,9 @@ class IpawsRuntime:
 
             if message_type == "cancel":
                 same_locs = host.target_resolver._filter_same_locations_to_service_area(
-                    list(getattr(ev, "same_fips", None) or [])
+                    list(getattr(ev, "same_fips", None) or []),
+                    allow_national=True,
+                    event_code=event_code,
                 )
                 removed_direct = host.alert_tracker.remove(f"IPAWS:{(ev.identifier or '').strip()}")
                 removed_matching = host._remove_matching_ipaws_state(
@@ -78,7 +82,11 @@ class IpawsRuntime:
             full_events = set(host.cfg.ipaws.full_events)
             voice_events = set(host.cfg.ipaws.voice_events)
 
-            should_full = event_code in full_events
+            national = (
+                is_national_scope_event_code(event_code)
+                and any(is_national_same_location(code) for code in (ev.same_fips or []))
+            )
+            should_full = national or event_code in full_events
             should_voice = (not should_full) and (event_code in voice_events)
 
             if not should_full and not should_voice:
@@ -143,7 +151,11 @@ class IpawsRuntime:
             return
 
         same_locs_raw = list(ev.same_fips) if ev.same_fips else []
-        same_locs = host.target_resolver._filter_same_locations_to_service_area(same_locs_raw)
+        same_locs = host.target_resolver._filter_same_locations_to_service_area(
+            same_locs_raw,
+            allow_national=True,
+            event_code=event_code,
+        )
 
         keys: list[str] = []
 
@@ -289,7 +301,11 @@ class IpawsRuntime:
             return
 
         same_locs_raw = list(ev.same_fips) if ev.same_fips else []
-        same_locs = host.target_resolver._filter_same_locations_to_service_area(same_locs_raw)
+        same_locs = host.target_resolver._filter_same_locations_to_service_area(
+            same_locs_raw,
+            allow_national=True,
+            event_code=event_code,
+        )
 
         id_part = host._sha1_12((ev.identifier or "") + "|" + (ev.sent or ""))
         key_str = f"IPAWSVOICE:{id_part}"

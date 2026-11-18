@@ -4,6 +4,9 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Protocol, cast
+
+import pytest
+
 from seasonalweather.alerts.cap_nws import CapAlertEvent
 from seasonalweather.alerts.product import ParsedProduct
 from seasonalweather.config import load_config
@@ -468,6 +471,31 @@ def test_nwws_mixed_wcn_airs_full_then_terminal_voice(tmp_path, monkeypatch):
     assert "Severe Thunderstorm Watch Number 604 has been cancelled" not in orch.audio_originator.full_calls[0][1]
     assert "Severe Thunderstorm Watch Number 604 has been cancelled" in orch.audio_originator.voice_calls[0][1]
     assert "Tornado Watch Number 605" not in orch.audio_originator.voice_calls[0][1]
+    assert [item[0] for item in orch.telnet.pushed] == ["full", "voice"]
+
+
+def test_nwws_mixed_wcn_retry_only_requeues_failed_terminal_voice(tmp_path, monkeypatch):
+    orch = _orchestrator(tmp_path, monkeypatch)
+    original = orch.audio_originator.render_voice_only_audio
+    attempts = 0
+
+    async def render_voice(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("terminal render failed")
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(orch.audio_originator, "render_voice_only_audio", render_voice)
+
+    async def scenario():
+        with pytest.raises(RuntimeError, match="terminal render failed"):
+            await orch.nwws_runtime._handle_toneout(_mixed_wcn_product())
+        await orch.nwws_runtime._handle_toneout(_mixed_wcn_product())
+        await orch.nwws_runtime._handle_toneout(_mixed_wcn_product())
+
+    asyncio.run(scenario())
+    assert attempts == 2
     assert [item[0] for item in orch.telnet.pushed] == ["full", "voice"]
 
 

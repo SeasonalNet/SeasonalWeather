@@ -553,7 +553,7 @@ class IpawsCapPoller:
                         same_fips.append(s6)
 
         # Service-area filter — if nothing intersects our allow set, discard.
-        if not self._matches_service_area(same_fips):
+        if not self._matches_service_area(same_fips, event_code):
             return None
 
         # Parameters dict.
@@ -592,12 +592,17 @@ class IpawsCapPoller:
             eas_org=eas_org,
         )
 
-    def _matches_service_area(self, same_list: list[str]) -> bool:
+    def _matches_service_area(self, same_list: list[str], event_code: str | None = None) -> bool:
         if not same_list:
             return False
-        if not self.allow_set:
-            return False
-        return same_locations_intersect_service_area(same_list, self.allow_set)
+        # National IPAWS alerts are already scoped by FEMA to the entire U.S.;
+        # they do not need to intersect this station's local FIPS list.
+        return same_locations_intersect_service_area(
+            same_list,
+            self.allow_set,
+            allow_national=True,
+            event_code=event_code,
+        )
 
     def _dedupe_key(self, ev: IpawsCapEvent) -> str:
         # "IPAWS:" prefix keeps these separate from NWS CAP entries in the

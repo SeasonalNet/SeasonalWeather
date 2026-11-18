@@ -11,6 +11,7 @@ x-seasonal-security: &seasonal-security
     - /tmp:rw,nosuid,nodev,noexec
     - /run:rw,nosuid,nodev,noexec
   stop_grace_period: 35s
+  restart: unless-stopped
 
 services:
   controller:
@@ -604,8 +605,8 @@ services:
     secrets:
       - source: ICECAST_SOURCE_PASSWORD
         target: ICECAST_SOURCE_PASSWORD
-        uid: "1000"
-        gid: "1000"
+        uid: "10001"
+        gid: "10001"
         mode: "0400"
 
   icecast:

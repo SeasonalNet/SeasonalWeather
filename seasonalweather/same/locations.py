@@ -26,6 +26,10 @@ MARINE_SAME_SS: frozenset[str] = frozenset({
 # local allow list.
 NATIONAL_SAME_LOCATION = "000000"
 
+# Only these EAS/SAME event codes have inherently nationwide purpose.  RWT and
+# RMT are tests, but their broadcasts remain station/state/area scoped.
+NATIONAL_SCOPE_EVENT_CODES: frozenset[str] = frozenset({"EAN", "EAT", "NPT"})
+
 
 def normalize_same_location(value: Any) -> str | None:
     """Return a normalized 6-digit SAME PSSCCC code, or None if malformed."""
@@ -66,6 +70,11 @@ def same_state_fips(code: Any) -> str | None:
 def is_national_same_location(code: Any) -> bool:
     """True for the national/all-US SAME location that must not wildcard-match."""
     return normalize_same_location(code) == NATIONAL_SAME_LOCATION
+
+
+def is_national_scope_event_code(code: Any) -> bool:
+    """True only for event codes whose EAS purpose is inherently nationwide."""
+    return str(code or "").strip().upper() in NATIONAL_SCOPE_EVENT_CODES
 
 
 def is_statewide_same_location(code: Any) -> bool:
@@ -109,19 +118,24 @@ def same_location_matches_service_area(
     allow_set: Iterable[Any] | set[str],
     *,
     allow_statewide_input: bool = True,
+    allow_national: bool = False,
+    event_code: Any | None = None,
 ) -> bool:
     """
     Return True when one SAME location is within the configured service area.
 
-    Exact allow-list membership always matches, except 000000.  When
-    allow_statewide_input is true, an incoming 0SS000 state-wide code also
+    Exact allow-list membership always matches, except 000000 unless
+    ``allow_national`` is true for a nationwide event code.  When
+    ``allow_statewide_input`` is true, an incoming 0SS000 state-wide code also
     matches if the service area contains at least one concrete county/city SAME
-    location from that state.  The location itself is not expanded; callers that
-    relay SAME should preserve the original 0SS000 code.
+    location from that state.  The location itself is not expanded; callers
+    that relay SAME should preserve the original 0SS000 code.
     """
     same6 = normalize_same_location(code)
-    if not same6 or same6 == NATIONAL_SAME_LOCATION:
+    if not same6:
         return False
+    if same6 == NATIONAL_SAME_LOCATION:
+        return allow_national and is_national_scope_event_code(event_code)
 
     normalized_allow = allow_set if isinstance(allow_set, set) else normalize_same_allow_set(allow_set)
     if same6 in normalized_allow:
@@ -139,9 +153,18 @@ def same_locations_intersect_service_area(
     allow_set: Iterable[Any] | set[str],
     *,
     allow_statewide_input: bool = True,
+    allow_national: bool = False,
+    event_code: Any | None = None,
 ) -> bool:
     """Return True when any SAME location intersects the service area."""
+    codes_list = list(codes or [])
     normalized_allow = allow_set if isinstance(allow_set, set) else normalize_same_allow_set(allow_set)
+    if (
+        allow_national
+        and is_national_scope_event_code(event_code)
+        and any(is_national_same_location(code) for code in codes_list)
+    ):
+        return True
     if not normalized_allow:
         return False
     return any(
@@ -149,8 +172,10 @@ def same_locations_intersect_service_area(
             code,
             normalized_allow,
             allow_statewide_input=allow_statewide_input,
+            allow_national=allow_national,
+            event_code=event_code,
         )
-        for code in codes or []
+        for code in codes_list
     )
 
 
@@ -159,6 +184,8 @@ def filter_same_locations_to_service_area(
     allow_set: Iterable[Any] | set[str],
     *,
     allow_statewide_input: bool = True,
+    allow_national: bool = False,
+    event_code: Any | None = None,
 ) -> list[str]:
     """
     Return in-service SAME locations, preserving received codes and order.
@@ -166,19 +193,22 @@ def filter_same_locations_to_service_area(
     State-wide 0SS000 locations are kept as 0SS000 when they match by state.
     They are not expanded into county lists.
     """
+    codes_list = list(codes or [])
     normalized_allow = allow_set if isinstance(allow_set, set) else normalize_same_allow_set(allow_set)
-    out: list[str] = []
-    seen: set[str] = set()
-    for raw in codes or []:
-        code = normalize_same_location(raw)
-        if not code or code in seen:
-            continue
-        if not same_location_matches_service_area(
+    if (
+        allow_national
+        and is_national_scope_event_code(event_code)
+        and any(is_national_same_location(raw) for raw in codes_list)
+    ):
+        return [NATIONAL_SAME_LOCATION]
+    return [
+        code
+        for code in normalize_same_locations(codes_list)
+        if same_location_matches_service_area(
             code,
             normalized_allow,
             allow_statewide_input=allow_statewide_input,
-        ):
-            continue
-        seen.add(code)
-        out.append(code)
-    return out
+            allow_national=allow_national,
+            event_code=event_code,
+        )
+    ]

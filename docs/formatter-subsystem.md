@@ -25,4 +25,8 @@ so a WCN reminder wording change cannot silently diverge between source paths.
 IPAWS polling likewise performs transport and structural validation only. It
 does not discard product types such as DMO, RWT, or RMT. The controller's
 configured `ipaws.full_events` and `ipaws.voice_events` sets decide whether an
-accepted event is aired or ignored.
+accepted local event is aired or ignored. An IPAWS event scoped to `000000`
+(the entire United States) is admitted to the FULL path only for the inherently
+nationwide `EAN`, `EAT`, and `NPT` event codes; local codes such as `TOR`, `RWT`,
+and `RMT` remain subject to geographic and event policy. Source enable, dry-run,
+and lifecycle safety controls still apply.

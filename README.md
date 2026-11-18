@@ -120,7 +120,10 @@ cp config/config.yaml seasonalweather.config.yaml
 
 Edit `seasonalweather.config.yaml` for station identity, timezone,
 service-area FIPS/UGC settings, enabled sources, TTS policy, and API mode.
-Create these files with mode `0400`, owned by the runtime identity `10001:10001`, and fill them with deployment secrets. Ordinary file-backed Compose secrets bind-mount the source file; their `uid`, `gid`, and `mode` service fields do not rewrite host ownership or permissions:
+Create these files with mode `0400` and ownership that maps to UID/GID
+`10001:10001` inside the containers. The controller, workers, and Liquidsoap
+read their secrets as that identity. Docker Compose bind-mounts file-backed
+secrets with the source ownership and permissions.
 
 ```text
 secrets/ICECAST_SOURCE_PASSWORD
@@ -128,11 +131,12 @@ secrets/SEASONAL_API_TOKEN
 secrets/SEASONAL_WORKER_TOKEN
 ```
 
-For example:
-
-```sh
-install -o 10001 -g 10001 -m 0400 /path/to/value secrets/SEASONAL_API_TOKEN
-```
+For rootful Docker without user namespace remapping, provision each file
+with its deployment value using `install -o 10001 -g 10001 -m 0400` with
+the privileges needed to set ownership. For rootless Docker and user namespace
+remapping, use the host IDs mapped to container UID/GID `10001:10001` and
+keep mode `0400`. Verify readability as the configured service user with the
+same Docker context before bringing up the stack.
 
 The Compose defaults mount persistent state, jobs, artifacts, staging, logs,
 and optional VoiceText Paul state into named volumes. Set

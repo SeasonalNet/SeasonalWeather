@@ -612,7 +612,7 @@ def test_reconcile_converges_durable_crash_stages(tmp_path: Path, stage: str) ->
     source.write_bytes(b"recover")
     result = _result(_reference(source))
     journal = Journal()
-    journal.jobs[result.job_id] = SimpleNamespace(status=JobStatus.RUNNING)
+    journal.jobs[result.job_id] = SimpleNamespace(status=JobStatus.RUNNING, attempt_id=result.attempt_id)
     armed = True
 
     def fail(point: str) -> None:
@@ -636,7 +636,22 @@ def test_reconcile_converges_durable_crash_stages(tmp_path: Path, stage: str) ->
             commit_result=lambda: SimpleNamespace(committed_at=NOW, result_hash="sha256:" + "e" * 64),
         )
     assert service.reconcile() == 1
-    assert journal.artifact_receipt(result.job_id, result.attempt_id).disposition == "promoted"
+    pending = journal.artifact_receipt(result.job_id, result.attempt_id)
+    assert pending is not None and pending.disposition == ("promoted" if stage == "after_replace" else "prepared")
+    if stage != "after_replace":
+        active = tmp_path / "active" / "current.bin"
+        active.parent.mkdir(exist_ok=True)
+        active.write_bytes(b"newer publication")
+        with pytest.raises(ValueError, match="target was superseded"):
+            service.accept(result, _fence(result), target_key="current.bin", commit_result=lambda: None)
+        assert active.read_bytes() == b"newer publication"
+        active.unlink()
+    service.accept(
+        result,
+        _fence(result),
+        target_key="current.bin",
+        commit_result=lambda: SimpleNamespace(committed_at=NOW, result_hash="sha256:" + "e" * 64),
+    )
     assert (tmp_path / "active" / "current.bin").read_bytes() == b"recover"
 
 
@@ -705,6 +720,7 @@ def test_reconciliation_does_not_blindly_promote_revalidation_work(tmp_path: Pat
     with pytest.raises(RuntimeError, match="crash"):
         service.accept(result, fence, target_key="current", commit_result=lambda: None)
     assert service.reconcile() == 1
-    assert journal.artifact_receipt(result.job_id, result.attempt_id).disposition == "prepared"
+    pending = journal.artifact_receipt(result.job_id, result.attempt_id)
+    assert pending is not None and pending.disposition == "prepared"
     assert not (tmp_path / "active" / "current").exists()
     assert service.health_snapshot()["last_reason"] == "revalidation_required"

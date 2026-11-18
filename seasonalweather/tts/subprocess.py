@@ -75,27 +75,24 @@ def run_bounded(
     stderr_chunks: list[bytes] = []
     output_limited = False
 
-    def drain(stream: IO[bytes] | None, chunks: list[bytes]) -> None:
+    def drain(stream: IO[bytes], chunks: list[bytes]) -> None:
         nonlocal output_limited
-        if stream is None:
-            return
-        while True:
-            block = stream.read(4096)
-            if not block:
-                return
-            current_size = sum(len(item) for item in chunks)
-            if current_size < output_limit:
-                chunks.append(block[: output_limit - current_size])
-            if current_size + len(block) > output_limit:
-                output_limited = True
+        with stream:
+            while block := stream.read(4096):
+                current_size = sum(len(item) for item in chunks)
+                if current_size < output_limit:
+                    chunks.append(block[: output_limit - current_size])
+                if current_size + len(block) > output_limit:
+                    output_limited = True
 
-    stdout_thread, stderr_thread = _start_drainers(process, drain, stdout_chunks, stderr_chunks)
+    threads = _start_drainers(process, drain, stdout_chunks, stderr_chunks)
+    if input_bytes is not None and process.stdin is not None:
+        threads += (_start_input_writer(process.stdin, input_bytes),)
     try:
-        if input_bytes is not None and process.stdin is not None:
-            _start_input_writer(process, input_bytes)
-        returncode = _wait_bounded(process, deadline, cancellation, terminate_grace_seconds)
-    finally:
-        _finish_process(process, stdout_thread, stderr_thread, terminate_grace_seconds)
+        returncode = _wait_bounded(process, threads, deadline, cancellation)
+    except ProcessFailure:
+        _finish_process(process, threads, terminate_grace_seconds)
+        raise
 
     stdout, stdout_limited = _bounded_output(stdout_chunks, limit=output_limit)
     stderr, stderr_limited = _bounded_output(stderr_chunks, limit=output_limit)
@@ -151,31 +148,28 @@ def _launch_process(
 
 
 def _finish_process(
-    process: subprocess.Popen[bytes],
-    stdout_thread: threading.Thread,
-    stderr_thread: threading.Thread,
-    grace_seconds: float,
+    process: subprocess.Popen[bytes], threads: tuple[threading.Thread, ...], grace_seconds: float
 ) -> None:
-    if process.poll() is None:
-        _terminate_process_group(process, kill=True)
-    try:
+    _terminate_process_group(process, kill=False)
+    cleanup_deadline = time.monotonic() + grace_seconds
+    with suppress(subprocess.TimeoutExpired):
         process.wait(timeout=grace_seconds)
-    except subprocess.TimeoutExpired:
-        _terminate_process_group(process, kill=True)
-        process.wait()
-    stdout_thread.join(timeout=grace_seconds)
-    stderr_thread.join(timeout=grace_seconds)
-    if process.stdin is not None:
-        with suppress(OSError):
-            process.stdin.close()
+    for thread in threads:
+        thread.join(timeout=max(0.0, cleanup_deadline - time.monotonic()))
+    _terminate_process_group(process, kill=True)
+    cleanup_deadline = time.monotonic() + grace_seconds
+    with suppress(subprocess.TimeoutExpired):
+        process.wait(timeout=grace_seconds)
+    for thread in threads:
+        thread.join(timeout=max(0.0, cleanup_deadline - time.monotonic()))
 
 
 def _start_drainers(
     process: subprocess.Popen[bytes],
-    drain: Callable[[IO[bytes] | None, list[bytes]], None],
+    drain: Callable[[IO[bytes], list[bytes]], None],
     stdout_chunks: list[bytes],
     stderr_chunks: list[bytes],
-) -> tuple[threading.Thread, threading.Thread]:
+) -> tuple[threading.Thread, ...]:
     stdout_thread = threading.Thread(target=drain, args=(process.stdout, stdout_chunks), daemon=True)
     stderr_thread = threading.Thread(target=drain, args=(process.stderr, stderr_chunks), daemon=True)
     stdout_thread.start()
@@ -183,38 +177,26 @@ def _start_drainers(
     return stdout_thread, stderr_thread
 
 
-def _start_input_writer(process: subprocess.Popen[bytes], input_bytes: bytes) -> None:
+def _start_input_writer(stream: IO[bytes], input_bytes: bytes) -> threading.Thread:
     def write_input() -> None:
-        try:
-            if process.stdin is not None:
-                process.stdin.write(input_bytes)
-                process.stdin.close()
-        except OSError:
-            pass
+        with suppress(OSError), stream:
+            stream.write(input_bytes)
 
-    threading.Thread(target=write_input, daemon=True).start()
+    thread = threading.Thread(target=write_input, daemon=True)
+    thread.start()
+    return thread
 
 
 def _wait_bounded(
     process: subprocess.Popen[bytes],
+    threads: tuple[threading.Thread, ...],
     deadline: float,
     cancellation: threading.Event | None,
-    terminate_grace_seconds: float,
 ) -> int:
-    while process.poll() is None:
+    while process.poll() is None or any(thread.is_alive() for thread in threads):
         if deadline_expired(cancellation) or time.monotonic() >= deadline:
-            _stop_and_reap(process, terminate_grace_seconds)
             raise ProcessFailure("timed_out", "local synthesis deadline expired")
         if explicit_cancellation(cancellation):
-            _stop_and_reap(process, terminate_grace_seconds)
             raise ProcessFailure("cancelled", "local synthesis was cancelled")
         time.sleep(min(0.02, max(0.001, deadline - time.monotonic())))
     return process.returncode or 0
-
-
-def _stop_and_reap(process: subprocess.Popen[bytes], grace_seconds: float) -> None:
-    _terminate_process_group(process, kill=False)
-    try:
-        process.wait(timeout=grace_seconds)
-    except subprocess.TimeoutExpired:
-        _terminate_process_group(process, kill=True)

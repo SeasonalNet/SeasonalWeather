@@ -17,7 +17,10 @@ from ..broadcast.formatters import (
     match_nwws_wcn_area_same as _match_nwws_wcn_area_same,
 )
 from . import ugc as _ugc
-from .locations import filter_same_locations_to_service_area as _same_filter_locations_to_service_area
+from .locations import (
+    NATIONAL_SAME_LOCATION,
+    filter_same_locations_to_service_area as _same_filter_locations_to_service_area,
+)
 
 log = logging.getLogger("seasonalweather")
 
@@ -57,6 +60,8 @@ class SameTargetResolver:
         locs: list[str] | tuple[str, ...] | None,
         *,
         allow_statewide_input: bool = True,
+        allow_national: bool = False,
+        event_code: str | None = None,
     ) -> list[str]:
         """
         Keep ONLY SAME FIPS locations that are within our configured service area.
@@ -70,6 +75,8 @@ class SameTargetResolver:
             locs,
             self._same_fips_allow_set,
             allow_statewide_input=allow_statewide_input,
+            allow_national=allow_national,
+            event_code=event_code,
         )
 
     def _state_to_fips2(self, st: str) -> str | None:
@@ -140,6 +147,8 @@ class SameTargetResolver:
         codes = [str(x).strip() for x in (same_codes or []) if str(x).strip()]
         if not codes:
             return ""
+        if NATIONAL_SAME_LOCATION in codes:
+            return "the entire United States"
         results = await asyncio.gather(*(self._same6_area_label(c) for c in codes), return_exceptions=True)
         out: list[str] = []
         seen: set[str] = set()
