@@ -91,15 +91,14 @@ explicit `SOURCE_DATE_EPOCH` and a clean tree.
 Release workflows invoke this target only after their CI, security, and
 SemVer guardrail workflows pass for the tagged commit.
 
-`make release-images` builds each target in the declared Bake matrix with its
-profile-specific build record and pushes an explicit release reference. It
-requires `IMAGE_REPOSITORY_BASE` and `IMAGE_TAG`, and writes the resulting
-profile-to-image mapping to `IMAGE_REFERENCES_FILE` (by default
-`dist/release/IMAGE-REFERENCES.txt`). Release workflows authenticate to their
-`dist/release/IMAGE-REFERENCES.txt`). The GitHub release workflow invokes this
-target against GHCR. The Forgejo release workflow does not invoke it; it
-publishes only the source, wheel, and checksum assets. Neither workflow uses
-mutable `latest` references.
+`make release-images` launches a build-and-push job for each of the 11 Bake
+profiles before waiting for the results. Each profile uses its own build record
+and an explicit release reference. The target requires `IMAGE_REPOSITORY_BASE`
+and `IMAGE_TAG`. After every profile succeeds, it replaces
+`IMAGE_REFERENCES_FILE` (by default
+`dist/release/IMAGE-REFERENCES.txt`) with the profile-to-image mapping.
+Forgejo publishes to Harbor and GitHub publishes to GHCR. Both use
+profile-qualified release tags.
 
 CI and release workflows use best-effort caches. UV downloads are cached under
 `~/.cache/uv` using the lockfile and project metadata as the key; the cache is

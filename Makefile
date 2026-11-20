@@ -133,16 +133,28 @@ release-images:
 	@mkdir -p "$$(dirname "$(IMAGE_REFERENCES_FILE)")"
 	@set -eu; \
 	base="$${IMAGE_REPOSITORY_BASE%/}"; \
-	: > "$(IMAGE_REFERENCES_FILE)"; \
+	work=$$(mktemp -d "$$(dirname "$(IMAGE_REFERENCES_FILE)")/.release-images.XXXXXX"); \
+	trap 'rm -rf "$$work"' EXIT; \
+	publish() { \
+		profile="$$1"; \
+		info="$$work/$$profile.json"; \
+		$(MAKE) PYTHON="$(PYTHON)" BUILD_INFO="$$info" BUILD_PROFILE="$$profile" \
+			TARGET_PLATFORM="$(TARGET_PLATFORM)" SOURCE_DATE_EPOCH="$(SOURCE_DATE_EPOCH)" build-info && \
+		$(PYTHON) -m tools.build_interface image --build-info "$$info" \
+			--target "$$profile" --push --image-reference "$$2"; \
+	}; \
+	pids=; \
 	for profile in controller routine-worker espeak piper festival dectalk legacy-tts voicetext-paul spfy maintenance development; do \
-		$(MAKE) PYTHON="$(PYTHON)" BUILD_INFO="$(BUILD_INFO)" BUILD_PROFILE="$$profile" \
-			TARGET_PLATFORM="$(TARGET_PLATFORM)" SOURCE_DATE_EPOCH="$(SOURCE_DATE_EPOCH)" build-info; \
 		case "$$profile" in \
 			controller|development) repository="$$base" ;; \
 			*) repository="$${base}-worker" ;; \
 		esac; \
 		image_reference="$$repository:$(IMAGE_TAG)-$$profile"; \
-		$(PYTHON) -m tools.build_interface image --build-info "$(BUILD_INFO)" \
-			--target "$$profile" --push --image-reference "$$image_reference"; \
-		printf '%s\t%s\n' "$$profile" "$$image_reference" >> "$(IMAGE_REFERENCES_FILE)"; \
-	done
+		printf '%s\t%s\n' "$$profile" "$$image_reference" >> "$$work/references"; \
+		publish "$$profile" "$$image_reference" & \
+		pids="$$pids $$!"; \
+	done; \
+	status=0; \
+	for pid in $$pids; do wait "$$pid" || status=$$?; done; \
+	test "$$status" -eq 0 || exit "$$status"; \
+	mv "$$work/references" "$(IMAGE_REFERENCES_FILE)"

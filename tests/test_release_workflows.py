@@ -1,4 +1,8 @@
+import os
+import subprocess
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).parents[1]
 
@@ -126,3 +130,69 @@ def test_github_release_publishes_images_to_ghcr() -> None:
     assert "registry.lan.seasonalnet.org/seasonalnet/seasonalweather" in forgejo_release
     assert "ghcr.io/seasonalnet/seasonalweather" in github_release
     assert "release-images" in github_release
+
+
+@pytest.mark.parametrize("failed_profile", ["", "piper"])
+def test_release_images_wait_for_parallel_builds(tmp_path: Path, failed_profile: str) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    work = tmp_path / ".git"
+    makefile = tmp_path / "Makefile"
+    makefile.write_text((ROOT / "Makefile").read_text())
+    (work / "info" / "exclude").write_text("/Makefile\n")
+    fake_python = work / "fake-python"
+    fake_python.write_text(
+        """#!/bin/sh
+set -eu
+case "$2" in
+    seasonalweather.build_metadata)
+        printf '%s' "$8" > "$4"
+        ;;
+    tools.build_interface)
+        profile="$7"
+        test "$(cat "$5")" = "$profile"
+        touch ".git/started-$profile"
+        for i in $(seq 1 100); do
+            set -- .git/started-*
+            [ "$#" -lt 11 ] || break
+            sleep 0.05
+        done
+        test "$#" -eq 11
+        touch ".git/finished-$profile"
+        test "$profile" != "$FAILED_PROFILE"
+        ;;
+    *) exit 2 ;;
+esac
+"""
+    )
+    fake_python.chmod(0o755)
+    manifest = work / "references"
+    manifest.write_text("previous\n")
+    result = subprocess.run(
+        [
+            "make",
+            "-f",
+            str(makefile),
+            f"PYTHON={fake_python}",
+            "IMAGE_REPOSITORY_BASE=example.invalid/seasonalweather",
+            "IMAGE_TAG=v1.2.3",
+            f"IMAGE_REFERENCES_FILE={manifest}",
+            "release-images",
+        ],
+        cwd=tmp_path,
+        env={**os.environ, "FAILED_PROFILE": failed_profile},
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert len(list(work.glob("finished-*"))) == 11
+    if failed_profile:
+        assert result.returncode != 0
+        assert manifest.read_text() == "previous\n"
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        lines = manifest.read_text().splitlines()
+        assert len(lines) == 11
+        assert lines[0] == "controller\texample.invalid/seasonalweather:v1.2.3-controller"
+        assert "piper\texample.invalid/seasonalweather-worker:v1.2.3-piper" in lines
+    assert not list(work.glob(".release-images.*"))
