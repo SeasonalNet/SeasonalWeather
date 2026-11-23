@@ -11,6 +11,7 @@ _ALLOWED_JOURNAL_MODES = {"DELETE", "TRUNCATE", "PERSIST", "MEMORY", "WAL", "OFF
 
 class SeasonalDatabase:
     def __init__(self, *, path: str, busy_timeout_ms: int = 5000, journal_mode: str = "WAL") -> None:
+        self.archive_outbox_enabled = False
         self.path = str(path)
         self.busy_timeout_ms = max(100, int(busy_timeout_ms))
         mode = str(journal_mode or "WAL").strip().upper()

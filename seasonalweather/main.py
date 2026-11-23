@@ -39,6 +39,7 @@ from .configuration_reload.safe_point import (
 from .configuration_reload.safe_point import (
     ActivityRegistry,
 )
+from .database.archive_replication import ArchiveReplication
 from .database.postgresql import PostgresPreflight
 from .lifecycle import (
     Lifecycle,
@@ -84,20 +85,20 @@ from .broadcast.segment_registry import DEFAULT_SEGMENT_REGISTRY
 from .broadcast.segment_store import SegmentStore
 from .broadcast.service_runtime import SeasonalWeatherServiceRuntime
 from .broadcast.tests_runtime import RequiredTestRuntime
+from .capabilities.registry import CapabilityRegistry
+from .capabilities.service import declared_capability_names
 from .database.bootstrap import bootstrap_database_from_config
 from .database.housekeeping import DatabaseHousekeeper
 from .database.inserts import CycleInsertRepository
 from .database.publications import PublicationLeaseRepository
 from .database.station_feed import StationFeedRepository
-from .capabilities.registry import CapabilityRegistry
-from .capabilities.service import declared_capability_names
 from .discord_log import DiscordLogger
 from .health_state import HealthStateMachine
+from .jobs.worker_client import SynthesisClient, WorkerSynthesisClient
 from .liquidsoap_telnet import LiquidsoapTelnet
 from .same.locations import normalize_same_allow_set as _normalize_same_allow_set
 from .same.targeting import SameTargetResolver
 from .tts.audio import wav_duration_seconds
-from .jobs.worker_client import SynthesisClient, WorkerSynthesisClient
 from .tts.remote_client import RemoteSynthesisClient
 
 if TYPE_CHECKING:
@@ -233,6 +234,8 @@ class Orchestrator:
             configuration=cfg.database.postgres,
             network=cfg.network.postgresql,
         )
+
+        self.archive_replication = ArchiveReplication.from_config(self.database, cfg)
 
         self.segment_registry = DEFAULT_SEGMENT_REGISTRY.resolve(cfg.cycle)
         self.cycle_builder = CycleBuilder(

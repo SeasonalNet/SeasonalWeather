@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import json
 from collections.abc import Iterable, Mapping
 from typing import Any
 
 from .core import SeasonalDatabase
+from .outbox import append_alert_snapshot
 
 
 class AlertStateRepository:
@@ -16,7 +16,10 @@ class AlertStateRepository:
             conn.execute("DELETE FROM active_alert_vtec")
             conn.execute("DELETE FROM active_alert_same")
             conn.execute("DELETE FROM active_alerts")
+            snapshot: list[dict[str, Any]] = []
             for alert in alerts:
+                if self.db.archive_outbox_enabled:
+                    snapshot.append({key: value for key, value in alert.items() if key != "audio_path"})
                 conn.execute(
                     """
                     INSERT INTO active_alerts (
@@ -55,6 +58,9 @@ class AlertStateRepository:
                         (str(alert["id"]), str(same_code)),
                     )
 
+            if self.db.archive_outbox_enabled:
+                append_alert_snapshot(conn, snapshot)
+
     def load_active_alerts(self) -> list[dict[str, Any]]:
         with self.db.connect() as conn:
             rows = conn.execute(
@@ -63,7 +69,9 @@ class AlertStateRepository:
             if not rows:
                 return []
             vtec_rows = conn.execute("SELECT alert_id, vtec FROM active_alert_vtec ORDER BY alert_id, vtec").fetchall()
-            same_rows = conn.execute("SELECT alert_id, same_code FROM active_alert_same ORDER BY alert_id, same_code").fetchall()
+            same_rows = conn.execute(
+                "SELECT alert_id, same_code FROM active_alert_same ORDER BY alert_id, same_code"
+            ).fetchall()
         vtec_by_alert: dict[str, list[str]] = {}
         same_by_alert: dict[str, list[str]] = {}
         for row in vtec_rows:
@@ -108,7 +116,6 @@ class CapLedgerRepository:
                     "INSERT INTO cap_seen_ledger(dedupe_key, seen_at) VALUES (?, ?)",
                     (str(key), str(seen_at)),
                 )
-
 
     def prune_before(self, cutoff_iso: str) -> int:
         with self.db.transaction() as conn:

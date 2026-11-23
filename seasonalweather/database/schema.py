@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: (
@@ -393,6 +393,16 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
             runtime_id INTEGER PRIMARY KEY CHECK (runtime_id = 1),
             player_epoch TEXT NOT NULL,
             updated_at TEXT NOT NULL
+        )
+        """,
+    ),
+    15: (
+        """
+        CREATE TABLE archive_outbox (
+            sequence INTEGER PRIMARY KEY,
+            id TEXT NOT NULL UNIQUE,
+            recorded_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL
         )
         """,
     ),

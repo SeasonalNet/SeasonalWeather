@@ -111,6 +111,15 @@ class PostgresArchiveRepository:
 
     def insert_many(self, records: tuple[ArchiveRecord, ...]) -> None:
         """Insert a parent-first batch, with no implicit overwrite or deduplication."""
+        self._insert(records, replay=False)
+
+    def replay_many(self, records: tuple[ArchiveRecord, ...]) -> None:
+        """Commit stable outbox IDs, including retries after a lost acknowledgment."""
+        if any(record.origin is not ArchiveOrigin.LOCAL_OUTBOX_REPLAY for record in records):
+            raise ValueError("Only local outbox records can be replayed")
+        self._insert(records, replay=True)
+
+    def _insert(self, records: tuple[ArchiveRecord, ...], *, replay: bool) -> None:
         if not records:
             return
         connection = self._connector.connect(self._network)
@@ -123,6 +132,8 @@ class PostgresArchiveRepository:
                     SQL(", ").join(Placeholder() for _ in columns),
                 )
                 values = _insert_values(record, columns)
+                if replay:
+                    statement += SQL(" ON CONFLICT (id) DO NOTHING")
                 connection.execute(statement.as_string(), values)
             connection.commit()
         except BaseException:

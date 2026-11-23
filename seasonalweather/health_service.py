@@ -352,6 +352,20 @@ async def _postgresql_health_probe(runtime: Any) -> HealthComponent:
         for key in ("checks", "failed_checks", "elapsed_milliseconds", "server_version")
         if key in snapshot
     }
+    return await _postgresql_replication_health(runtime, state, reason, details)
+
+
+async def _postgresql_replication_health(
+    runtime: Any, state: ComponentState, reason: str, details: dict[str, Any]
+) -> HealthComponent:
+    replication = getattr(runtime, "archive_replication", None)
+    if replication is not None:
+        details.update(await asyncio.to_thread(replication.backlog))
+        details["outbox_retrying"] = replication.retrying
+        if replication.retrying:
+            state, reason = ComponentState.DEGRADED, "outbox_retrying"
+        elif replication.has_committed:
+            state, reason = ComponentState.HEALTHY, "outbox_committed"
     return _component("postgresql", state, False, reason, details=details)
 
 

@@ -234,6 +234,7 @@ points include:
 - [API command and job contracts](docs/command-job-contracts.md)
 - [Worker runtime and SWWP](docs/worker-runtime.md)
 - [Diagnostics](docs/runtime-diagnostics.md)
+- [SQLite archive outbox](docs/p4-04-archive-outbox.md)
 
 The systemd bootstrap, installer profiles, and host-local decoder procedure
 are retained as [legacy installer documentation](docs/INSTALLER.md) for

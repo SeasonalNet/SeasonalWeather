@@ -228,6 +228,9 @@ class SeasonalWeatherServiceRuntime:
             name="health_state",
             required=False,
         )
+        replication = getattr(o, "archive_replication", None)
+        if replication is not None:
+            supervisor.create_task(replication.run(), name="archive_replication", required=False)
         o.alert_audio.start_supervised(supervisor)
 
         # CycleConductor + SegmentRefresher own routine cycle scheduling.
