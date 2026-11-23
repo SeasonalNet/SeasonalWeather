@@ -9,7 +9,8 @@ from typing import Any, Protocol
 from ..capabilities.probes import CapabilityProbe as DomainCapabilityProbe
 from ..capabilities.probes import ProbeMode, ProbeReason
 from ..capabilities.registry import WorkerCapabilitySnapshot
-from ..jobs.policies import JobType, QueueClass
+from ..jobs.contracts import AttemptOutcome
+from ..jobs.policies import FailureCategory, JobType, QueueClass
 from .adapter import DurableSwwpPort, remote_executors
 from .auth import (
     AuthenticatedPrincipal,
@@ -481,7 +482,6 @@ class ControllerSession(SessionMachine):
             JobAccepted: self._job_accepted,
             JobRejected: self._job_rejected,
             JobProgress: self._job_progress,
-            JobResult: self._job_result,
             JobFailed: self._job_failed,
             CancelAcknowledged: self._no_response,
             Drained: self._drained,
@@ -491,6 +491,8 @@ class ControllerSession(SessionMachine):
             WorkerDiagnostic: self._worker_diagnostic,
             WorkerTelemetry: self._worker_telemetry,
         }
+        if isinstance(payload, JobResult):
+            return self._job_result(payload, incoming.message_id)
         handler = handlers.get(type(payload))
         if handler is None:
             raise ValueError("message type is not accepted from worker")
@@ -614,13 +616,13 @@ class ControllerSession(SessionMachine):
         if self.assignments.get(key) != "delivered":
             raise ValueError("rejection requires a delivered assignment")
         if self.capabilities is not None:
-            self.capabilities.reject_unacknowledged(
+            _ = self.capabilities.reject_unacknowledged(
                 payload.lease,
                 category=payload.category.value,
                 capability_names=payload.capabilities,
             )
         else:
-            self.durable.reject_unacknowledged(payload.lease)
+            _ = self.durable.reject_unacknowledged(payload.lease)
         self.assignments[key] = "rejected"
         return self._capability_probe_frames()
 
@@ -629,9 +631,40 @@ class ControllerSession(SessionMachine):
         self._work_port().progress(payload)
         return ()
 
-    def _job_result(self, payload: JobResult) -> tuple[Envelope, ...]:
+    def _job_result(self, payload: JobResult, correlated_message_id: str) -> tuple[Envelope, ...]:
         self._require_accepted(payload.lease)
-        receipt = self._work_port().result(payload)
+        try:
+            receipt = self._work_port().result(payload)
+        except Exception as exc:
+            # Record a retryable outcome without exposing paths or worker-provided
+            # values that can appear in exception messages.
+            rejection = "controller rejected the worker result during commit"
+            reason = type(exc).__name__
+            if isinstance(exc, OSError) and exc.errno is not None:
+                reason = f"{reason}, errno {exc.errno}"
+            _ = self._work_port().failure(
+                JobFailed(
+                    lease=payload.lease,
+                    outcome=AttemptOutcome.RETRYABLE_FAILURE,
+                    category=FailureCategory.DEPENDENCY_UNAVAILABLE,
+                    error_code="controller_result_rejected",
+                    summary=f"{rejection} ({reason})",
+                    traceparent=payload.traceparent,
+                )
+            )
+            return (
+                self.error(
+                    ProtocolErrorCategory.INTERNAL_REJECTION,
+                    f"{rejection}; scheduled for retry",
+                    correlated=correlated_message_id,
+                    fatal=False,
+                    session_id=self.session_id,
+                    worker_id=self.worker_id,
+                    worker_instance_id=self.worker_instance_id,
+                    controller_epoch=self.controller_epoch,
+                    worker_epoch=self.worker_epoch,
+                ),
+            )
         return (
             self._out(
                 ResultCommitted(

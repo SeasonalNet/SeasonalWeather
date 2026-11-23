@@ -236,6 +236,8 @@ points include:
 - [Diagnostics](docs/runtime-diagnostics.md)
 - [SQLite archive outbox](docs/p4-04-archive-outbox.md)
 - [Archive product reconciliation](docs/p4-05-product-reconciliation.md)
+- [Recent archive backfill](docs/p4-06-recent-backfill.md)
+- [Phase 4 acceptance checks](docs/p4-07-acceptance.md)
 
 The systemd bootstrap, installer profiles, and host-local decoder procedure
 are retained as [legacy installer documentation](docs/INSTALLER.md) for

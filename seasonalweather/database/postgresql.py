@@ -184,6 +184,8 @@ def _tls_check(connection: PostgresConnection, required: bool) -> str:
     if not isinstance(observed, bool):
         observed = getattr(connection, "ssl_in_use", None)
     if not isinstance(observed, bool):
+        observed = getattr(getattr(connection, "pgconn", None), "ssl_in_use", None)
+    if not isinstance(observed, bool):
         raise RuntimeError("TLS state was not exposed by the client")
     if observed is not required:
         raise RuntimeError("TLS state does not match configured policy")

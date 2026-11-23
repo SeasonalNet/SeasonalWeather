@@ -111,6 +111,7 @@ class FakeDurable:
     progresses: list[JobProgress] = field(default_factory=list)
     results: list[JobResult] = field(default_factory=list)
     failures: int = 0
+    result_error: Exception | None = None
     cancellations: int = 0
 
     def acquire(self, **_: object) -> JobAssignmentPayload | None:
@@ -138,6 +139,8 @@ class FakeDurable:
 
     def result(self, result: JobResult) -> ResultCommitReceipt:
         self.results.append(result)
+        if self.result_error is not None:
+            raise self.result_error
         return ResultCommitReceipt(
             result.lease.job_id,
             result.lease.attempt,
@@ -339,6 +342,30 @@ def test_heartbeat_progress_and_result_commit_ack_are_durably_ordered() -> None:
 
     simulation.pump()
     assert not simulation.worker.completions
+
+
+def test_result_commit_rejection_becomes_retryable_and_nonfatal() -> None:
+    simulation, _, durable = peers()
+    durable.result_error = RuntimeError("staging claim failed")
+    simulation.start()
+    simulation.pump()
+    simulation.deliver_assignment()
+    simulation.pump()
+
+    result = simulation.worker.result(
+        LEASE,
+        result_schema_version=1,
+        result={"content_identity": "content_00000001"},
+        completion_id="completion_00000001",
+    )
+    response = simulation.controller.receive(result)
+
+    assert isinstance(response[0].payload, ProtocolErrorPayload)
+    assert response[0].payload.fatal is False
+    assert response[0].payload.correlated_message_id == result.message_id
+    assert "staging claim failed" not in response[0].payload.summary
+    assert durable.failures == 1
+    assert simulation.controller.state is ControllerState.ACTIVE
 
 
 def test_lost_result_commit_ack_resends_identically_and_conflicts_fail_closed() -> None:

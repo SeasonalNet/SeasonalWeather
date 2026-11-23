@@ -221,6 +221,7 @@ RUN groupadd --gid 10001 seasonalweather \
         --shell /usr/sbin/nologin seasonalweather \
     && install -d -o 10001 -g 10001 /var/lib/seasonalweather/state /var/lib/seasonalweather/jobs \
         /var/lib/seasonalweather/artifacts /var/lib/seasonalweather/artifacts/audio \
+        /var/lib/seasonalweather/artifacts/worker-artifacts \
         /var/lib/seasonalweather/artifacts/worker-artifacts/staging \
         /var/lib/seasonalweather /var/log/seasonalweather /run/seasonalweather \
     && find /usr/share/seasonalweather -type d -exec chmod a+rx {} + \
@@ -228,6 +229,8 @@ RUN groupadd --gid 10001 seasonalweather \
 
 WORKDIR /opt/seasonalweather
 USER seasonalweather
+# The controller must be able to create blobs/ and active/ beside staging/.
+RUN test -w /var/lib/seasonalweather/artifacts/worker-artifacts
 
 EXPOSE 9080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=3 \

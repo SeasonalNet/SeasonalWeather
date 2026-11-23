@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime as dt
-import logging
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Protocol, cast, final
@@ -23,8 +22,6 @@ from ..swwp.constants import (
 )
 from ..swwp.controller import CapabilityControllerPort, ControllerSession, WorkerDiagnosticPort
 from ..swwp.messages import Envelope
-
-log = logging.getLogger("seasonalweather.swwp.live")
 
 
 class WorkerSocket(Protocol):

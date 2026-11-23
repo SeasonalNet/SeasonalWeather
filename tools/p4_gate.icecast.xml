@@ -1,0 +1,18 @@
+<icecast>
+  <location>Disposable developer gate</location>
+  <hostname>icecast</hostname>
+  <limits><clients>10</clients><sources>4</sources></limits>
+  <authentication>
+    <source-password>p4gate-disposable-ICECAST_SOURCE_PASSWORD</source-password>
+    <relay-password>p4gate-disposable-relay</relay-password>
+    <admin-user>admin</admin-user>
+    <admin-password>p4gate-disposable-admin</admin-password>
+  </authentication>
+  <listen-socket><port>8000</port></listen-socket>
+  <fileserve>0</fileserve>
+  <logging>
+    <accesslog>-</accesslog>
+    <errorlog>-</errorlog>
+    <loglevel>3</loglevel>
+  </logging>
+</icecast>

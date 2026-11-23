@@ -29,5 +29,14 @@ table and rolls the transaction back before the connection closes.
 The result is exposed as the optional `postgresql` health component. A
 successful preflight is `healthy`; a failed preflight is `unavailable` and
 produces bounded `SWDB3001` diagnostic occurrences. Neither state participates
-in required readiness. Migration execution, archive schema creation, and
-replication are intentionally deferred to later Phase 4 packets.
+in required readiness. Before enabling the archive, provision the database,
+install PostGIS, and give the controller role ownership of the configured
+schema and the privileges required by preflight. Startup then runs the
+[safe migration path](p4-02-postgresql-migrations.md).
+
+If PostgreSQL becomes unavailable, keep the controller running on local
+SQLite. Inspect the PostgreSQL health component and `SWDB3001`; monitor the
+[outbox backlog](p4-04-archive-outbox.md) and local disk capacity. Restore
+connectivity and confirm pending rows drain. If startup qualification failed,
+restart the controller in an approved window to rerun preflight and safe
+migrations. Do not delete queued rows to clear a backlog.

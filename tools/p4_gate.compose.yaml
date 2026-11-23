@@ -1,0 +1,57 @@
+---
+services:
+  gate-secrets:
+    image: seasonalweather:standard
+    user: "0:0"
+    network_mode: none
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - |
+        cd /fixtures
+        install -o 10001 -g 10001 -m 0400 ICECAST_SOURCE_PASSWORD \
+          SEASONAL_API_TOKEN SEASONAL_WORKER_TOKEN /gate-secrets/
+    volumes:
+      - ${SEASONALWEATHER_SECRET_DIR}:/fixtures:ro
+      - gate-secrets:/gate-secrets
+  controller:
+    restart: "no"
+    networks:
+      - default
+      - gate-egress
+    secrets: !reset []
+    volumes:
+      - gate-secrets:/run/secrets:ro
+    environment:
+      PGUSER: p4gate
+      PGPASSWORD: ${P4_GATE_DB_PASSWORD:?Run the gate script}
+  routine-worker:
+    restart: "no"
+    secrets: !reset []
+    volumes:
+      - gate-secrets:/run/secrets:ro
+  liquidsoap:
+    secrets: !reset []
+    volumes:
+      - gate-secrets:/run/secrets:ro
+  postgres:
+    image: postgis/postgis:17-3.5
+    healthcheck:
+      test: [CMD, pg_isready, -h, 127.0.0.1, -U, p4gate, -d, p4gate]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    environment:
+      POSTGRES_USER: p4gate
+      POSTGRES_DB: p4gate
+      POSTGRES_PASSWORD: ${P4_GATE_DB_PASSWORD:?Run the gate script}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+networks:
+  # Keep the disposable service network isolated; only the controller needs
+  # outbound access for bounded NWS health/backfill calls during the gate.
+  default:
+    internal: true
+  gate-egress:
+volumes:
+  postgres-data:
+  gate-secrets:

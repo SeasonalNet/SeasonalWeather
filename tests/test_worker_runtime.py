@@ -11,19 +11,20 @@ from typing import cast
 
 from seasonalweather.jobs.policies import ExecutorClass, JobType, QueueClass
 from seasonalweather.swwp.codec import decode, encode
-from seasonalweather.swwp.constants import SUBPROTOCOL
+from seasonalweather.swwp.constants import SUBPROTOCOL, ProtocolErrorCategory
 from seasonalweather.swwp.messages import (
     Envelope,
     JobAssignmentPayload,
     JobResult,
     LeaseRef,
     Payload,
+    ProtocolErrorPayload,
     Registered,
     SelectedVersions,
 )
 from seasonalweather.swwp.worker import WorkerSession
 from seasonalweather.worker.cli import main as worker_main
-from seasonalweather.worker.handlers import HandlerContext, HandlerRegistry, HandlerResult
+from seasonalweather.worker.handlers import HandlerContext, HandlerRegistry, HandlerResult, _artifact_token
 from seasonalweather.worker.profiles import (
     WorkerProfile,
     capability_manifest,
@@ -33,14 +34,15 @@ from seasonalweather.worker.profiles import (
 from seasonalweather.worker.runtime import WorkerRuntime
 
 
-def test_worker_synthesis_descriptor_does_not_export_controller_state_path() -> None:
+def test_worker_synthesis_descriptor_uses_selected_local_profile() -> None:
     from seasonalweather.jobs.worker_client import WorkerSynthesisConfiguration
 
     configuration = SimpleNamespace(
         tts=SimpleNamespace(
-            local=SimpleNamespace(engine="piper"),
-            voice="en_US-lessac-medium",
-            rate_wpm=165,
+            local=SimpleNamespace(engine="espeak-ng", voice="en-us", rate_wpm=165),
+            # This compatibility value must not override the local profile.
+            voice="voicetext-paul",
+            rate_wpm=9,
             volume=1.0,
             text_overrides=(),
             voicetext_paul=None,
@@ -49,7 +51,57 @@ def test_worker_synthesis_descriptor_does_not_export_controller_state_path() -> 
         paths=SimpleNamespace(operational_state_dir="/controller-only/state"),
     )
 
-    assert WorkerSynthesisConfiguration.from_configuration(configuration).data_base == ""
+    descriptor = WorkerSynthesisConfiguration.from_configuration(configuration)
+    assert descriptor.engine == "espeak-ng"
+    assert descriptor.voice == "en-us"
+    assert descriptor.rate_wpm == 165
+    assert descriptor.data_base == ""
+
+
+def test_worker_artifact_token_is_safe_and_stable_for_unsafe_lease_ids() -> None:
+    token = _artifact_token("job/with spaces:and\\slashes", "attempt/1?unsafe")
+
+    assert token == _artifact_token("job/with spaces:and\\slashes", "attempt/1?unsafe")
+    assert token.endswith(".wav")
+    assert token.count("/") == 0
+    assert all(part and part[0].isalnum() for part in token.split("-"))
+    assert len(token) < 128
+
+
+def test_worker_protocol_error_releases_result_assignment(tmp_path: Path) -> None:
+    registration = registration_for_profile(
+        WorkerProfile.MAINTENANCE,
+        worker_id="maintenance-worker-1",
+        worker_instance_id="instance-1",
+        dependency_probe=lambda _: True,
+    )
+    session = WorkerSession(
+        registration=registration,
+        id_factory=lambda prefix: f"{prefix}-id",
+        clock=lambda: dt.datetime.now(dt.UTC),
+    )
+    handlers = HandlerRegistry({JobType.MAINTENANCE_RECONCILE: _MaintenanceHandler()})
+    runtime = WorkerRuntime(
+        session,
+        handlers,
+        _FakeTransport(_FakeConnection([])),
+        health_file=str(tmp_path / "health.json"),
+    )
+    lease_key = ("job-1", "lease-1", "attempt-1", 1)
+    runtime._result_assignments["result-envelope"] = lease_key
+    runtime._cancellations[lease_key] = asyncio.Event()
+
+    runtime._handle_protocol_error(
+        ProtocolErrorPayload(
+            category=ProtocolErrorCategory.INTERNAL_REJECTION,
+            summary="worker result was rejected during commit and scheduled for retry",
+            correlated_message_id="result-envelope",
+            fatal=False,
+        )
+    )
+
+    assert runtime._result_assignments == {}
+    assert lease_key not in runtime._cancellations
 
 
 def test_profile_manifest_fails_closed_when_dependencies_are_unavailable() -> None:

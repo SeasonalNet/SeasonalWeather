@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -25,6 +26,13 @@ from ..jobs.contracts import AttemptOutcome
 from ..jobs.policies import FailureCategory, JobType
 from ..swwp.messages import JobAssignmentPayload
 from .profiles import profile_spec
+
+
+def _artifact_token(job_id: str, attempt_id: str) -> str:
+    """Return a bounded safe token shared by staging and the output path."""
+    job_digest = hashlib.sha256(job_id.encode("utf-8")).hexdigest()[:16]
+    attempt_digest = hashlib.sha256(attempt_id.encode("utf-8")).hexdigest()[:16]
+    return f"job-{job_digest}-attempt-{attempt_digest}.wav"
 
 
 class WorkerHandlerError(RuntimeError):
@@ -113,7 +121,10 @@ class LocalTtsHandler:
             raise WorkerHandlerError("input_identity_mismatch", "worker input profile identity is inconsistent")
         output_root = self.input_store.parent / self.worker_id
         output_root.mkdir(mode=0o750, parents=True, exist_ok=True)
-        output_path = output_root / f"{assignment.lease.job_id}_{assignment.lease.attempt_id}.wav"
+        output_path = output_root / _artifact_token(
+            assignment.lease.job_id,
+            assignment.lease.attempt_id,
+        )
         output_path.unlink(missing_ok=True)
         try:
             await asyncio.to_thread(
@@ -128,9 +139,13 @@ class LocalTtsHandler:
         except WorkerHandlerError:
             raise
         except (OSError, ValueError, RuntimeError) as exc:
+            detail = " ".join(str(exc).split())[:180]
+            summary = f"local worker synthesis failed: {type(exc).__name__}"
+            if detail:
+                summary += f": {detail}"
             raise WorkerHandlerError(
                 "local_synthesis_failed",
-                f"local worker synthesis failed: {type(exc).__name__}",
+                summary,
                 category=FailureCategory.DEPENDENCY_UNAVAILABLE,
                 outcome=AttemptOutcome.RETRYABLE_FAILURE,
             ) from exc

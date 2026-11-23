@@ -41,6 +41,12 @@ The service-level read-only image contract remains in force; the explicit
 staging mount is the only worker write exception.
 
 Both application images pre-create the staging mountpoint as UID/GID 10001.
+The controller image also sets that ownership on `worker-artifacts` itself so
+it can create the sibling `blobs` and `active` directories. If an existing
+artifact volume has a root-owned `worker-artifacts` directory from an older
+image, correct the ownership of that directory to the mapped controller
+UID/GID in the deployment's user namespace; do not recreate the volume or
+change ownership recursively.
 The staging volume uses normal Docker copy-up so a new empty volume inherits
 that ownership; `nocopy` would leave a fresh volume root-owned and unwritable
 by the non-root worker. Existing volumes retain their existing ownership and

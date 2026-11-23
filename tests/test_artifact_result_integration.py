@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import hashlib
+import shutil
 import threading
 import wave
 from types import SimpleNamespace
@@ -20,11 +21,75 @@ from seasonalweather.configuration_reload.safe_point import (
 )
 from seasonalweather.job_store import DurableJobService, JobDatabase, JobRepository, JobScheduler
 from seasonalweather.jobs.policies import JobType
+from seasonalweather.jobs.worker_client import WorkerInputStore, WorkerSynthesisClient, WorkerSynthesisConfiguration
 from seasonalweather.lifecycle import Lifecycle
 from seasonalweather.swwp.adapter import JobStoreSwwpAdapter
-from seasonalweather.swwp.messages import JobResult, LeaseRef
+from seasonalweather.swwp.codec import decode, encode
+from seasonalweather.swwp.messages import Envelope, JobResult, LeaseRef
+from seasonalweather.worker.handlers import HandlerContext, LocalTtsHandler
 
 NOW = dt.datetime(2026, 7, 26, 12, tzinfo=dt.UTC)
+
+
+@pytest.mark.skipif(
+    not shutil.which("espeak-ng") or not shutil.which("ffmpeg"), reason="requires local eSpeak NG and ffmpeg"
+)
+def test_routine_worker_wav_commits_after_swwp_round_trip(tmp_path) -> None:
+    lifecycle = Lifecycle()
+    lifecycle.mark_running()
+    repository = JobRepository(JobDatabase(path=str(tmp_path / "jobs.sqlite3"), busy_timeout_ms=1000))
+    jobs = DurableJobService(repository, lifecycle, reconciliation_batch_size=20)
+    _ = jobs.initialize()
+    composition = build_controller_artifact_composition(
+        SimpleNamespace(reload_activities=ActivityRegistry(), lifecycle=lifecycle, configuration_generation=0),
+        repository,
+        work_root=tmp_path,
+        maximum_bytes=1024 * 1024,
+    )
+    inputs = composition.transport.paths.staging / "controller-inputs"
+    content, profile = WorkerInputStore(inputs).put(
+        text="This is a station identification test.",
+        configuration=WorkerSynthesisConfiguration("espeak-ng", "en-us", 165, 1.0, 48000),
+    )
+    job_type, payload, dedupe_key = WorkerSynthesisClient._job_request(
+        purpose="routine",
+        content_ref=content,
+        profile_ref=profile,
+        generation=0,
+        source_identity=None,
+        event_identity=None,
+        content_identity=None,
+    )
+    admitted = jobs.admit(job_type=job_type, payload=payload, dedupe_key=dedupe_key, config_generation=0)
+    scheduler = JobScheduler(repository, lifecycle, lease_seconds=60, acknowledgment_seconds=10)
+    adapter = JobStoreSwwpAdapter(scheduler, repository, artifact_results=composition.results)
+    worker_id = "routine-worker"
+    assignment = scheduler.assign(owner=worker_id, capabilities=("tts.synthesis.v1",))
+    assert assignment is not None
+    message = adapter.payload_for_assignment(assignment)
+    _ = adapter.acknowledge(message.lease)
+    synthesize = LocalTtsHandler(worker_id=worker_id, input_root=inputs).execute
+    result = asyncio.run(synthesize(message, HandlerContext(asyncio.Event(), message.deadline_at)))
+    job_result = JobResult(
+        lease=message.lease,
+        result_schema_version=message.result_schema_version,
+        result=result.result,
+        artifact_refs=result.artifact_refs,
+        completion_id="completion-test",
+    )
+    envelope = Envelope(
+        message_type=job_result.message_type,
+        message_id="message-test",
+        sent_at=dt.datetime.now(dt.UTC),
+        payload=job_result,
+    )
+    received = decode(encode(envelope)).payload
+    assert isinstance(received, JobResult)
+    receipt = adapter.result(received)
+    assert receipt.job_id == admitted.job.job_id
+    artifact = repository.artifact_receipt(receipt.job_id, assignment.attempt_id)
+    assert artifact is not None and artifact.disposition == "committed"
+    assert (composition.transport.paths.active / artifact.target_key).is_file()
 
 
 def test_swwp_artifact_result_promotes_then_commits_and_replays(tmp_path) -> None:
@@ -168,7 +233,12 @@ def test_swwp_artifact_result_promotes_then_commits_and_replays(tmp_path) -> Non
     async def new_result_waits_for_commit_gate() -> None:
         lease = await SafePointCoordinator(activities, poll_interval_seconds=0.001).acquire(0.2)
         completed = threading.Event()
-        replay = threading.Thread(target=lambda: (adapter.result(message), completed.set()), daemon=True)
+
+        def replay_result() -> None:
+            _ = adapter.result(message)
+            completed.set()
+
+        replay = threading.Thread(target=replay_result, daemon=True)
         replay.start()
         await asyncio.sleep(0.01)
         assert not completed.is_set()

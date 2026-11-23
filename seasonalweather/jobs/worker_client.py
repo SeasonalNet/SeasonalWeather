@@ -66,8 +66,12 @@ class WorkerSynthesisConfiguration:
         vtp = getattr(tts, "voicetext_paul", None)
         return cls(
             engine=str(local.engine),
-            voice=str(tts.voice),
-            rate_wpm=int(tts.rate_wpm),
+            # Serialize the selected local profile, not a backend-specific
+            # compatibility alias.  The worker reconstructs LocalEngineOptions
+            # from this descriptor and must receive the voice paired with the
+            # selected local engine.
+            voice=str(local.voice),
+            rate_wpm=int(local.rate_wpm),
             volume=float(tts.volume),
             sample_rate=int(configuration.audio.sample_rate),
             generated_max_duration_seconds=float(getattr(configuration.audio, "generated_max_duration_seconds", 900.0)),
@@ -296,7 +300,11 @@ class WorkerSynthesisClient:
                 await self._copy_committed_artifact(job, output_path)
                 return
             if job.status.value in {"failed", "cancelled", "expired", "superseded"}:
-                reason = job.error.code if job.error is not None else job.status.value
+                if job.error is None:
+                    reason = job.status.value
+                else:
+                    detail = " ".join(str(job.error.message).split())[:160]
+                    reason = f"{job.error.code}: {detail}" if detail else job.error.code
                 raise WorkerJobUnavailable(f"worker synthesis did not complete: {reason}")
             if dt.datetime.now(dt.UTC) >= deadline:
                 await asyncio.to_thread(job_service.reconcile)

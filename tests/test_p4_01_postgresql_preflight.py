@@ -33,11 +33,10 @@ class _Cursor:
 
 class _Connection:
     class _Info:
-        ssl_in_use = True
-
         server_version = 160000
 
     info = _Info()
+    pgconn = SimpleNamespace(ssl_in_use=True)
 
     def __init__(self):
         self.operations: list[str] = []
@@ -164,6 +163,31 @@ def test_successful_preflight_checks_transaction_and_closes_connection(monkeypat
     assert "CREATE TEMP TABLE" in " ".join(connection.operations)
     assert connection.rollbacks >= 2
     assert connection.closed is True
+
+
+def test_failed_migration_degrades_optional_archive(monkeypatch):
+    cfg = _configuration(monkeypatch)
+    connection = _Connection()
+    sink = _Sink()
+
+    def migrate() -> str:
+        raise RuntimeError("private PostgreSQL error details")
+
+    preflight = PostgresPreflight(
+        configuration=cfg.database.postgres,
+        network=replace(cfg.network.postgresql, enabled=True, database="seasonalweather"),
+        connector=cast(PostgresConnector, cast(object, _Connector(connection))),
+        clock=lambda: dt.datetime.fromtimestamp(1_753_000_000.0, tz=dt.UTC),
+        diagnostic_sink=sink,
+        migrate=migrate,
+    )
+
+    result = asyncio.run(preflight.run())
+    assert result.state is PostgresPreflightState.UNAVAILABLE
+    assert [failure.name for failure in result.failures] == ["migration_state"]
+    assert connection.closed
+    assert sink.calls[0]["code"] == "SWDB3001"
+    assert "private PostgreSQL error details" not in repr(sink.calls)
 
 
 def test_connection_failure_is_bounded_and_emits_redacted_diagnostic(monkeypatch):

@@ -9,6 +9,8 @@ import logging
 from collections.abc import Callable
 
 from ..build_metadata import current_build_info
+from ..jobs.contracts import AttemptOutcome
+from ..jobs.policies import FailureCategory
 from ..lifecycle_records import LifecycleRecordWriter, LifecycleStage
 from ..observability import bind_correlation, bind_trace_context
 from ..observability.tracing import TraceContext
@@ -18,6 +20,7 @@ from ..swwp.messages import (
     Cancel,
     Drain,
     JobAssignmentPayload,
+    ProtocolErrorPayload,
     Registered,
     ResultCommitted,
 )
@@ -27,6 +30,10 @@ from .health import WorkerHealthStore, health_path
 from .transport import WorkerConnection, WorkerTransport
 
 log = logging.getLogger("seasonalweather.worker")
+
+
+class WorkerConnectionUnavailable(RuntimeError):
+    """An outbound message has no live connection."""
 
 
 class WorkerRuntime:
@@ -64,6 +71,7 @@ class WorkerRuntime:
         self._connection: WorkerConnection | None = None
         self._assignment_tasks: dict[tuple[str, str, str, int], asyncio.Task[None]] = {}
         self._cancellations: dict[tuple[str, str, str, int], asyncio.Event] = {}
+        self._result_assignments: dict[str, tuple[str, str, str, int]] = {}
         self._failure: BaseException | None = None
         self._shutdown_requested = False
         self._draining_recorded = False
@@ -145,7 +153,7 @@ class WorkerRuntime:
             reason="connection_lost",
         )
         try:
-            await asyncio.wait_for(self._stop.wait(), timeout=delay)
+            _ = await asyncio.wait_for(self._stop.wait(), timeout=delay)
         except TimeoutError:
             return
 
@@ -160,13 +168,13 @@ class WorkerRuntime:
             try:
                 await receiver
             finally:
-                heartbeat.cancel()
+                _ = heartbeat.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await heartbeat
                 drain_task = self._drain_task
                 self._drain_task = None
                 if drain_task is not None and not drain_task.done():
-                    drain_task.cancel()
+                    _ = drain_task.cancel()
                 if drain_task is not None:
                     with contextlib.suppress(asyncio.CancelledError):
                         await drain_task
@@ -194,7 +202,7 @@ class WorkerRuntime:
                 break
             self._settlement_changed.clear()
             try:
-                await asyncio.wait_for(self._settlement_changed.wait(), timeout=remaining)
+                _ = await asyncio.wait_for(self._settlement_changed.wait(), timeout=remaining)
             except TimeoutError:
                 break
         self._stop.set()
@@ -243,6 +251,8 @@ class WorkerRuntime:
             self._schedule_drain(payload)
         elif isinstance(payload, ResultCommitted):
             self._handle_result_committed(payload)
+        elif isinstance(payload, ProtocolErrorPayload):
+            self._handle_protocol_error(payload)
 
     def _schedule_drain(self, payload: Drain) -> None:
         if self._drain_task is None or self._drain_task.done():
@@ -307,7 +317,7 @@ class WorkerRuntime:
                 break
             self._settlement_changed.clear()
             try:
-                await asyncio.wait_for(self._settlement_changed.wait(), timeout=remaining)
+                _ = await asyncio.wait_for(self._settlement_changed.wait(), timeout=remaining)
             except TimeoutError:
                 break
         with contextlib.suppress(Exception):
@@ -315,8 +325,10 @@ class WorkerRuntime:
         self._stop.set()
 
     def _handle_result_committed(self, payload: ResultCommitted) -> None:
-        self._assignment_tasks.pop(self._lease_key(payload.lease), None)
-        self._cancellations.pop(self._lease_key(payload.lease), None)
+        key = self._lease_key(payload.lease)
+        _ = self._assignment_tasks.pop(key, None)
+        _ = self._cancellations.pop(key, None)
+        self._forget_result_assignments(key)
         self._settlement_changed.set()
         self._publish_health(
             state=self.session.readiness_state.value,
@@ -326,6 +338,27 @@ class WorkerRuntime:
         )
         if self.session.readiness_state is WorkerReadinessState.DRAINING and not self._assignment_tasks:
             self._stop.set()
+
+    def _handle_protocol_error(self, payload: ProtocolErrorPayload) -> None:
+        if payload.correlated_message_id is None:
+            return
+        key = self._result_assignments.pop(payload.correlated_message_id, None)
+        if key is None:
+            return
+        _ = self._assignment_tasks.pop(key, None)
+        _ = self._cancellations.pop(key, None)
+        self._settlement_changed.set()
+        self._publish_health(
+            state=self.session.readiness_state.value,
+            ready=self.session.ready,
+            accepting_new_jobs=self.session.accepting_new_jobs,
+            reason="job_result_rejected",
+        )
+
+    def _forget_result_assignments(self, key: tuple[str, str, str, int]) -> None:
+        for message_id, result_key in tuple(self._result_assignments.items()):
+            if result_key == key:
+                _ = self._result_assignments.pop(message_id, None)
 
     async def _execute(self, assignment: JobAssignmentPayload, cancellation: asyncio.Event) -> None:
         key = self._lease_key(assignment.lease)
@@ -364,28 +397,46 @@ class WorkerRuntime:
                     summary=exc.summary,
                 )
             )
-            self._assignment_tasks.pop(key, None)
-            self._cancellations.pop(key, None)
+            _ = self._assignment_tasks.pop(key, None)
+            _ = self._cancellations.pop(key, None)
+        except Exception:
+            with contextlib.suppress(Exception):
+                await self._send(
+                    self.session.failure(
+                        assignment.lease,
+                        outcome=AttemptOutcome.RETRYABLE_FAILURE,
+                        category=FailureCategory.DEPENDENCY_UNAVAILABLE,
+                        error_code="worker_execution_crashed",
+                        summary="worker execution crashed before producing a result",
+                    )
+                )
         else:
             completion_id = self.session.id_factory("completion")
-            await self._send(
-                self.session.result(
-                    assignment.lease,
-                    result_schema_version=assignment.result_schema_version,
-                    result=result.result,
-                    artifact_refs=result.artifact_refs,
-                    completion_id=completion_id,
-                )
+            result_envelope = self.session.result(
+                assignment.lease,
+                result_schema_version=assignment.result_schema_version,
+                result=result.result,
+                artifact_refs=result.artifact_refs,
+                completion_id=completion_id,
             )
+            self._result_assignments[result_envelope.message_id] = key
+            try:
+                await self._send(result_envelope)
+            except WorkerConnectionUnavailable:
+                # The controller connection can disappear after synthesis but
+                # before the result write.  The receiver/reconnect loop owns
+                # recovery; do not leave an unobserved task exception behind.
+                return
             retain_until_commit = True
         finally:
             if not retain_until_commit:
-                self._assignment_tasks.pop(key, None)
-                self._cancellations.pop(key, None)
+                _ = self._assignment_tasks.pop(key, None)
+                _ = self._cancellations.pop(key, None)
+                self._forget_result_assignments(key)
             self._settlement_changed.set()
 
     async def _heartbeat_loop(self) -> None:
-        await self._registered.wait()
+        _ = await self._registered.wait()
         while not self._stop.is_set():
             await asyncio.sleep(self._heartbeat_interval)
             if self._stop.is_set():
@@ -401,7 +452,7 @@ class WorkerRuntime:
     async def _send(self, envelope) -> None:
         connection = self._connection
         if connection is None:
-            raise RuntimeError("worker send attempted without a connection")
+            raise WorkerConnectionUnavailable("worker send attempted without a connection")
         data = encode(envelope)
         async with self._send_lock:
             await connection.send(data)
@@ -411,7 +462,7 @@ class WorkerRuntime:
         for cancellation in self._cancellations.values():
             cancellation.set()
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            _ = await asyncio.gather(*tasks, return_exceptions=True)
         self._assignment_tasks.clear()
         self._cancellations.clear()
 

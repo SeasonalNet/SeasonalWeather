@@ -86,6 +86,13 @@ tts-image-smoke:
 
 phase3-gate: check compose-check
 
+.PHONY: phase4-ci phase4-docker-gate
+phase4-ci:
+	$(PYTHON) -m pytest $(PYTEST_XDIST_ARGS) tests/test_p4_0*.py tests/test_postgresql_archive_diagnostics.py
+
+phase4-docker-gate:
+	bash tools/p4_gate.sh
+
 build-info:
 	$(PYTHON) -m seasonalweather.build_metadata \
 		--output "$(BUILD_INFO)" \
