@@ -1,10 +1,11 @@
 # PostgreSQL migration framework and schema governance
 
 P4-02 establishes the controller-owned migration boundary for the optional
-PostgreSQL archive. P4-01 startup preflight qualifies the configured endpoint;
-the migration runner is an explicitly invoked maintenance operation and is not
-run as part of routine startup. SQLite remains the authority for routine local
-broadcast continuity.
+PostgreSQL archive. Controller startup automatically invokes the safe-only
+runner after the enabled endpoint passes the other preflight checks. The
+configured database and owned schema must already exist. A failed migration
+or pending manual-only operation fails archive qualification, not local
+SQLite-backed broadcasting.
 
 ## Versioned history
 

@@ -6,6 +6,7 @@ import logging
 from importlib import import_module
 from typing import Any
 
+from ..database.nws_backfill import recover_nws
 from ..lifecycle_records import LifecycleStage
 from ..nwws.source import (
     NwwsProductEnvelope,
@@ -230,7 +231,11 @@ class SeasonalWeatherServiceRuntime:
         )
         replication = getattr(o, "archive_replication", None)
         if replication is not None:
-            supervisor.create_task(replication.run(), name="archive_replication", required=False)
+            supervisor.create_task(
+                replication.run(diagnostic_sink=getattr(o, "database_diagnostic_sink", None)),
+                name="archive_replication",
+                required=False,
+            )
         o.alert_audio.start_supervised(supervisor)
 
         # CycleConductor + SegmentRefresher own routine cycle scheduling.
@@ -455,4 +460,10 @@ class SeasonalWeatherServiceRuntime:
         o.lifecycle.mark_running()
         if o.lifecycle_records is not None:
             o.lifecycle_records.stage(LifecycleStage.SERVICE_READY, ready=True)
+        if replication is not None:
+            supervisor.create_task(
+                recover_nws(replication.archive, o.api, o.cfg, o.cycle_builder.alert_areas),
+                name="recent_archive_backfill",
+                required=False,
+            )
         await o.lifecycle.wait_for_shutdown()

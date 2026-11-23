@@ -8,6 +8,7 @@ from datetime import datetime
 from uuid import UUID
 
 from ..config import AppConfig
+from ..diagnostics.bindings import FOUNDATION_CODES
 from .core import SeasonalDatabase
 from .postgresql_archive import ArchiveOrigin, ArchiveRecord, ArchiveTable, PostgresArchiveRepository
 
@@ -66,7 +67,22 @@ class ArchiveReplication:
             _ = conn.executemany("DELETE FROM archive_outbox WHERE id = ?", [(row["id"],) for row in rows])
         return len(rows)
 
-    async def run(self) -> None:
+    @staticmethod
+    def _diagnose_retry(sink: object, exc: Exception) -> None:
+        emit = getattr(sink, "emit", None)
+        if callable(emit):
+            try:
+                _ = emit(
+                    FOUNDATION_CODES["database.operation_failed"],
+                    component="postgresql-outbox",
+                    message=f"Archive replication failed ({type(exc).__name__}).",
+                    operational_effect="Local broadcasting continues; unacknowledged records remain queued.",
+                    recovery_action="Inspect PostgreSQL archive health and outbox backlog; replay retries automatically.",
+                )
+            except Exception:
+                log.debug("Archive replication diagnostic could not be emitted")
+
+    async def run(self, *, diagnostic_sink: object = None) -> None:
         delay = 1.0
         while True:
             try:
@@ -74,6 +90,7 @@ class ArchiveReplication:
             except Exception as exc:
                 if not self.retrying:
                     log.warning("Archive replication retrying (%s)", type(exc).__name__)
+                    self._diagnose_retry(diagnostic_sink, exc)
                 self.retrying = True
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 60.0)

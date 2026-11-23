@@ -1,9 +1,8 @@
 # PostgreSQL core archive (P4-03)
 
-The explicitly invoked `PostgresMigrationRunner` now includes version 1,
-`core_archive_schema`. It creates archive tables in the configured PostgreSQL
-schema. It does not run at application startup or change SQLite's role in
-broadcasting. See [migration governance](p4-02-postgresql-migrations.md) for
+`PostgresMigrationRunner` includes version 1, `core_archive_schema`. It
+creates archive tables in the configured PostgreSQL schema during safe startup
+migration. This does not change SQLite's role in broadcasting. See [migration governance](p4-02-postgresql-migrations.md) for
 operator and compatibility rules.
 
 `PostgresArchiveRepository` owns SQL and transaction handling for all 12 archive

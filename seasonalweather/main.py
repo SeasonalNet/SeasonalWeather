@@ -41,6 +41,7 @@ from .configuration_reload.safe_point import (
 )
 from .database.archive_replication import ArchiveReplication
 from .database.postgresql import PostgresPreflight
+from .database.postgresql_migrations import PostgresMigrationRunner
 from .lifecycle import (
     Lifecycle,
     LifecycleState,
@@ -230,9 +231,13 @@ class Orchestrator:
         self.publication_repo = PublicationLeaseRepository(self.database)
         self.telnet.set_publication_sink(self._record_publication)
         self.telnet.set_publication_cancel_sink(self._cancel_publications)
+        postgres_migrations = PostgresMigrationRunner(
+            configuration=cfg.database.postgres, network=cfg.network.postgresql
+        )
         self.postgresql_preflight = PostgresPreflight(
             configuration=cfg.database.postgres,
             network=cfg.network.postgresql,
+            migrate=postgres_migrations.apply_startup_migrations,
         )
 
         self.archive_replication = ArchiveReplication.from_config(self.database, cfg)

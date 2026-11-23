@@ -2,7 +2,7 @@
 
 The migration runner is deliberately separate from PostgreSQL startup
 preflight.  Preflight qualifies an optional dependency; this module performs
-an explicitly requested maintenance operation against that dependency.  All
+a safe startup upgrade or an explicitly approved maintenance operation.  All
 metadata and migration statements run in one transaction protected by a
 transaction-scoped advisory lock, so a failed or interrupted run leaves the
 last committed schema version authoritative.
@@ -309,6 +309,10 @@ class PostgresMigrationRunner:
         self.network = network
         self.migrations = validate_migrations(migrations)
         self.connector = connector or default_postgres_connector()
+
+    def apply_startup_migrations(self) -> str:
+        result = self.apply_pending()
+        return f"PostgreSQL archive schema is at version {result.current_version}."
 
     def apply_pending(self, *, allow_manual: bool = False) -> MigrationResult:
         """Apply pending migrations, refusing manual work without approval."""

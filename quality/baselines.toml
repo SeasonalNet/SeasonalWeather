@@ -13,7 +13,7 @@ review_date = "2026-12-24"
 removal_condition = "Reduce whenever legacy files are materially changed; reach zero."
 
 [checks.lint]
-maximum = 796
+maximum = 767
 owner = "SeasonalWeather maintainers"
 rationale = "Initial v0.17.0 Ruff debt."
 scope = "seasonalweather/, tests/, and tools/"
@@ -21,7 +21,7 @@ review_date = "2026-12-24"
 removal_condition = "Reduce as findings are corrected; do not permit net-new findings."
 
 [checks.typecheck]
-maximum = 42
+maximum = 41
 owner = "SeasonalWeather maintainers"
 rationale = "Initial v0.17.0 mypy debt."
 scope = "seasonalweather/ and tools/quality/"

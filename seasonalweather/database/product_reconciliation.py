@@ -8,7 +8,7 @@ from psycopg.sql import SQL
 
 from .postgresql_archive import ArchiveRecord, ArchiveTable, PostgresArchiveRepository
 from .postgresql_migrations import PostgresMigrationConnection
-from .product_identity import ProductDelivery, stable_id
+from .product_identity import ProductDelivery, product_alias, stable_id
 
 
 class ProductReconciliation:
@@ -29,7 +29,14 @@ class ProductReconciliation:
     def versions_for(self, delivery: ProductDelivery) -> tuple[UUID, ...]:
         """Look up known versions by the same evidence used at ingestion."""
         with self.archive.transaction() as connection:
-            return tuple(key for key, _ in self._matching_versions(connection, delivery))
+            matches = self._matching_versions(connection, delivery.aliases(), delivery.content_hash)
+            return tuple(key for key, _ in matches)
+
+    def version_for_api_id(self, product_id: str) -> UUID | None:
+        """Find a committed version without fetching upstream product text."""
+        with self.archive.transaction() as connection:
+            matches = self._matching_versions(connection, [product_alias("api", product_id)], None)
+            return matches[0][0] if matches else None
 
     def _linked_version(self, connection: PostgresMigrationConnection, delivery_id: UUID) -> UUID | None:
         statement = SQL("SELECT product_id FROM {} WHERE delivery_id = %s ORDER BY product_id LIMIT 1").format(
@@ -39,7 +46,7 @@ class ProductReconciliation:
         return None if row is None else cast(UUID, row[0])
 
     def _matching_versions(
-        self, connection: PostgresMigrationConnection, delivery: ProductDelivery
+        self, connection: PostgresMigrationConnection, aliases: list[str], content_hash: str | None
     ) -> list[tuple[UUID, str]]:
         statement = SQL(
             "SELECT DISTINCT l.product_id, d.payload->>'content_hash' FROM {} d "
@@ -50,12 +57,12 @@ class ProductReconciliation:
             self.archive.table_name(ArchiveTable.SOURCE_DELIVERIES),
             self.archive.table_name(ArchiveTable.PRODUCT_DELIVERIES),
         )
-        cursor = connection.execute(statement.as_string(), (delivery.aliases(), delivery.content_hash))
+        cursor = connection.execute(statement.as_string(), (aliases, content_hash))
         return cast(list[tuple[UUID, str]], cursor.fetchall())
 
     def _reconcile(self, connection: PostgresMigrationConnection, delivery: ProductDelivery) -> UUID:
-        matches = self._matching_versions(connection, delivery)
         content_hash = delivery.content_hash
+        matches = self._matching_versions(connection, delivery.aliases(), content_hash)
         version_id = next((key for key, digest in matches if digest == content_hash), None)
         if version_id is None:
             version_id = stable_id("product-version", content_hash)

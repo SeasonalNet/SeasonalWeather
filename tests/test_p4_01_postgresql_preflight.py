@@ -129,17 +129,24 @@ def test_successful_preflight_checks_transaction_and_closes_connection(monkeypat
     )
     connection = _Connection()
     connector = _Connector(connection)
+
+    def migrate() -> str:
+        assert connection.rollbacks >= 2
+        return "PostgreSQL archive schema is at version 1."
+
     preflight = PostgresPreflight(
         configuration=cfg.database.postgres,
         network=cfg.network.postgresql,
         connector=cast(PostgresConnector, cast(object, connector)),
         clock=lambda: dt.datetime.fromtimestamp(1_753_000_000.0, tz=dt.UTC),
+        migrate=migrate,
     )
 
     result = asyncio.run(preflight.run())
 
     assert result.state is PostgresPreflightState.AVAILABLE
     assert not result.failures
+    assert any(check.name == "migration_state" and "version 1" in check.summary for check in result.checks)
     assert {check.name for check in result.checks} == {
         "connectivity",
         "tls_policy",

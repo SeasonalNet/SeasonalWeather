@@ -3,10 +3,9 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import httpx2
-
 
 DEFAULT_UA = "SeasonalWeather/2.0 (automated IP radio system for weather; contact: info@seasonalnet.org)"
 
@@ -45,11 +44,11 @@ class NWSApi:
     async def _get_json(
         self,
         url: str,
-        params: Optional[Dict[str, Any]] = None,
+        params: dict[str, Any] | None = None,
         *,
         attempts: int = 4,
         max_response_bytes: int | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         # simple retry loop
         last_exc: Exception | None = None
         for attempt in range(max(1, attempts)):
@@ -58,11 +57,15 @@ class NWSApi:
                 r.raise_for_status()
                 if max_response_bytes is not None and len(r.content) > max_response_bytes:
                     raise ValueError("NWS response exceeded the bounded response size")
-                return r.json()
+                payload: dict[str, Any] = r.json()
+                return payload
             except Exception as e:
                 last_exc = e
                 await asyncio.sleep(0.4 * (attempt + 1))
         raise RuntimeError(f"NWS API request failed: {url}") from last_exc
+
+    async def recovery_json(self, path: str, params: dict[str, str] | None = None) -> dict[str, Any]:
+        return await self._get_json(f"https://api.weather.gov/{path}", params, attempts=1, max_response_bytes=2_000_000)
 
     @staticmethod
     def _issuance_sort_key(value: str | None) -> dt.datetime:
@@ -72,10 +75,10 @@ class NWSApi:
         try:
             parsed = dt.datetime.fromisoformat(raw)
         except ValueError:
-            return dt.datetime.min.replace(tzinfo=dt.timezone.utc)
+            return dt.datetime.min.replace(tzinfo=dt.UTC)
         if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=dt.timezone.utc)
-        return parsed.astimezone(dt.timezone.utc)
+            parsed = parsed.replace(tzinfo=dt.UTC)
+        return parsed.astimezone(dt.UTC)
 
     async def list_product_references(
         self,
@@ -83,7 +86,7 @@ class NWSApi:
         wfo: str,
         *,
         limit: int | None = None,
-    ) -> List[NWSProductReference]:
+    ) -> list[NWSProductReference]:
         """Return product-list metadata newest first.
 
         api.weather.gov generally returns product indexes newest first, but the
@@ -96,7 +99,7 @@ class NWSApi:
         url = f"https://api.weather.gov/products/types/{product_type}/locations/{wfo}"
         data = await self._get_json(url)
 
-        items: List[Dict[str, Any]] = []
+        items: list[dict[str, Any]] = []
         if isinstance(data.get("products"), list):
             items = data["products"]
         elif isinstance(data.get("@graph"), list):
@@ -104,7 +107,7 @@ class NWSApi:
         elif isinstance(data.get("graph"), list):
             items = data["graph"]
 
-        refs: List[NWSProductReference] = []
+        refs: list[NWSProductReference] = []
         for item in items:
             pid = item.get("id") or item.get("@id") or item.get("productId")
             if not isinstance(pid, str) or not pid.strip():
@@ -126,11 +129,11 @@ class NWSApi:
             return refs[: max(0, int(limit))]
         return refs
 
-    async def latest_product_id(self, product_type: str, wfo: str) -> Optional[str]:
+    async def latest_product_id(self, product_type: str, wfo: str) -> str | None:
         refs = await self.list_product_references(product_type, wfo, limit=1)
         return refs[0].product_id if refs else None
 
-    async def get_product(self, product_id: str) -> Optional[NWSProduct]:
+    async def get_product(self, product_id: str) -> NWSProduct | None:
         url = f"https://api.weather.gov/products/{product_id}"
         data = await self._get_json(url)
         text = data.get("productText") or data.get("product_text") or data.get("text")
@@ -144,7 +147,7 @@ class NWSApi:
             wfo=data.get("issuingOffice") or data.get("wfo") or data.get("wfoCode"),
         )
 
-    async def point_forecast_periods(self, lat: float, lon: float) -> List[Dict[str, Any]]:
+    async def point_forecast_periods(self, lat: float, lon: float) -> list[dict[str, Any]]:
         point = await self._get_json(f"https://api.weather.gov/points/{lat:.4f},{lon:.4f}")
         props = point.get("properties", {})
         forecast_url = props.get("forecast")
@@ -153,22 +156,22 @@ class NWSApi:
         fc = await self._get_json(forecast_url)
         return list((fc.get("properties", {}) or {}).get("periods", []) or [])
 
-    async def latest_observation(self, station_id: str) -> Optional[Dict[str, Any]]:
+    async def latest_observation(self, station_id: str) -> dict[str, Any] | None:
         data = await self._get_json(f"https://api.weather.gov/stations/{station_id}/observations/latest")
         return data.get("properties")
 
-    async def active_alerts(self, areas: List[str]) -> List[Dict[str, Any]]:
+    async def active_alerts(self, areas: list[str]) -> list[dict[str, Any]]:
         # areas = state/territory abbreviations (e.g. ["MD","VA","DC","WV"])
         params = {"area": ",".join(areas), "status": "actual"}
         data = await self._get_json("https://api.weather.gov/alerts/active", params=params)
         feats = data.get("features")
         return list(feats) if isinstance(feats, list) else []
 
-    async def get_alert(self, url: str) -> Dict[str, Any]:
+    async def get_alert(self, url: str) -> dict[str, Any]:
         """Fetch one alert through the controller's bounded async HTTP client."""
         return await self._get_json(url, attempts=1, max_response_bytes=1_000_000)
 
-    async def zone_forecast_periods(self, zone_id: str) -> List[Dict[str, Any]]:
+    async def zone_forecast_periods(self, zone_id: str) -> list[dict[str, Any]]:
         # Fetch ZFP forecast periods for a public forecast zone (e.g. 'MDZ010').
         # Endpoint: /zones/forecast/{zoneId}/forecast
         # Returns period dicts with at minimum 'name' and 'detailedForecast'.
@@ -176,7 +179,7 @@ class NWSApi:
         data = await self._get_json(url)
         return list((data.get("properties", {}) or {}).get("periods", []) or [])
 
-    async def coastal_waters_forecast_text(self, office: str) -> Optional[str]:
+    async def coastal_waters_forecast_text(self, office: str) -> str | None:
         # Fetch the latest CWF (Coastal Waters Forecast) product text
         # for the given WFO office (e.g. 'LWX').  Returns raw text or None.
         pid = await self.latest_product_id("CWF", office)
@@ -187,7 +190,7 @@ class NWSApi:
             return None
         return prod.product_text
 
-    async def coastal_waters_forecast_product(self, office: str) -> Optional[NWSProduct]:
+    async def coastal_waters_forecast_product(self, office: str) -> NWSProduct | None:
         """Return the latest CWF product without discarding its identity."""
         pid = await self.latest_product_id("CWF", office)
         if not pid:

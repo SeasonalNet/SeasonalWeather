@@ -15,7 +15,7 @@ def stable_id(*parts: str) -> UUID:
     return uuid5(_NAMESPACE, json.dumps(parts, ensure_ascii=True))
 
 
-def _alias(*parts: str) -> str:
+def product_alias(*parts: str) -> str:
     return json.dumps(parts, separators=(",", ":"))
 
 
@@ -59,9 +59,9 @@ class ProductDelivery:
         office = self.office.strip().upper()
         awips = self.awips_id.strip().upper()
         issued = self.issued_at.astimezone(UTC).isoformat() if self.issued_at else ""
-        aliases = {_alias("api", api_id)} if api_id else set()
+        aliases = {product_alias("api", api_id)} if api_id else set()
         if heading and office and issued:
-            aliases.add(_alias("wmo", heading, office, issued, awips))
+            aliases.add(product_alias("wmo", heading, office, issued, awips))
         aliases.update(self._vtec_aliases(office, awips, issued))
         return sorted(aliases)
 
@@ -69,7 +69,7 @@ class ProductDelivery:
         if not (issued and office and awips):
             return set()
         return {
-            _alias("vtec", event.strip().upper(), office, awips, issued)
+            product_alias("vtec", event.strip().upper(), office, awips, issued)
             for event in self.vtec_event_ids
             if event.strip()
         }

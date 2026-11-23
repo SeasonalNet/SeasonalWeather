@@ -17,6 +17,7 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from functools import partial
 from typing import Any, Protocol, cast
 
 from ..config import OptionalServiceNetworkConfig, PostgresArchiveConfig
@@ -289,11 +290,20 @@ def _spatial_reference_check(connection: PostgresConnection) -> str:
     return "Required spatial reference data is available."
 
 
+def _qualified_migration(
+    checks: list[PostgresCheck], migrate: Callable[[], str] | None, inspect: Callable[[], str]
+) -> Callable[[], str]:
+    if migrate is not None and all(check.passed for check in checks):
+        return migrate
+    return inspect
+
+
 def _run_sync(
     configuration: OptionalServiceNetworkConfig,
     archive: PostgresArchiveConfig,
     connector: PostgresConnector,
     clock: Callable[[], dt.datetime],
+    migrate: Callable[[], str] | None = None,
 ) -> PostgresPreflightResult:
     started = time.monotonic()
     schema = _identifier(archive.schema, "database.postgres.schema")
@@ -324,7 +334,6 @@ def _run_sync(
         checks.append(_check("database_identity", lambda: _identity_check(connection, configuration, schema)))
         checks.append(_check("schema_ownership", lambda: _ownership_check(connection, schema)))
         checks.append(_check("privileges", lambda: _privileges_check(connection, schema)))
-        checks.append(_check("migration_state", lambda: _migration_check(connection, schema, migration_table)))
         checks.append(_check("extension_state", lambda: _extension_check(connection)))
         checks.append(_check("transactional_read_write", lambda: _transaction_check(connection)))
         checks.append(
@@ -338,6 +347,8 @@ def _run_sync(
             )
         )
         checks.append(_check("spatial_reference", lambda: _spatial_reference_check(connection)))
+        migration_check = partial(_migration_check, connection, schema, migration_table)
+        checks.insert(7, _check("migration_state", _qualified_migration(checks, migrate, migration_check)))
     finally:
         try:
             connection.close()
@@ -367,12 +378,14 @@ class PostgresPreflight:
         connector: PostgresConnector | None = None,
         clock: Callable[[], dt.datetime] | None = None,
         diagnostic_sink: Any = None,
+        migrate: Callable[[], str] | None = None,
     ) -> None:
         self.configuration = configuration
         self.network = network
         self.connector = connector or _PsycopgConnector()
         self.clock = clock or (lambda: dt.datetime.now(dt.UTC))
         self._diagnostic_sink = diagnostic_sink
+        self._migrate = migrate
         self.result = PostgresPreflightResult(
             PostgresPreflightState.DISABLED if not network.enabled else PostgresPreflightState.UNAVAILABLE
         )
@@ -396,6 +409,7 @@ class PostgresPreflight:
                     self.configuration,
                     self.connector,
                     self.clock,
+                    self._migrate,
                 ),
                 timeout=timeout,
             )
