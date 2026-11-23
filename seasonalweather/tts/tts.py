@@ -16,8 +16,8 @@ from pathlib import Path
 from threading import Event
 from typing import TYPE_CHECKING, Any, cast
 
-from .preprocess import clean_for_tts, normalize_nws_dual_time_zones, normalize_nws_spoken_times, verbalize_url
 from .models import FinalizationCallbackError
+from .preprocess import clean_for_tts, normalize_nws_dual_time_zones, normalize_nws_spoken_times, verbalize_url
 
 if TYPE_CHECKING:
     from .service import SynthesisService
