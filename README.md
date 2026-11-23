@@ -235,6 +235,7 @@ points include:
 - [Worker runtime and SWWP](docs/worker-runtime.md)
 - [Diagnostics](docs/runtime-diagnostics.md)
 - [SQLite archive outbox](docs/p4-04-archive-outbox.md)
+- [Archive product reconciliation](docs/p4-05-product-reconciliation.md)
 
 The systemd bootstrap, installer profiles, and host-local decoder procedure
 are retained as [legacy installer documentation](docs/INSTALLER.md) for

@@ -1,5 +1,7 @@
 """Controller-owned PostgreSQL archive persistence, independent of SQLite runtime state."""
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -10,7 +12,7 @@ from psycopg.types.json import Jsonb
 
 from ..config import OptionalServiceNetworkConfig, PostgresArchiveConfig
 from .postgresql import default_postgres_connector
-from .postgresql_migrations import PostgresMigrationConnector, _identifier
+from .postgresql_migrations import PostgresMigrationConnection, PostgresMigrationConnector, _identifier
 
 
 class ArchiveOrigin(StrEnum):
@@ -122,19 +124,31 @@ class PostgresArchiveRepository:
     def _insert(self, records: tuple[ArchiveRecord, ...], *, replay: bool) -> None:
         if not records:
             return
+        with self.transaction() as connection:
+            for record in records:
+                self.insert_record(connection, record, replay=replay)
+
+    def table_name(self, table: ArchiveTable) -> Identifier:
+        return Identifier(self._schema, table.value)
+
+    def insert_record(
+        self, connection: PostgresMigrationConnection, record: ArchiveRecord, *, replay: bool = False
+    ) -> None:
+        columns = _columns(record.table)
+        statement = SQL("INSERT INTO {} ({}) VALUES ({})").format(
+            self.table_name(record.table),
+            SQL(", ").join(map(Identifier, columns)),
+            SQL(", ").join(Placeholder() for _ in columns),
+        )
+        if replay:
+            statement += SQL(" ON CONFLICT (id) DO NOTHING")
+        connection.execute(statement.as_string(), _insert_values(record, columns))
+
+    @contextmanager
+    def transaction(self) -> Iterator[PostgresMigrationConnection]:
         connection = self._connector.connect(self._network)
         try:
-            for record in records:
-                columns = _columns(record.table)
-                statement = SQL("INSERT INTO {} ({}) VALUES ({})").format(
-                    Identifier(self._schema, record.table.value),
-                    SQL(", ").join(map(Identifier, columns)),
-                    SQL(", ").join(Placeholder() for _ in columns),
-                )
-                values = _insert_values(record, columns)
-                if replay:
-                    statement += SQL(" ON CONFLICT (id) DO NOTHING")
-                connection.execute(statement.as_string(), values)
+            yield connection
             connection.commit()
         except BaseException:
             connection.rollback()
