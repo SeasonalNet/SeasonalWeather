@@ -15,8 +15,8 @@ content checksum, safety classification, and application timestamp. A changed
 definition for an already-applied version, an unknown version, or a version gap
 fails closed.
 
-The current packet intentionally registers no archive tables. P4-03 owns the
-archive schema and will add its versioned definitions through this boundary.
+P4-02 introduced this boundary without registering any archive tables.
+[P4-03](p4-03-postgresql-archive.md) registers the first archive schema migration.
 
 ## Locking and recovery
 

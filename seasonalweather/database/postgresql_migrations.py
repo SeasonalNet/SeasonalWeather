@@ -21,6 +21,7 @@ from typing import Any, Protocol, cast
 
 from ..config import OptionalServiceNetworkConfig, PostgresArchiveConfig
 from .postgresql import default_postgres_connector
+from .postgresql_archive_schema import ARCHIVE_V1_SQL
 
 log = logging.getLogger("seasonalweather.database.postgresql_migrations")
 
@@ -164,6 +165,7 @@ class PostgresMigration:
     version: int
     name: str
     operations: tuple[MigrationOperation, ...]
+    use_archive_schema: bool = False
 
     def __post_init__(self) -> None:
         if self.version <= 0:
@@ -190,6 +192,8 @@ class PostgresMigration:
     def checksum(self) -> str:
         digest = hashlib.sha256(usedforsecurity=False)
         digest.update(f"{self.version}\0{self.name}\0{self.safety.value}\0".encode())
+        if self.use_archive_schema:
+            digest.update(b"archive_schema\0")
         for operation in self.operations:
             digest.update(operation.kind.value.encode("utf-8"))
             digest.update(b"\0")
@@ -220,7 +224,14 @@ class MigrationResult:
         }
 
 
-POSTGRES_MIGRATIONS: tuple[PostgresMigration, ...] = ()
+POSTGRES_MIGRATIONS = (
+    PostgresMigration(
+        1,
+        "core_archive_schema",
+        tuple(MigrationOperation(MigrationOperationKind.CREATE_TABLE, sql) for sql in ARCHIVE_V1_SQL),
+        use_archive_schema=True,
+    ),
+)
 
 
 def _identifier(value: str, field_name: str) -> str:
@@ -361,7 +372,7 @@ class PostgresMigrationRunner:
             return MigrationResult("up_to_date", max(applied, default=0))
         self._require_manual_approval(pending, allow_manual)
         for migration in pending:
-            self._apply_one(connection, metadata_table, migration)
+            self._apply_one(connection, metadata_table, migration, schema=schema)
         connection.commit()
         return MigrationResult("applied", pending[-1].version, tuple(migration.version for migration in pending))
 
@@ -412,10 +423,19 @@ class PostgresMigrationRunner:
         connection: PostgresMigrationConnection,
         metadata_table: str,
         migration: PostgresMigration,
+        *,
+        schema: str,
     ) -> None:
         try:
+            previous_path = None
+            if migration.use_archive_schema:
+                rows = _fetchall(connection.execute("SELECT pg_catalog.current_setting('search_path')"))
+                previous_path = str(rows[0][0])
+                connection.execute("SELECT pg_catalog.set_config('search_path', %s, true)", (f'"{schema}", pg_temp',))
             for operation in migration.operations:
                 connection.execute(operation.sql)
+            if previous_path is not None:
+                connection.execute("SELECT pg_catalog.set_config('search_path', %s, true)", (previous_path,))
             connection.execute(
                 _metadata_insert(metadata_table),
                 (migration.version, migration.name, migration.checksum, migration.safety.value),
