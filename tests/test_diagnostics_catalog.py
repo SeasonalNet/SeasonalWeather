@@ -481,8 +481,7 @@ def test_active_namespace_catalog_coverage_matches_implementation_stages() -> No
     active = {item.token for item in NAMESPACES if item.state is NamespaceState.ACTIVE}
     implemented = {item.namespace for item in catalog.definitions}
 
-    assert implemented | {"SWFACT"} == active
-    assert "SWFACT" not in implemented
+    assert implemented == active
     assert {binding.code for binding in FOUNDATION_BINDINGS} == set(FOUNDATION_CODES.values())
     assert all(binding_for_rule(binding.rule_id) is binding for binding in FOUNDATION_BINDINGS)
 

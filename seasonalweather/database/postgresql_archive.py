@@ -128,8 +128,12 @@ class PostgresArchiveRepository:
             for record in records:
                 self.insert_record(connection, record, replay=replay)
 
+    @property
+    def schema(self) -> str:
+        return self._schema
+
     def table_name(self, table: ArchiveTable) -> Identifier:
-        return Identifier(self._schema, table.value)
+        return Identifier(self.schema, table.value)
 
     def insert_record(
         self, connection: PostgresMigrationConnection, record: ArchiveRecord, *, replay: bool = False

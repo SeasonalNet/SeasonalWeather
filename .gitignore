@@ -1,6 +1,4 @@
-# ======
-# Python
-# ======
+# // python //
 __pycache__/
 *.bak*
 build/
@@ -11,18 +9,16 @@ seasonalweather/_version.py
 .venv-*/
 .cache/
 *.pyc
-# ==================================== 
-# local dependency artifacts / backups
-# ====================================
+
+# // backups //
 *.bak*
 requirements*.lock*.txt
 requirements.in.old.*
 requirements.in.bak.*
 requirements*.trixie*.txt
 requirements*.bookworm*.txt
-#=============
-# other stuff
-#=============
+
+# // old/legacy bare-metal development cruft //
 seasonalweather/*.bak
 seasonalweather/*.bak.*
 seasonalweather/*.bak_*
@@ -30,16 +26,16 @@ seasonalweather/*.bak-*
 seasonalweather/*.pre_fix_*.bak.*
 seasonalweather/_graveyard/
 seasonalweather/_graveyard_*.tar.gz
-# ==============
-# dev box stuff
-# ==============
+
+# // dev box stuff //
 tools/print_cycle_preview.py
-# ===========
-# Rust
-# ===========
+.idea
+plan/
+
+# // rust //
 target/
 **/target/
 
-# Compose-only credentials and rendered local service configuration.
+# // compose and local IC creds //
 secrets/
 config/icecast.xml

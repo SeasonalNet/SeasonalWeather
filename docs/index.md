@@ -56,6 +56,7 @@ points to the detailed contracts.
 - [Generated-audio policy](generated-audio-policy.md)
 - [Segment registry](segment-registry.md)
 - [Segment behavior](p1-20-segments.md)
+- [Derived broadcast facts](p5-03-broadcast-facts.md)
 - [Formatter subsystem](formatter-subsystem.md)
 - [NWWS source adapter](nwws-source-adapter.md)
 - [OFFNT2](offnt2.md)

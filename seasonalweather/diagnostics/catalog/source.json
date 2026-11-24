@@ -29,6 +29,10 @@
       "6": 1,
       "8": 1
     },
+    "SWFACT": {
+      "4": 1,
+      "5": 1
+    },
     "SWGEO": {
       "1": 1,
       "2": 1
@@ -1698,6 +1702,44 @@
       "status": "active",
       "explanation_path": "explanations/SWAUTH6002.md",
       "related_codes": [],
+      "documentation_references": ["docs/diagnostic-namespaces.md"],
+      "supported_phases": ["runtime"]
+    },
+    {
+      "code": "SWFACT4001",
+      "title": "Insufficient history for a requested broadcast fact",
+      "summary": "A requested derived broadcast fact cannot be computed from the available comparable history.",
+      "namespace": "SWFACT",
+      "condition_class": 4,
+      "class_justification": "Missing usable history degrades optional fact enrichment without blocking basic broadcasting.",
+      "default_severity": "warning",
+      "default_blocking": false,
+      "default_fatal": false,
+      "default_retryable": true,
+      "owner": "broadcast facts",
+      "introduction_version": "0.18.0",
+      "status": "active",
+      "explanation_path": "explanations/SWFACT4001.md",
+      "related_codes": ["SWFACT5001"],
+      "documentation_references": ["docs/diagnostic-namespaces.md"],
+      "supported_phases": ["runtime"]
+    },
+    {
+      "code": "SWFACT5001",
+      "title": "Derived broadcast fact invariant violated",
+      "summary": "A derived fact could not satisfy a required provenance or determinism invariant.",
+      "namespace": "SWFACT",
+      "condition_class": 5,
+      "class_justification": "Contradictory provenance or deterministic identity makes the fact operation unsafe to continue.",
+      "default_severity": "error",
+      "default_blocking": true,
+      "default_fatal": true,
+      "default_retryable": false,
+      "owner": "broadcast facts",
+      "introduction_version": "0.18.0",
+      "status": "active",
+      "explanation_path": "explanations/SWFACT5001.md",
+      "related_codes": ["SWFACT4001"],
       "documentation_references": ["docs/diagnostic-namespaces.md"],
       "supported_phases": ["runtime"]
     },

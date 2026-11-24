@@ -133,6 +133,8 @@ FOUNDATION_BINDINGS = (
     RuleCodeBinding("database.reconciliation_required", "SWDB8001", "recovery"),
     RuleCodeBinding("ern.transport_failed", "SWERN3001", "runtime"),
     RuleCodeBinding("ern.stream_degraded", "SWERN4001", "runtime"),
+    RuleCodeBinding("facts.insufficient_history", "SWFACT4001", "runtime"),
+    RuleCodeBinding("facts.invariant_violation", "SWFACT5001", "runtime"),
     RuleCodeBinding("geography.invalid_input", "SWGEO1001", "admission"),
     RuleCodeBinding("geography.policy_rejected", "SWGEO2001", "admission"),
     RuleCodeBinding("job.contract_incompatible", "SWJOB2001", "admission"),
