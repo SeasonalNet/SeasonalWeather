@@ -122,6 +122,13 @@ Expose it only through an intentional loopback or secured reverse-proxy
 mapping. The OpenAPI document and Swagger UI are available at `/openapi.json`
 and `/docs` when the API is reachable.
 
+HTTP API authentication problems may include `diagnostic_code` alongside the
+existing problem `code`. `SWAUTH6001` identifies a credential rejection;
+`SWAUTH6002` identifies an access-policy denial; `SWAUTH5001` indicates that the
+required exchange authenticator is unavailable. HTTP status and authentication
+challenge headers are unchanged. These responses do not create durable diagnostic
+occurrences, and the SWWP worker WebSocket protocol is unchanged.
+
 Runtime diagnostic definitions are immutable packaged content; runtime
 occurrences are bounded operational state. See the
 [diagnostic catalog](diagnostic-catalog.md) and

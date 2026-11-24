@@ -6,23 +6,31 @@ import logging
 import os
 import re
 import shutil
+from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import httpx2
 
-from ..config import AppConfig
 from ..broadcast.formatters import (
     extract_nwws_wcn_area_desc as _extract_nwws_wcn_area_desc,
+)
+from ..broadcast.formatters import (
     match_nwws_wcn_area_same as _match_nwws_wcn_area_same,
 )
+from ..config import AppConfig
 from . import ugc as _ugc
 from .locations import (
     NATIONAL_SAME_LOCATION,
+)
+from .locations import (
     filter_same_locations_to_service_area as _same_filter_locations_to_service_area,
 )
 
 log = logging.getLogger("seasonalweather")
+
+
+GeographicSameLookup = Callable[[Sequence[str]], Awaitable[Sequence[str]]]
 
 
 class SameTargetResolver:
@@ -32,10 +40,12 @@ class SameTargetResolver:
         cfg: AppConfig,
         local_tz: ZoneInfo,
         same_fips_allow_set: set[str],
+        geographic_same_lookup: GeographicSameLookup | None = None,
     ) -> None:
         self.cfg = cfg
         self._tz = local_tz
         self._same_fips_allow_set = same_fips_allow_set
+        self._geographic_same_lookup = geographic_same_lookup
         self._cache_dir = Path(cfg.paths.cache_dir)
 
         self._zone_client: httpx2.AsyncClient | None = None
@@ -575,9 +585,26 @@ class SameTargetResolver:
             self._zone_cache_fail[zid] = dt.datetime.now(tz=self._tz)
             return []
 
+    async def _same_targets_from_geographic_fallback(self, zones: Sequence[str]) -> list[str]:
+        """Use optional GIS only when code crosswalks cannot resolve the zones.
+
+        The callback is intentionally injectable and optional: PostgreSQL/PostGIS
+        failures, missing active geometry, and empty GIS matches all return an
+        empty result so the existing UGC/ZoneCounty/mareas/NWS path remains in
+        control. The service-area filter is still the final safety boundary.
+        """
+        if self._geographic_same_lookup is None or not zones:
+            return []
+        try:
+            candidates = await self._geographic_same_lookup(tuple(zones))
+        except Exception:
+            # The lookup owner is responsible for dependency diagnostics.
+            return self._filter_same_locations_to_service_area([])
+        return self._filter_same_locations_to_service_area(list(candidates))
+
     async def _nwws_same_targets_from_texts(
         self, primary_text: str, secondary_text: str
-    ) -> tuple[list[str], list[str], str, bool, "dt.datetime | None"]:
+    ) -> tuple[list[str], list[str], str, bool, dt.datetime | None]:
         """
         Returns:
           zones_found, in_area_same, source_label, mapping_success, ugc_expires_utc
@@ -606,6 +633,12 @@ class SameTargetResolver:
             if sames:
                 any_mapped = True
                 all_same.extend(sames)
+
+        if not any_mapped:
+            geographic_same = await self._same_targets_from_geographic_fallback(zones[:250])
+            if geographic_same:
+                any_mapped = True
+                all_same.extend(geographic_same)
 
         # De-dupe while preserving order
         dedup: list[str] = []

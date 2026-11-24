@@ -28,6 +28,10 @@ PROBLEM_DETAILS_SCHEMA: dict[str, Any] = {
             "type": "string",
             "description": "Stable SeasonalWeather error code extension.",
         },
+        "diagnostic_code": {
+            "type": "string",
+            "description": "Optional SeasonalWeather diagnostic catalog code for this problem.",
+        },
         "details": {
             "type": "object",
             "additionalProperties": True,

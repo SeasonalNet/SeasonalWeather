@@ -59,4 +59,14 @@ CREATE INDEX geographic_features_dataset_version_idx
 """,
 )
 
-__all__ = ["GEOGRAPHIC_V1_SQL"]
+# P5-02 lifecycle invariant: repository promotion assumes one active version
+# per dataset type, including when the first promotion races with another one.
+GEOGRAPHIC_V2_SQL = (
+    """
+CREATE UNIQUE INDEX geographic_dataset_versions_one_active_idx
+    ON geographic_dataset_versions (dataset_type)
+    WHERE lifecycle_status = 'active'
+""",
+)
+
+__all__ = ["GEOGRAPHIC_V1_SQL", "GEOGRAPHIC_V2_SQL"]

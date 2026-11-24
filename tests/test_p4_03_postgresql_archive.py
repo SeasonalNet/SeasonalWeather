@@ -66,7 +66,7 @@ _CONFIG = PostgresArchiveConfig(schema="archive_test")
 def test_migration_registers_every_archive_table_in_configured_schema() -> None:
     connection = _Connection()
     result = PostgresMigrationRunner(configuration=_CONFIG, network=_NET, connector=connection).apply_pending()
-    assert result.applied_versions == (1, 2)
+    assert result.applied_versions == (1, 2, 3)
     ddl = {sql.split()[2]: sql for sql, _ in connection.calls if sql.startswith("CREATE TABLE ")}
     assert set(table.value for table in ArchiveTable) <= ddl.keys()
     for table in ArchiveTable:
@@ -79,7 +79,13 @@ def test_migration_registers_every_archive_table_in_configured_schema() -> None:
     assert "CREATE TABLE geographic_dataset_versions" in ddl["geographic_dataset_versions"]
     assert "geometry(Geometry)" in ddl["geographic_features"]
     assert len(POSTGRES_MIGRATIONS[0].checksum) == 64
+    assert any(
+        "CREATE UNIQUE INDEX geographic_dataset_versions_one_active_idx" in sql
+        for sql, _ in connection.calls
+        if sql.startswith("CREATE UNIQUE INDEX")
+    )
     assert len(POSTGRES_MIGRATIONS[1].checksum) == 64
+    assert len(POSTGRES_MIGRATIONS[2].checksum) == 64
     assert connection.events == ["commit", "close"]
 
 

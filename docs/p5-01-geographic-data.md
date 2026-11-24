@@ -30,10 +30,10 @@ missing PostgreSQL/PostGIS does not change the basic broadcast path.
 
 ## Diagnostics boundary
 
-P5-01 defines persistence and staging models; it does not own runtime
-occurrence emission. Existing PostgreSQL startup, migration, and persistence
-failures use the active `SWDB3001` catalog diagnostic where they cross an
-operational boundary. P5-01 does not add a GIS-specific namespace or code:
-validation, promotion, rollback, and geometry fallback belong to P5-02 and
-later integration work, where any new actionable conditions can be assigned
-through the established `SWDB` catalog governance.
+Staging and query admission report invalid geographic input as `SWGEO1001`
+and rejection by geographic dataset policy as `SWGEO2001`. These are
+boundary diagnostics, not durable runtime occurrences. Source adapters still
+own ingest and normalization failures before geographic admission. Database
+connectivity, transactions, migrations, and storage remain `SWDB` concerns;
+confirmed PostGIS incompatibility is `SWDB2001`. See
+[P5-02](p5-02-spatial-validation.md) for validation and lifecycle behavior.

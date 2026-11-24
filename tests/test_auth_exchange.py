@@ -5,7 +5,7 @@ import datetime as dt
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import httpx2
 import pytest
@@ -19,6 +19,7 @@ from seasonalweather.auth.credentials import (
 )
 from seasonalweather.auth.service import route_is_allowed
 from seasonalweather.config import load_config
+from seasonalweather.control import OrchestratorControl
 from seasonalweather.database.core import SeasonalDatabase
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -245,6 +246,11 @@ def test_exchange_and_protected_route_api_contract(
         headers={"Authorization": f"Bearer {token}", "X-Forwarded-For": "192.0.2.1"},
     )
     assert protected.status_code == 200
+    route_denied = _request(app, "GET", "/v1/health", headers={"Authorization": f"Bearer {token}"})
+    assert route_denied.status_code == 403
+    assert route_denied.json()["code"] == "client_policy_denied"
+    assert route_denied.json()["diagnostic_code"] == "SWAUTH6002"
+    assert "www-authenticate" not in route_denied.headers
 
     revoked = _request(
         app,
@@ -255,7 +261,80 @@ def test_exchange_and_protected_route_api_contract(
     )
     assert revoked.status_code == 200
     assert token not in revoked.text
-    assert _request(app, "GET", "/v1/status", headers={"Authorization": f"Bearer {token}"}).status_code == 401
+    denied = _request(app, "GET", "/v1/status", headers={"Authorization": f"Bearer {token}"})
+    assert denied.status_code == 401
+    assert denied.headers["www-authenticate"] == "Bearer"
+    assert denied.json()["code"] == "invalid_token"
+    assert denied.json()["diagnostic_code"] == "SWAUTH6001"
+    assert token not in denied.text
+
+
+@pytest.mark.parametrize("path", ["/v1/auth/token", "/v1/auth/revoke"])
+def test_client_authentication_denials(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, path: str) -> None:
+    from seasonalweather import main
+
+    monkeypatch.setattr(main, "_APP_CFG", _exchange_config(monkeypatch, tmp_path))
+    service = _service(tmp_path)
+    client = _client(service, cidrs=["192.0.2.1/32"])
+    app = create_app(cast(OrchestratorControl, cast(object, FakeControl())), auth_service=service)
+    body = {"token": "synthetic-target"} if path.endswith("/revoke") else {}
+
+    missing = _request(app, "POST", path, json=body)
+    assert missing.status_code == 401
+    assert missing.headers["www-authenticate"] == "SeasonalClient"
+    assert missing.json()["code"] == "missing_authorization"
+    assert missing.json()["diagnostic_code"] == "SWAUTH6001"
+
+    invalid = _request(app, "POST", path, headers={"Authorization": "SeasonalClient synthetic-invalid"}, json=body)
+    assert invalid.status_code == 401
+    assert invalid.headers["www-authenticate"] == "SeasonalClient"
+    assert invalid.json()["code"] == "invalid_client"
+    assert invalid.json()["diagnostic_code"] == "SWAUTH6001"
+    assert "synthetic-invalid" not in invalid.text
+
+    denied = _request(app, "POST", path, headers={"Authorization": f"SeasonalClient {client.credential}"}, json=body)
+    assert denied.status_code == 403
+    assert "www-authenticate" not in denied.headers
+    assert denied.json()["code"] == "client_policy_denied"
+    assert denied.json()["diagnostic_code"] == "SWAUTH6002"
+    assert client.credential not in denied.text
+
+
+def test_exchange_scope_denial_and_expired_bearer(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from seasonalweather import main
+
+    monkeypatch.setattr(main, "_APP_CFG", _exchange_config(monkeypatch, tmp_path))
+    current = [dt.datetime(2026, 8, 20, tzinfo=dt.UTC)]
+    service = _service(tmp_path, clock=lambda: current[0])
+    client = _client(service)
+    app = create_app(cast(OrchestratorControl, cast(object, FakeControl())), auth_service=service)
+    headers = {"Authorization": f"SeasonalClient {client.credential}"}
+
+    denied = _request(app, "POST", "/v1/auth/token", headers=headers, json={"scopes": ["read:health"]})
+    assert denied.status_code == 403
+    assert denied.json()["code"] == "scope_not_allowed"
+    assert denied.json()["diagnostic_code"] == "SWAUTH6002"
+    assert "www-authenticate" not in denied.headers
+
+    token = service.issue_token(client_credential=client.credential, source_ip="127.0.0.1")
+    current[0] += dt.timedelta(seconds=token.expires_in)
+    expired = _request(app, "GET", "/v1/status", headers={"Authorization": f"Bearer {token.access_token}"})
+    assert expired.status_code == 401
+    assert expired.headers["www-authenticate"] == "Bearer"
+    assert expired.json()["code"] == "invalid_token"
+    assert expired.json()["diagnostic_code"] == "SWAUTH6001"
+
+
+def test_missing_exchange_authenticator(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from seasonalweather import main
+
+    monkeypatch.setattr(main, "_APP_CFG", _exchange_config(monkeypatch, tmp_path))
+    app = create_app(cast(OrchestratorControl, cast(object, FakeControl())))
+    response = _request(app, "POST", "/v1/auth/token", json={})
+    assert response.status_code == 503
+    assert response.json()["code"] == "authenticator_unavailable"
+    assert response.json()["diagnostic_code"] == "SWAUTH5001"
+    assert "www-authenticate" not in response.headers
 
 
 def test_hybrid_keeps_static_and_access_paths_separate(
@@ -309,6 +388,9 @@ def test_malformed_revocation_target_is_never_echoed(
     )
 
     assert response.status_code == 400
+    assert response.json()["code"] == "invalid_revocation_target"
+    assert "diagnostic_code" not in response.json()
+    assert "www-authenticate" not in response.headers
     assert sentinel not in response.text
     assert sentinel not in caplog.text
 
@@ -324,6 +406,9 @@ def test_static_mode_rejects_exchange_and_openapi_distinguishes_schemes(
     app = create_app(FakeControl())
     denied = _request(app, "POST", "/v1/auth/token", json={})
     assert denied.status_code == 403
+    assert denied.json()["code"] == "exchange_not_permitted"
+    assert denied.json()["diagnostic_code"] == "SWAUTH6002"
+    assert "www-authenticate" not in denied.headers
     spec = _request(app, "GET", "/openapi.json").json()
     assert spec["paths"]["/v1/auth/token"]["post"]["security"] == [{"SeasonalClientAuth": []}]
     assert spec["paths"]["/v1/status"]["get"]["security"] == [{"BearerAuth": []}]

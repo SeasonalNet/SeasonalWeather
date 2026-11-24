@@ -93,6 +93,9 @@ def test_namespace_registry_is_exact_typed_and_reserved_states_are_visible() -> 
         "SWDB",
         "SWOBS",
         "SWBUILD",
+        "SWAUTH",
+        "SWFACT",
+        "SWGEO",
     }
     assert NAMESPACE_BY_TOKEN["SWERN"].state is NamespaceState.ACTIVE
     assert NAMESPACE_BY_TOKEN["SWCACHE"].state is NamespaceState.RESERVED
@@ -132,6 +135,7 @@ def test_every_assignable_class_and_ordinal_boundary_parses(condition_class: int
         ("SWCFG9001", "reserved_class"),
         ("SWCFG10A1", "malformed"),
         ("SWCFG10001", "unknown_namespace"),
+        ("SWARCH1001", "unknown_namespace"),
         ("SWCACHE1001", "reserved_namespace"),
         ("SWREDIS1001", "reserved_namespace"),
     ],
@@ -280,8 +284,8 @@ def test_broken_documentation_reference_fails_closed(tmp_path: Path) -> None:
         compile_catalog(copied)
 
 
-def test_reserved_x000_and_9xxx_assignments_fail_closed(tmp_path: Path) -> None:
-    for code in ("SWCACHE1001", "SWCFG1000", "SWCFG9001"):
+def test_unassignable_codes_fail_closed(tmp_path: Path) -> None:
+    for code in ("SWARCH1001", "SWCACHE1001", "SWREDIS1001", "SWCFG1000", "SWCFG9001"):
         copied = _copy_catalog(tmp_path / code)
         raw = _source(copied)
         definitions = raw["definitions"]
@@ -472,12 +476,13 @@ def test_every_configuration_validation_rule_has_one_active_explainable_mapping(
     assert set(FOUNDATION_CODES.values()).issubset({str(item.code) for item in catalog.definitions})
 
 
-def test_every_active_namespace_has_a_bound_catalog_definition() -> None:
+def test_active_namespace_catalog_coverage_matches_implementation_stages() -> None:
     catalog = load_catalog()
-    expected = {item.token for item in NAMESPACES if item.state is NamespaceState.ACTIVE}
+    active = {item.token for item in NAMESPACES if item.state is NamespaceState.ACTIVE}
     implemented = {item.namespace for item in catalog.definitions}
 
-    assert implemented == expected
+    assert implemented | {"SWFACT"} == active
+    assert "SWFACT" not in implemented
     assert {binding.code for binding in FOUNDATION_BINDINGS} == set(FOUNDATION_CODES.values())
     assert all(binding_for_rule(binding.rule_id) is binding for binding in FOUNDATION_BINDINGS)
 

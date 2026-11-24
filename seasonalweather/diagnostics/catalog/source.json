@@ -2,6 +2,10 @@
   "diagnostic_schema_version": 1,
   "diagnostic_catalog_version": 1,
   "allocation_ceilings": {
+    "SWAUTH": {
+      "5": 1,
+      "6": 2
+    },
     "SWBUILD": {
       "1": 1,
       "2": 1
@@ -20,8 +24,14 @@
       "8": 1
     },
     "SWDB": {
+      "2": 1,
       "3": 1,
+      "6": 1,
       "8": 1
+    },
+    "SWGEO": {
+      "1": 1,
+      "2": 1
     },
     "SWERN": {
       "3": 1,
@@ -1521,6 +1531,25 @@
       "supported_phases": ["runtime", "recovery"]
     },
     {
+      "code": "SWDB2001",
+      "title": "Required PostGIS extension is unavailable or incompatible",
+      "summary": "The PostgreSQL server does not provide the PostGIS extension capability required by the configured archive.",
+      "namespace": "SWDB",
+      "condition_class": 2,
+      "class_justification": "The database extension state does not satisfy the configured compatibility contract.",
+      "default_severity": "error",
+      "default_blocking": false,
+      "default_fatal": false,
+      "default_retryable": false,
+      "owner": "persistence",
+      "introduction_version": "0.18.0",
+      "status": "active",
+      "explanation_path": "explanations/SWDB2001.md",
+      "related_codes": ["SWDB3001"],
+      "documentation_references": ["docs/diagnostic-namespaces.md", "docs/p4-01-postgresql-preflight.md"],
+      "supported_phases": ["startup"]
+    },
+    {
       "code": "SWDB3001",
       "title": "Database operation failed",
       "summary": "A bounded SQLite operation or optional PostgreSQL operation/startup qualification failed while preserving the local authority boundary.",
@@ -1538,6 +1567,25 @@
       "related_codes": ["SWDB8001"],
       "documentation_references": ["docs/diagnostic-namespaces.md", "docs/durable-job-repository.md", "docs/p4-01-postgresql-preflight.md"],
       "supported_phases": ["runtime", "recovery"]
+    },
+    {
+      "code": "SWDB6001",
+      "title": "Database access denied",
+      "summary": "PostgreSQL rejected authentication or denied required database privileges.",
+      "namespace": "SWDB",
+      "condition_class": 6,
+      "class_justification": "The database reported a security or trust denial rather than an unclassified dependency failure.",
+      "default_severity": "error",
+      "default_blocking": false,
+      "default_fatal": false,
+      "default_retryable": false,
+      "owner": "persistence",
+      "introduction_version": "0.18.0",
+      "status": "active",
+      "explanation_path": "explanations/SWDB6001.md",
+      "related_codes": ["SWDB3001"],
+      "documentation_references": ["docs/diagnostic-namespaces.md", "docs/p4-01-postgresql-preflight.md"],
+      "supported_phases": ["startup", "runtime"]
     },
     {
       "code": "SWDB8001",
@@ -1595,6 +1643,101 @@
       "related_codes": ["SWERN3001"],
       "documentation_references": ["docs/diagnostic-namespaces.md"],
       "supported_phases": ["runtime", "recovery"]
+    },
+    {
+      "code": "SWAUTH5001",
+      "title": "API authenticator unavailable",
+      "summary": "The authenticator required by the configured API mode is unavailable.",
+      "namespace": "SWAUTH",
+      "condition_class": 5,
+      "class_justification": "The requested authentication capability cannot operate without its configured authenticator.",
+      "default_severity": "error",
+      "default_blocking": false,
+      "default_fatal": false,
+      "default_retryable": false,
+      "owner": "api-authentication",
+      "introduction_version": "0.18.0",
+      "status": "active",
+      "explanation_path": "explanations/SWAUTH5001.md",
+      "related_codes": [],
+      "documentation_references": ["docs/diagnostic-namespaces.md"],
+      "supported_phases": ["runtime"]
+    },
+    {
+      "code": "SWAUTH6001",
+      "title": "API credentials rejected",
+      "summary": "An API request did not present usable authentication credentials.",
+      "namespace": "SWAUTH",
+      "condition_class": 6,
+      "class_justification": "The API authentication boundary did not establish trust in the presented credentials.",
+      "default_severity": "warning",
+      "default_blocking": false,
+      "default_fatal": false,
+      "default_retryable": false,
+      "owner": "api-authentication",
+      "introduction_version": "0.18.0",
+      "status": "active",
+      "explanation_path": "explanations/SWAUTH6001.md",
+      "related_codes": [],
+      "documentation_references": ["docs/diagnostic-namespaces.md"],
+      "supported_phases": ["runtime"]
+    },
+    {
+      "code": "SWAUTH6002",
+      "title": "API access denied by policy",
+      "summary": "The API rejected an operation under its configured authorization or access policy.",
+      "namespace": "SWAUTH",
+      "condition_class": 6,
+      "class_justification": "An API access policy denied the operation at the authorization boundary.",
+      "default_severity": "warning",
+      "default_blocking": false,
+      "default_fatal": false,
+      "default_retryable": false,
+      "owner": "api-authentication",
+      "introduction_version": "0.18.0",
+      "status": "active",
+      "explanation_path": "explanations/SWAUTH6002.md",
+      "related_codes": [],
+      "documentation_references": ["docs/diagnostic-namespaces.md"],
+      "supported_phases": ["runtime"]
+    },
+    {
+      "code": "SWGEO1001",
+      "title": "Geographic input is invalid",
+      "summary": "Input admitted to the geographic subsystem has invalid dataset metadata, geometry, or query semantics.",
+      "namespace": "SWGEO",
+      "condition_class": 1,
+      "class_justification": "The input violates the geographic data contract before activation or query execution.",
+      "default_severity": "error",
+      "default_blocking": true,
+      "default_fatal": false,
+      "default_retryable": false,
+      "owner": "geography",
+      "introduction_version": "0.18.0",
+      "status": "active",
+      "explanation_path": "explanations/SWGEO1001.md",
+      "related_codes": ["SWGEO2001"],
+      "documentation_references": ["docs/diagnostic-namespaces.md", "docs/p5-02-spatial-validation.md"],
+      "supported_phases": ["admission", "runtime"]
+    },
+    {
+      "code": "SWGEO2001",
+      "title": "Geographic dataset change is not permitted",
+      "summary": "The staged or retained dataset does not meet a validation or lifecycle policy for the requested operation.",
+      "namespace": "SWGEO",
+      "condition_class": 2,
+      "class_justification": "The dataset does not satisfy the geographic operation's state or acceptance policy.",
+      "default_severity": "error",
+      "default_blocking": true,
+      "default_fatal": false,
+      "default_retryable": false,
+      "owner": "geography",
+      "introduction_version": "0.18.0",
+      "status": "active",
+      "explanation_path": "explanations/SWGEO2001.md",
+      "related_codes": ["SWGEO1001"],
+      "documentation_references": ["docs/diagnostic-namespaces.md", "docs/p5-02-spatial-validation.md"],
+      "supported_phases": ["admission", "runtime", "recovery"]
     },
     {
       "code": "SWJOB2001",

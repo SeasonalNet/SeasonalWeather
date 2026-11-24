@@ -41,6 +41,7 @@ class PostgresCheck:
     name: str
     passed: bool
     summary: str
+    diagnostic_rule: str = "database.operation_failed"
 
     def __post_init__(self) -> None:
         if not _IDENTIFIER.fullmatch(self.name) or len(self.summary) > _MAX_SUMMARY:
@@ -102,6 +103,14 @@ class PostgresDependencyUnavailable(RuntimeError):
     """The optional PostgreSQL client is not installed in this image."""
 
 
+class _PostgisIncompatible(RuntimeError):
+    """A successful preflight query confirmed a missing PostGIS prerequisite."""
+
+
+class _PostgresAccessDenied(RuntimeError):
+    """A successful preflight query confirmed a missing access prerequisite."""
+
+
 class _PsycopgConnector:
     def connect(self, configuration: OptionalServiceNetworkConfig) -> PostgresConnection:
         try:
@@ -147,11 +156,30 @@ def _safe_summary(exception: BaseException) -> str:
     return f"PostgreSQL check failed ({type(exception).__name__})."[:_MAX_SUMMARY]
 
 
+def postgres_failure_rule(exception: Exception) -> str:
+    """Classify structured PostgreSQL denials without inspecting error text."""
+    # The migration runner wraps driver errors with one explicit cause.
+    # Ignore implicit exception context, which can contain unrelated failures.
+    for error in (exception, exception.__cause__):
+        state = getattr(error, "sqlstate", None)
+        if isinstance(error, _PostgresAccessDenied) or (
+            isinstance(state, str) and (state == "42501" or (len(state) == 5 and state.startswith("28")))
+        ):
+            return "database.access_denied"
+    return "database.operation_failed"
+
+
+def _failed_check(name: str, exception: Exception) -> PostgresCheck:
+    return PostgresCheck(name, False, _safe_summary(exception), diagnostic_rule=postgres_failure_rule(exception))
+
+
 def _check(name: str, callback: Callable[[], str]) -> PostgresCheck:
     try:
         return PostgresCheck(name, True, callback())
+    except _PostgisIncompatible as exc:
+        return PostgresCheck(name, False, str(exc), diagnostic_rule="database.postgis_incompatible")
     except Exception as exc:
-        return PostgresCheck(name, False, _safe_summary(exc))
+        return _failed_check(name, exc)
 
 
 def _identifier(value: str, field_name: str) -> str:
@@ -214,8 +242,10 @@ def _ownership_check(connection: PostgresConnection, schema: str) -> str:
            FROM pg_namespace AS n WHERE n.nspname = %s""",
         (schema,),
     )
-    if len(row) < 2 or str(row[0]) != str(row[1]):
-        raise RuntimeError("configured schema is not owned by the authenticated user")
+    if len(row) < 2 or not all(isinstance(role, str) and role for role in row[:2]):
+        raise RuntimeError("configured schema ownership was not returned")
+    if row[0] != row[1]:
+        raise _PostgresAccessDenied("Configured schema is not owned by the authenticated user.")
     return "Configured schema ownership is valid."
 
 
@@ -227,8 +257,10 @@ def _privileges_check(connection: PostgresConnection, schema: str) -> str:
                           has_schema_privilege(current_user, %s, 'CREATE')""",
         (schema, schema),
     )
-    if len(row) < 3 or not all(bool(value) for value in row[:3]):
-        raise RuntimeError("required database or schema privileges are unavailable")
+    if len(row) < 3 or not all(isinstance(value, bool) for value in row[:3]):
+        raise RuntimeError("required database or schema privileges were not returned")
+    if not all(row[:3]):
+        raise _PostgresAccessDenied("Required database or schema privileges are unavailable.")
     return "Required database and schema privileges are available."
 
 
@@ -248,8 +280,10 @@ def _extension_check(connection: PostgresConnection) -> str:
         connection,
         "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'postgis')",
     )
-    if not row or not bool(row[0]):
-        raise RuntimeError("PostGIS extension is unavailable")
+    if not row or not isinstance(row[0], bool):
+        raise RuntimeError("PostGIS extension state was not returned")
+    if not row[0]:
+        raise _PostgisIncompatible("PostGIS extension is not installed.")
     return "PostGIS extension is installed."
 
 
@@ -287,8 +321,10 @@ def _spatial_reference_check(connection: PostgresConnection) -> str:
         connection,
         "SELECT EXISTS (SELECT 1 FROM public.spatial_ref_sys WHERE srid = 4326)",
     )
-    if not row or not bool(row[0]):
-        raise RuntimeError("required SRID 4326 is unavailable")
+    if not row or not isinstance(row[0], bool):
+        raise RuntimeError("PostGIS spatial reference state was not returned")
+    if not row[0]:
+        raise _PostgisIncompatible("PostGIS is missing required SRID 4326.")
     return "Required spatial reference data is available."
 
 
@@ -316,7 +352,7 @@ def _run_sync(
     except Exception as exc:
         return PostgresPreflightResult(
             PostgresPreflightState.UNAVAILABLE,
-            (PostgresCheck("connectivity", False, _safe_summary(exc)),),
+            (_failed_check("connectivity", exc),),
             elapsed_milliseconds=max(0, int((time.monotonic() - started) * 1000)),
         )
 
@@ -336,7 +372,8 @@ def _run_sync(
         checks.append(_check("database_identity", lambda: _identity_check(connection, configuration, schema)))
         checks.append(_check("schema_ownership", lambda: _ownership_check(connection, schema)))
         checks.append(_check("privileges", lambda: _privileges_check(connection, schema)))
-        checks.append(_check("extension_state", lambda: _extension_check(connection)))
+        extension = _check("extension_state", lambda: _extension_check(connection))
+        checks.append(extension)
         checks.append(_check("transactional_read_write", lambda: _transaction_check(connection)))
         checks.append(
             _check(
@@ -348,7 +385,8 @@ def _run_sync(
                 ),
             )
         )
-        checks.append(_check("spatial_reference", lambda: _spatial_reference_check(connection)))
+        if extension.passed:
+            checks.append(_check("spatial_reference", lambda: _spatial_reference_check(connection)))
         migration_check = partial(_migration_check, connection, schema, migration_table)
         checks.insert(7, _check("migration_state", _qualified_migration(checks, migrate, migration_check)))
     finally:
@@ -438,7 +476,7 @@ class PostgresPreflight:
 
             for check in result.failures:
                 emit(
-                    FOUNDATION_CODES["database.operation_failed"],
+                    FOUNDATION_CODES[check.diagnostic_rule],
                     component="postgresql-preflight",
                     message=f"PostgreSQL preflight check {check.name} failed.",
                     operational_effect="The optional PostgreSQL archive is unavailable; local broadcasting remains authoritative.",
@@ -457,4 +495,5 @@ __all__ = [
     "PostgresPreflightResult",
     "PostgresPreflightState",
     "default_postgres_connector",
+    "postgres_failure_rule",
 ]

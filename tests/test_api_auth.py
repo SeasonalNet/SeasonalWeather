@@ -4,7 +4,7 @@ import asyncio
 import logging
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import httpx2
 import pytest
@@ -42,9 +42,10 @@ def _request(
     path: str,
     *,
     headers: dict[str, str] | None = None,
+    client_address: tuple[str, int] = ("127.0.0.1", 12345),
 ) -> httpx2.Response:
     async def send() -> httpx2.Response:
-        transport = httpx2.ASGITransport(app=app)
+        transport = httpx2.ASGITransport(app=app, client=client_address)
         async with httpx2.AsyncClient(
             transport=transport,
             base_url="http://testserver",
@@ -100,20 +101,21 @@ def test_existing_static_bearer_authentication_succeeds(
 
 
 @pytest.mark.parametrize(
-    "authorization",
+    ("authorization", "code"),
     [
-        None,
-        "",
-        "Basic synthetic-static-token",
-        "Bearer",
-        "Bearer ",
-        "Bearer incorrect-synthetic-token",
+        (None, "missing_authorization"),
+        ("", "missing_authorization"),
+        ("Basic synthetic-static-token", "invalid_authorization"),
+        ("Bearer", "invalid_authorization"),
+        ("Bearer ", "invalid_authorization"),
+        ("Bearer incorrect-synthetic-token", "invalid_token"),
     ],
 )
 def test_missing_malformed_and_incorrect_bearer_credentials_fail(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     authorization: str | None,
+    code: str,
 ) -> None:
     from seasonalweather import main
 
@@ -137,6 +139,23 @@ def test_missing_malformed_and_incorrect_bearer_credentials_fail(
 
     assert response.status_code == 401
     assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.headers["www-authenticate"] == "Bearer"
+    assert response.json()["code"] == code
+    assert response.json()["diagnostic_code"] == "SWAUTH6001"
+
+
+def test_loopback_policy_denial_precedes_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    from seasonalweather import main
+
+    monkeypatch.setattr(main, "_APP_CFG", None)
+    app = create_app(cast(OrchestratorControl, cast(object, FakeControl())))
+    response = _request(app, "GET", "/v1/status", client_address=("192.0.2.1", 12345))
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "remote_client_forbidden"
+    assert response.json()["diagnostic_code"] == "SWAUTH6002"
+    assert response.json()["details"] == {"client_host": "192.0.2.1"}
+    assert "www-authenticate" not in response.headers
 
 
 def test_scope_authorization_uses_exact_membership(
@@ -163,6 +182,9 @@ def test_scope_authorization_uses_exact_membership(
     denied = _request(app, "GET", "/v1/health", headers=headers)
     assert denied.status_code == 403
     assert denied.json()["code"] == "insufficient_scope"
+    assert denied.json()["diagnostic_code"] == "SWAUTH6002"
+    assert denied.json()["details"] == {"missing_scopes": ["read:health"]}
+    assert "www-authenticate" not in denied.headers
 
     principal = ApiPrincipal(
         subject="scope-test",
@@ -208,6 +230,9 @@ def test_openapi_route_security_matches_runtime_policy() -> None:
     }
     assert spec["paths"]["/v1/handled-alerts"]["get"]["security"] == []
     assert spec["paths"]["/v1/status"]["get"]["security"] == [{"BearerAuth": []}]
+    problem = spec["components"]["schemas"]["ProblemDetails"]
+    assert problem["properties"]["diagnostic_code"]["type"] == "string"
+    assert "diagnostic_code" not in problem["required"]
 
 
 def test_effective_configuration_reports_auth_without_credentials(

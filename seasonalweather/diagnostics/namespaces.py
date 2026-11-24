@@ -23,6 +23,13 @@ class DiagnosticNamespace:
 
 NAMESPACES = (
     DiagnosticNamespace(
+        "SWAUTH",
+        NamespaceState.ACTIVE,
+        "SeasonalWeather API authentication, credential lifecycle, and authorization policy",
+        "API authentication",
+        "API credentials and access policy",
+    ),
+    DiagnosticNamespace(
         "SWBUILD",
         NamespaceState.ACTIVE,
         "build identity, provenance, image profile, and release compatibility",
@@ -53,7 +60,7 @@ NAMESPACES = (
     DiagnosticNamespace(
         "SWDB",
         NamespaceState.ACTIVE,
-        "SQLite, PostgreSQL, relational schema, outbox, archive, and migration",
+        "SQLite, PostgreSQL, relational transactions, schema, extensions, outbox, archive, and migration",
         "persistence",
         "database operation and recovery",
     ),
@@ -63,6 +70,20 @@ NAMESPACES = (
         "ERN continuous audio, FFmpeg supervision, SAME AFSK, and lifecycle",
         "ERN ingestion",
         "ERN audio transport and decoding",
+    ),
+    DiagnosticNamespace(
+        "SWFACT",
+        NamespaceState.ACTIVE,
+        "derived broadcast facts, computation, provenance, confidence, expiration, and capability",
+        "broadcast facts",
+        "fact derivation and history sufficiency",
+    ),
+    DiagnosticNamespace(
+        "SWGEO",
+        NamespaceState.ACTIVE,
+        "geographic datasets, spatial validation and queries, promotion, rollback, and fallback",
+        "geography",
+        "geographic dataset and spatial capability recovery",
     ),
     DiagnosticNamespace(
         "SWJOB",
@@ -109,7 +130,7 @@ NAMESPACES = (
     DiagnosticNamespace(
         "SWSEG",
         NamespaceState.ACTIVE,
-        "segment generation, registry, freshness, and artifact semantics",
+        "segment selection, registry, freshness, rendering, and artifact semantics",
         "broadcast segments",
         "segment generation and freshness",
     ),

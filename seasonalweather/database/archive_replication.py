@@ -10,6 +10,7 @@ from uuid import UUID
 from ..config import AppConfig
 from ..diagnostics.bindings import FOUNDATION_CODES
 from .core import SeasonalDatabase
+from .postgresql import postgres_failure_rule
 from .postgresql_archive import ArchiveOrigin, ArchiveRecord, ArchiveTable, PostgresArchiveRepository
 
 log = logging.getLogger(__name__)
@@ -73,7 +74,7 @@ class ArchiveReplication:
         if callable(emit):
             try:
                 _ = emit(
-                    FOUNDATION_CODES["database.operation_failed"],
+                    FOUNDATION_CODES[postgres_failure_rule(exc)],
                     component="postgresql-outbox",
                     message=f"Archive replication failed ({type(exc).__name__}).",
                     operational_effect="Local broadcasting continues; unacknowledged records remain queued.",

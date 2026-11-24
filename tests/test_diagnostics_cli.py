@@ -18,7 +18,9 @@ def test_diagnostics_list_human_and_json_are_deterministic(capsys: pytest.Captur
     assert main(["list", "--format", "json"]) == 0
     machine = capsys.readouterr()
     parsed = json.loads(machine.out)
-    assert parsed["diagnostics"][0]["code"] == "SWBUILD1001"
+    codes = [item["code"] for item in parsed["diagnostics"]]
+    assert codes == sorted(codes)
+    assert {"SWBUILD1001", "SWAUTH5001", "SWAUTH6001", "SWAUTH6002", "SWDB6001"} <= set(codes)
     assert machine.out.count("\n") == 1
     assert machine.err == ""
 

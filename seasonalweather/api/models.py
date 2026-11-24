@@ -438,6 +438,7 @@ class ProblemDetails(BaseModel):
     detail: str | None = None
     instance: str | None = None
     code: str | None = None
+    diagnostic_code: str | None = None
     details: dict[str, Any] = Field(default_factory=dict)
     errors: list[dict[str, Any]] | None = None
     request_id: str

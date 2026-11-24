@@ -1,14 +1,38 @@
 from __future__ import annotations
 
 import hmac
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, NoReturn
+from typing import Any, NoReturn
 
 from fastapi import Depends, Header, HTTPException, Request, status
 
 from ..auth.policy import ROUTE_AUTH_POLICIES, RouteAuthPolicy
 from ..auth.service import AuthenticationError, AuthenticationService
 from ..config import AuthMode, StaticCredentialConfig
+from ..diagnostics.bindings import FOUNDATION_CODES
+
+_CREDENTIALS_REJECTED = FOUNDATION_CODES["auth.credentials_rejected"]
+_POLICY_DENIED = FOUNDATION_CODES["auth.policy_denied"]
+_AUTH_DIAGNOSTIC_CODES = {
+    "missing_authorization": _CREDENTIALS_REJECTED,
+    "invalid_authorization": _CREDENTIALS_REJECTED,
+    "invalid_token": _CREDENTIALS_REJECTED,
+    "invalid_client": _CREDENTIALS_REJECTED,
+    "insufficient_scope": _POLICY_DENIED,
+    "remote_client_forbidden": _POLICY_DENIED,
+    "exchange_not_permitted": _POLICY_DENIED,
+    "client_policy_denied": _POLICY_DENIED,
+    "scope_not_allowed": _POLICY_DENIED,
+    "client_expiring": _POLICY_DENIED,
+    "authenticator_unavailable": FOUNDATION_CODES["auth.capability_unavailable"],
+}
+
+
+class AuthHTTPException(HTTPException):
+    def __init__(self, *, status_code: int, detail: dict[str, Any], headers: dict[str, str] | None = None) -> None:
+        super().__init__(status_code=status_code, detail=detail, headers=headers)
+        self.diagnostic_code = _AUTH_DIAGNOSTIC_CODES.get(detail["code"])
 
 
 @dataclass(frozen=True)
@@ -26,7 +50,7 @@ class ApiPrincipal:
     def require(self, *required_scopes: str) -> None:
         missing = [scope for scope in required_scopes if not self.has_scope(scope)]
         if missing:
-            raise HTTPException(
+            raise AuthHTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={
                     "code": "insufficient_scope",
@@ -64,7 +88,7 @@ def _checked_client_host(request: Request, *, allow_remote: bool) -> str | None:
     client_host = request.client.host if request.client else None
     if allow_remote or _is_loopback(client_host):
         return client_host
-    raise HTTPException(
+    raise AuthHTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail={
             "code": "remote_client_forbidden",
@@ -79,7 +103,7 @@ def _authorization_value(authorization: str | None, scheme_name: str) -> str:
     if separator and scheme.lower() == scheme_name.lower() and value.strip():
         return value.strip()
     code = "missing_authorization" if not authorization else "invalid_authorization"
-    raise HTTPException(
+    raise AuthHTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail={"code": code, "message": f"Authorization must use the {scheme_name} scheme."},
         headers={"WWW-Authenticate": scheme_name},
@@ -89,15 +113,15 @@ def _authorization_value(authorization: str | None, scheme_name: str) -> str:
 def _auth_service(request: Request) -> AuthenticationService:
     service: AuthenticationService | None = getattr(request.app.state, "auth_service", None)
     if service is None:
-        raise HTTPException(
+        raise AuthHTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"code": "authenticator_unavailable", "message": "Exchange authentication is unavailable."},
         )
     return service
 
 
-def _raise_service_error(exc: AuthenticationError, scheme: str) -> NoReturn:
-    raise HTTPException(
+def raise_authentication_error(exc: AuthenticationError, scheme: str) -> NoReturn:
+    raise AuthHTTPException(
         status_code=exc.status_code,
         detail={"code": exc.code, "message": str(exc)},
         headers={"WWW-Authenticate": scheme} if exc.status_code == 401 else None,
@@ -123,7 +147,7 @@ async def get_api_principal(
         )
 
     if mode is AuthMode.STATIC:
-        raise HTTPException(
+        raise AuthHTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"code": "invalid_token", "message": "Bearer token was not recognized."},
             headers={"WWW-Authenticate": "Bearer"},
@@ -132,7 +156,7 @@ async def get_api_principal(
     try:
         principal = service.authorize_access(raw_token, source_ip=client_host or "", path=request.url.path)
     except AuthenticationError as exc:
-        _raise_service_error(exc, "Bearer")
+        raise_authentication_error(exc, "Bearer")
     return ApiPrincipal(
         subject=principal.subject,
         scopes=principal.scopes,
@@ -151,7 +175,7 @@ async def get_client_authentication(
 
     mode = _APP_CFG.api.auth.mode if _APP_CFG else AuthMode.STATIC
     if mode is AuthMode.STATIC:
-        raise HTTPException(
+        raise AuthHTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "exchange_not_permitted", "message": "Authentication mode does not permit token exchange."},
         )

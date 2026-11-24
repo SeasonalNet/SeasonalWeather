@@ -7,6 +7,8 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from psycopg.errors import InternalError_
+from psycopg.pq import DiagnosticField
 from psycopg.types.json import Jsonb
 
 from seasonalweather.config import OptionalServiceNetworkConfig, PostgresArchiveConfig
@@ -18,7 +20,9 @@ from seasonalweather.database.geographic import (
     GeographicFeatureQuery,
     GeographicImportPipeline,
     GeographicImportRequest,
+    GeographicInputError,
     GeographicLifecycleStatus,
+    GeographicPolicyError,
     GeographicValidationStatus,
 )
 
@@ -27,13 +31,13 @@ class _Connection:
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple[object, ...] | None]] = []
         self.events: list[str] = []
-        self.fail_features = False
+        self.feature_error: Exception | None = None
         self.feature_rows: tuple[tuple[object, ...], ...] = ()
 
     def execute(self, operation: str, parameters: Sequence[object] | None = None) -> SimpleNamespace:
         self.calls.append((operation, None if parameters is None else tuple(parameters)))
-        if self.fail_features and operation.startswith("INSERT INTO geographic_features"):
-            raise RuntimeError("feature insert failed")
+        if self.feature_error is not None and operation.startswith("INSERT INTO geographic_features"):
+            raise self.feature_error
         if operation.startswith("SELECT id,"):
             return SimpleNamespace(fetchall=lambda: self.feature_rows)
         if operation.startswith("SELECT count(*)"):
@@ -123,7 +127,7 @@ def test_geographic_import_stages_version_and_features_atomically() -> None:
 
 def test_geographic_import_rolls_back_all_rows_on_feature_failure() -> None:
     connection = _Connection()
-    connection.fail_features = True
+    connection.feature_error = RuntimeError("feature insert failed")
     repository = GeographicDatasetRepository(_CONFIG, _NET, connector=_Connector(connection))
 
     with pytest.raises(RuntimeError, match="feature insert failed"):
@@ -131,6 +135,37 @@ def test_geographic_import_rolls_back_all_rows_on_feature_failure() -> None:
             _request(features=(GeographicFeature(source_feature_id="001", properties={}),))
         )
 
+    assert connection.events == ["rollback", "close"]
+
+
+@pytest.mark.parametrize(
+    ("source_function", "expected_error"),
+    [(b"pg_parser_errhint", GeographicInputError), (b"another_function", InternalError_)],
+)
+def test_geographic_import_distinguishes_postgis_parser_rejection_from_other_internal_errors(
+    source_function: bytes, expected_error: type[Exception]
+) -> None:
+    connection = _Connection()
+    error = InternalError_(
+        "database message containing geometry",
+        info={
+            DiagnosticField.SOURCE_FUNCTION: source_function,
+            DiagnosticField.SOURCE_FILE: b"lwgeom_pg.c",
+        },
+    )
+    connection.feature_error = error
+    repository = GeographicDatasetRepository(_CONFIG, _NET, connector=_Connector(connection))
+    request = _request(features=(GeographicFeature(source_feature_id="001", geometry_wkt="bad WKT"),))
+
+    with pytest.raises(expected_error) as raised:
+        _ = GeographicImportPipeline(repository).stage(request)
+
+    if isinstance(raised.value, GeographicInputError):
+        assert raised.value.diagnostic.code == "SWGEO1001"
+        assert raised.value.diagnostic.message == "Geographic feature geometry is not valid WKT"
+        assert raised.value.__cause__ is error
+    else:
+        assert raised.value is error
     assert connection.events == ["rollback", "close"]
 
 
@@ -236,8 +271,23 @@ def test_geographic_models_reject_unsafe_or_unbounded_input() -> None:
 
 
 def test_geographic_feature_query_limit_is_bounded() -> None:
-    with pytest.raises(ValueError, match="query limit"):
+    with pytest.raises(GeographicInputError, match="query limit") as exc:
         _ = GeographicFeatureQuery(dataset_version_id=uuid4(), limit=0)
+
+    assert exc.value.diagnostic.code == "SWGEO1001"
+
+
+def test_malformed_geographic_inputs_have_sanitized_diagnostics() -> None:
+    with pytest.raises(GeographicInputError) as geometry_error:
+        _ = GeographicFeature(source_feature_id="private-source-id", geometry_wkt=" ")
+    with pytest.raises(GeographicInputError) as crs_error:
+        _ = replace(_request(), coordinate_srid=-1).version()
+    with pytest.raises(GeographicInputError) as provenance_error:
+        _ = replace(_request(), source_identity="private-source" * 512).version()
+
+    for exc in (geometry_error, crs_error, provenance_error):
+        assert exc.value.diagnostic.code == "SWGEO1001"
+        assert "private-source" not in str(exc.value.diagnostic.to_dict())
 
 
 def test_import_request_bounds_are_enforced() -> None:
@@ -254,7 +304,7 @@ def test_import_request_bounds_are_enforced() -> None:
             max_features=0,
         )
 
-    with pytest.raises(ValueError, match="byte bound"):
+    with pytest.raises(GeographicPolicyError, match="byte bound") as exc:
         _ = GeographicImportRequest(
             dataset_type=GeographicDatasetType.COUNTIES,
             source_identity="nws:counties",
@@ -265,3 +315,10 @@ def test_import_request_bounds_are_enforced() -> None:
             features=(feature,),
             max_bytes=1,
         )
+
+    assert exc.value.diagnostic.code == "SWGEO2001"
+
+    with pytest.raises(GeographicPolicyError, match="exceeds its feature bound") as count_error:
+        _ = replace(_request(features=(feature, feature)), max_features=1)
+
+    assert count_error.value.diagnostic.code == "SWGEO2001"

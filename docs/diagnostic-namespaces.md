@@ -1,9 +1,9 @@
 # Diagnostic namespace implementation map
 
 The namespace registry is an architectural ownership map. An active namespace
-is implemented only when it has governed catalog definitions, one curated
-explanation per code, typed code bindings, and tests that keep the catalog and
-binding surfaces synchronized. Runtime occurrence emission remains owned by
+can receive codes, but activation does not imply runtime coverage. Each code
+requires a governed catalog definition, a curated explanation, and tests for
+its binding. Runtime occurrence emission remains owned by
 the subsystem that observes the condition; this map does not authorize a
 generic exception-to-diagnostic translator.
 
@@ -11,10 +11,13 @@ generic exception-to-diagnostic translator.
 
 | Namespace | Owner | Current binding surface | Catalog coverage |
 | --- | --- | --- | --- |
+| `SWAUTH` | API authentication | HTTP authentication and access policy | unavailable authenticator, credential rejection, and policy denial |
 | `SWBUILD` | release engineering | build identity and compatibility contracts | identity-invalid and compatibility-rejected |
 | `SWCAP` | alert ingestion | CAP/IPAWS/API normalization boundary | product-invalid and source-failed |
 | `SWCFG` | configuration | compiler, semantic validation, preflight, and reload | complete current configuration rule/reload set |
-| `SWDB` | persistence | database, durable repository, and recovery authorities | operation-failed and reconciliation-required |
+| `SWDB` | persistence | database, durable repository, and recovery authorities | PostGIS incompatibility, operation failure, access denial, and reconciliation |
+| `SWFACT` | broadcast facts | registry only | no codes allocated |
+| `SWGEO` | geography | geographic import, validation, and lifecycle | invalid input and policy rejection |
 | `SWERN` | ERN ingestion | continuous audio, FFmpeg, SAME decoding, and relay lifecycle | transport/decoder-failed and stream-degraded |
 | `SWJOB` | job orchestration | command, job, lease, result, and reconciliation authorities | contract-incompatible and result-reconciliation |
 | `SWLQS` | broadcast publication | Liquidsoap control and publication authority | control-failed and publication-reconciliation |
@@ -26,7 +29,21 @@ generic exception-to-diagnostic translator.
 | `SWWP` | worker protocol | diagnostic envelope and controller compatibility boundary | envelope-rejected and contract-incompatible |
 
 `SWCACHE` and `SWREDIS` remain reserved. They intentionally have no catalog
-codes or runtime bindings until their architecture is approved.
+codes or runtime bindings until their architecture is approved. Developer-only
+identifiers such as `SWARCH` are not product namespaces and cannot receive codes.
+
+Choose the namespace by who owns the remediation, not by the library or
+storage engine in use. `SWCFG` owns source-mapped config defects; `SWAUTH`
+owns API authentication and authorization behavior. API denials can carry a
+catalog code in the response without creating a durable occurrence. Confirmed
+PostgreSQL credential or privilege rejection belongs to `SWDB`, not `SWAUTH`.
+Source namespaces own
+malformed upstream products; `SWGEO` owns admitted geographic input and spatial
+or dataset policy. `SWDB` owns database connectivity, transactions, storage,
+and extension compatibility. `SWFACT` owns fact computation and validity;
+`SWSEG` owns selection, freshness, rendering, and artifacts. Preserve the root
+condition and report a related downstream condition only if it has a distinct
+operational effect.
 
 ## Binding and emission rules
 

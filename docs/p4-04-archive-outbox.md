@@ -14,6 +14,8 @@ the SQLite read connection, then commits the batch to PostgreSQL. It deletes
 only the committed IDs in a new SQLite transaction. Stable UUIDs make retry
 safe when a commit succeeds but the acknowledgment or local deletion is lost.
 A failed batch stays queued and retries with 1–60 seconds of backoff.
+The outbox retry diagnostic is `SWDB6001` for structured PostgreSQL access
+denials (SQLSTATE class `28` or `42501`) and `SWDB3001` for other failures.
 
 The optional `postgresql` health component reports `outbox_pending`,
 `outbox_oldest_at`, and `outbox_retrying`. An outage does not make the controller

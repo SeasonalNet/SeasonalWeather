@@ -120,14 +120,21 @@ SEGMENT_CODES = MappingProxyType(
 )
 
 FOUNDATION_BINDINGS = (
+    RuleCodeBinding("auth.capability_unavailable", "SWAUTH5001", "runtime"),
+    RuleCodeBinding("auth.credentials_rejected", "SWAUTH6001", "runtime"),
+    RuleCodeBinding("auth.policy_denied", "SWAUTH6002", "runtime"),
     RuleCodeBinding("build.identity_invalid", "SWBUILD1001", "build"),
     RuleCodeBinding("build.compatibility_rejected", "SWBUILD2001", "startup"),
     RuleCodeBinding("cap.product_invalid", "SWCAP1001", "runtime"),
     RuleCodeBinding("cap.source_failed", "SWCAP3001", "runtime"),
+    RuleCodeBinding("database.access_denied", "SWDB6001", "runtime"),
     RuleCodeBinding("database.operation_failed", "SWDB3001", "runtime"),
+    RuleCodeBinding("database.postgis_incompatible", "SWDB2001", "startup"),
     RuleCodeBinding("database.reconciliation_required", "SWDB8001", "recovery"),
     RuleCodeBinding("ern.transport_failed", "SWERN3001", "runtime"),
     RuleCodeBinding("ern.stream_degraded", "SWERN4001", "runtime"),
+    RuleCodeBinding("geography.invalid_input", "SWGEO1001", "admission"),
+    RuleCodeBinding("geography.policy_rejected", "SWGEO2001", "admission"),
     RuleCodeBinding("job.contract_incompatible", "SWJOB2001", "admission"),
     RuleCodeBinding("job.reconciliation_required", "SWJOB8001", "recovery"),
     RuleCodeBinding("liquidsoap.control_failed", "SWLQS3001", "runtime"),

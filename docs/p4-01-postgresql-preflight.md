@@ -28,14 +28,21 @@ table and rolls the transaction back before the connection closes.
 
 The result is exposed as the optional `postgresql` health component. A
 successful preflight is `healthy`; a failed preflight is `unavailable` and
-produces bounded `SWDB3001` diagnostic occurrences. Neither state participates
-in required readiness. Before enabling the archive, provision the database,
+produces bounded diagnostics. A confirmed missing PostGIS extension or missing
+required SRID 4326 produces `SWDB2001`. A PostgreSQL SQLSTATE in class `28`
+(authentication/authorization) or `42501` (insufficient privilege), or a
+preflight probe that confirms a required schema ownership or privilege check
+failed, produces `SWDB6001`. During connection startup, psycopg/libpq can
+report an authentication failure as an `OperationalError` without SQLSTATE.
+Such failures remain `SWDB3001`, even when the password was rejected; driver
+error text is not used for classification. These diagnostics do not affect
+required readiness. Before activating the archive, provision the database,
 install PostGIS, and give the controller role ownership of the configured
 schema and the privileges required by preflight. Startup then runs the
 [safe migration path](p4-02-postgresql-migrations.md).
 
 If PostgreSQL becomes unavailable, keep the controller running on local
-SQLite. Inspect the PostgreSQL health component and `SWDB3001`; monitor the
+SQLite. Inspect the PostgreSQL health component and its diagnostics; monitor the
 [outbox backlog](p4-04-archive-outbox.md) and local disk capacity. Restore
 connectivity and confirm pending rows drain. If startup qualification failed,
 restart the controller in an approved window to rerun preflight and safe

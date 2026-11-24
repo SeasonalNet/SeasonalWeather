@@ -6,7 +6,7 @@ import json
 import re
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from http import HTTPStatus
 from typing import Annotated, Any, cast
 
@@ -34,7 +34,13 @@ from ..observability import MetricsRegistry, bind_correlation, bind_trace_contex
 from ..observability.tracing import TraceContext
 from ..runtime_diagnostics.representations import occurrence_summary
 from ..runtime_diagnostics.service import RuntimeDiagnosticService
-from .auth import ApiPrincipal, get_client_authentication, require_route_policy
+from .auth import (
+    ApiPrincipal,
+    AuthHTTPException,
+    get_client_authentication,
+    raise_authentication_error,
+    require_route_policy,
+)
 from .commands import CommandNotFoundError, CommandStore, IdempotencyConflictError
 from .models import (
     AudioUploadAccepted,
@@ -114,10 +120,11 @@ def _problem_response(
     status_code: int,
     code: str,
     detail: str,
+    diagnostic_code: str | None = None,
     title: str | None = None,
     details: dict[str, Any] | None = None,
     errors: list[dict[str, Any]] | None = None,
-    headers: dict[str, str] | None = None,
+    headers: Mapping[str, str] | None = None,
 ) -> JSONResponse:
     request_id = _request_id(request)
     response_headers = dict(headers or {})
@@ -131,6 +138,7 @@ def _problem_response(
         detail=detail,
         instance=str(request.url.path),
         code=code,
+        diagnostic_code=diagnostic_code,
         details=details or {},
         errors=errors,
         request_id=request_id,
@@ -471,6 +479,7 @@ def create_app(
             code=code,
             detail=message,
             details=details,
+            diagnostic_code=exc.diagnostic_code if isinstance(exc, AuthHTTPException) else None,
             headers=exc.headers,
         )
 
@@ -520,11 +529,7 @@ def create_app(
                 request_id=_request_id(request),
             )
         except AuthenticationError as exc:
-            raise HTTPException(
-                status_code=exc.status_code,
-                detail={"code": exc.code, "message": str(exc)},
-                headers={"WWW-Authenticate": "SeasonalClient"} if exc.status_code == 401 else None,
-            ) from exc
+            raise_authentication_error(exc, "SeasonalClient")
         response.headers["Cache-Control"] = "no-store"
         response.headers["Pragma"] = "no-cache"
         return TokenExchangeResponse(
@@ -554,11 +559,7 @@ def create_app(
                 request_id=_request_id(request),
             )
         except AuthenticationError as exc:
-            raise HTTPException(
-                status_code=exc.status_code,
-                detail={"code": exc.code, "message": str(exc)},
-                headers={"WWW-Authenticate": "SeasonalClient"} if exc.status_code == 401 else None,
-            ) from exc
+            raise_authentication_error(exc, "SeasonalClient")
         return TokenRevocationResponse()
 
     @app.get(
