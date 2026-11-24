@@ -66,7 +66,7 @@ _CONFIG = PostgresArchiveConfig(schema="archive_test")
 def test_migration_registers_every_archive_table_in_configured_schema() -> None:
     connection = _Connection()
     result = PostgresMigrationRunner(configuration=_CONFIG, network=_NET, connector=connection).apply_pending()
-    assert result.applied_versions == (1,)
+    assert result.applied_versions == (1, 2)
     ddl = {sql.split()[2]: sql for sql, _ in connection.calls if sql.startswith("CREATE TABLE ")}
     assert set(table.value for table in ArchiveTable) <= ddl.keys()
     for table in ArchiveTable:
@@ -76,7 +76,10 @@ def test_migration_registers_every_archive_table_in_configured_schema() -> None:
     assert "REFERENCES product_versions(id)" in ddl[ArchiveTable.PRODUCT_DELIVERIES]
     assert "REFERENCES source_deliveries(id)" in ddl[ArchiveTable.PRODUCT_DELIVERIES]
     assert ("SELECT pg_catalog.set_config('search_path', %s, true)", ('"archive_test", pg_temp',)) in connection.calls
+    assert "CREATE TABLE geographic_dataset_versions" in ddl["geographic_dataset_versions"]
+    assert "geometry(Geometry)" in ddl["geographic_features"]
     assert len(POSTGRES_MIGRATIONS[0].checksum) == 64
+    assert len(POSTGRES_MIGRATIONS[1].checksum) == 64
     assert connection.events == ["commit", "close"]
 
 

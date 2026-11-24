@@ -20,6 +20,7 @@ from enum import StrEnum
 from typing import Any, Protocol, cast
 
 from ..config import OptionalServiceNetworkConfig, PostgresArchiveConfig
+from .geographic_schema import GEOGRAPHIC_V1_SQL
 from .postgresql import default_postgres_connector
 from .postgresql_archive_schema import ARCHIVE_V1_SQL
 
@@ -229,6 +230,12 @@ POSTGRES_MIGRATIONS = (
         1,
         "core_archive_schema",
         tuple(MigrationOperation(MigrationOperationKind.CREATE_TABLE, sql) for sql in ARCHIVE_V1_SQL),
+        use_archive_schema=True,
+    ),
+    PostgresMigration(
+        2,
+        "geographic_dataset_schema",
+        tuple(MigrationOperation(MigrationOperationKind.CREATE_TABLE, sql) for sql in GEOGRAPHIC_V1_SQL),
         use_archive_schema=True,
     ),
 )
